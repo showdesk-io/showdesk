@@ -208,19 +208,59 @@ Make everything actually work end-to-end.
 
 ---
 
-## Phase 2 — Post-MVP Enhancements
+## Phase 2 — Admin Console
+
+The admin console is the frontend interface for managing organizations, agents, and platform settings. Two levels exist: **org admin** (each customer manages their own helpdesk) and **platform admin** (Showdesk SaaS operators manage tenants).
+
+### Org Admin (each organization's admin panel)
+
+Settings and management for a single organization, accessible to users with the `admin` role.
+
+| Feature | Priority | Status | Notes |
+|---------|----------|--------|-------|
+| Agent management (invite, deactivate, roles) | P0 | :hourglass: | Invite via email/OTP, toggle active, assign admin/agent role |
+| Team management (CRUD, assign agents, lead) | P0 | :hourglass: | Currently read-only in TeamPage |
+| Widget configuration (colors, position, texts) | P0 | :hourglass: | Live preview, copy embed snippet, regenerate API token |
+| Organization branding (logo, name, primary color) | P1 | :hourglass: | White-label appearance |
+| Custom domain for widget/portal | P1 | :hourglass: | CNAME-based, Caddy dynamic TLS in prod |
+| Tags & categories management | P1 | :hourglass: | CRUD for ticket tags, KB categories |
+| Canned responses / macros | P1 | :hourglass: | Pre-written reply templates, shared per org |
+| SLA policy editor | P2 | :hourglass: | First response / resolution time rules by priority |
+| Notification preferences | P2 | :hourglass: | Per-agent: email, in-app; per-org: webhooks (Slack, Discord) |
+| Audit log | P2 | :hourglass: | Who did what, when (status changes, assignments, config edits) |
+| Automation rules / triggers | P3 | :hourglass: | Auto-assign, auto-tag, auto-close after X days of inactivity |
+| Data export (CSV/JSON) | P3 | :hourglass: | Export tickets, messages, attachments |
+| GDPR compliance tools | P3 | :hourglass: | Export/delete all data for a given end-user email |
+
+### Platform Admin (SaaS operator panel)
+
+Superadmin interface for managing the multi-tenant Showdesk platform. Only visible to platform operators.
+
+| Feature | Priority | Status | Notes |
+|---------|----------|--------|-------|
+| Organization list (create, suspend, delete) | P0 | :hourglass: | Tenant lifecycle management |
+| Organization detail (usage stats, config) | P0 | :hourglass: | Storage, tickets, agents, videos per org |
+| Usage & quotas dashboard | P1 | :hourglass: | Per-org consumption: storage, ticket count, agent seats |
+| Billing / Plans management | P1 | :hourglass: | Assign plan (free/pro/enterprise), enforce limits |
+| Feature flags per tenant | P1 | :hourglass: | Toggle AI, custom domain, video, KB per org |
+| Global monitoring dashboard | P2 | :hourglass: | Total tickets, videos, storage, active orgs, growth |
+| Impersonation ("login as") | P2 | :hourglass: | Platform admin can act as an org admin for support |
+| Platform-wide announcements | P3 | :hourglass: | Banner/notification shown to all org admins |
+| Tenant data migration tools | P3 | :hourglass: | Import/export full org data for migration |
+
+---
+
+## Phase 3 — Post-MVP Enhancements
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Knowledge base: public-facing portal | :hourglass: | Standalone page for end-users |
 | Knowledge base: smart deflection in widget | :hourglass: | Suggest articles before ticket creation |
 | Video annotations / timeline markers | :hourglass: | Agents can annotate specific timestamps |
-| Canned responses / macros | :hourglass: | Pre-written reply templates |
 | Customer satisfaction (CSAT) surveys | :hourglass: | Post-resolution feedback |
 | Ticket merge | :hourglass: | Merge duplicate tickets |
 | Ticket followers / CC | :hourglass: | |
 | Custom fields on tickets | :hourglass: | Per-organization configurable |
-| Automation rules / triggers | :hourglass: | Auto-assign, auto-tag, auto-close |
 | Reporting & analytics dashboard | :hourglass: | Resolution time, agent performance, volume |
 | Multi-language support (i18n) | :hourglass: | Widget + frontend + KB articles |
 | SSO / SAML / OAuth integration | :hourglass: | |
@@ -229,7 +269,7 @@ Make everything actually work end-to-end.
 
 ---
 
-## Phase 3 — AI Layer (Cloud-only features)
+## Phase 4 — AI Layer (Cloud-only features)
 
 These features require GPU infrastructure and are behind `AI_ENABLED` / feature flags.
 
@@ -256,19 +296,22 @@ These features require GPU infrastructure and are behind `AI_ENABLED` / feature 
 | **Widget** | :white_check_mark: **~90%** | Full flow: form + validation + screen recording + upload progress + file attach. Missing: screenshot, i18n, a11y |
 | **DevOps / CI** | :white_check_mark: **~70%** | Docker + GitHub Actions (lint, test, build). Missing: image push, deploy automation |
 | **Tests** | :construction: **~50%** | Factories, model tests, API tests for tickets/orgs/widget. Missing: video API tests, frontend tests |
+| **Admin console (org)** | :hourglass: **0%** | Agent/team management, widget config, branding |
+| **Admin console (platform)** | :hourglass: **0%** | Multi-tenant management, billing, feature flags |
 | **Post-MVP features** | :hourglass: **0%** | |
 | **AI layer** | :hourglass: **0%** | Models/flags ready, no implementation |
 
 ### Immediate Next Steps
 
-1. **Run `make dev` + `make migrate`** — Boot the full stack and verify schema
-2. **Run `python manage.py seed`** — Populate with demo data
-3. **Test the full widget flow** — Script tag embed -> record -> submit -> appears in dashboard
-4. **Ticket creation form (agent-side)** — Agents should be able to create tickets manually
-5. **Ticket assignment UI** — Agent and team picker in ticket detail
-6. **Email notifications** — Notify on ticket creation and reply
-7. **Screenshot capture in widget** — Instant screenshot button alongside recording
-8. **Frontend tests** — Add Vitest for React component tests
+1. **Run `python dev.py`** — Boot the full stack and verify schema
+2. **Test the full widget flow** — Script tag embed -> record -> submit -> appears in dashboard
+3. **Ticket creation form (agent-side)** — Agents should be able to create tickets manually
+4. **Ticket assignment UI** — Agent and team picker in ticket detail
+5. **Admin console: agent management** — Invite, deactivate, role assignment (P0)
+6. **Admin console: widget configuration** — Colors, preview, embed snippet, token regen (P0)
+7. **Admin console: org list (platform)** — Tenant lifecycle: create, suspend, delete (P0)
+8. **Email notifications** — Notify on ticket creation and reply
+9. **Frontend tests** — Add Vitest for React component tests
 
 ---
 

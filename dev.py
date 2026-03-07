@@ -15,10 +15,11 @@ Usage:
     python dev.py down             # Stop all services
     python dev.py logs             # Tail all logs
     python dev.py status           # Show service status
-    python dev.py tunnel           # Quick tunnel (trycloudflare.com, no auth)
-    python dev.py tunnel --named   # Named tunnel (requires tunnel-login first)
+    python dev.py tunnel           # Tunnel "dev" -> dev.DOMAIN
+    python dev.py tunnel staging   # Tunnel "staging" -> staging.DOMAIN
     python dev.py tunnel-login     # Authenticate cloudflared for Showdesk
     python dev.py tunnel-status    # Show tunnel info
+    python dev.py tunnel-stop      # Stop running tunnel
 """
 
 from __future__ import annotations
@@ -52,7 +53,7 @@ INIT_MARKER = ROOT / ".dev-initialized"
 # system-wide. The cert is stored in the project's .cloudflared/ directory.
 CF_DIR = ROOT / ".cloudflared"
 CF_CERT = CF_DIR / "cert.pem"
-CF_TUNNEL_NAME = "showdesk-dev"
+CF_DEFAULT_TUNNEL = "dev"
 CF_PID_FILE = ROOT / ".tunnel.pid"
 
 BOLD = "\033[1m"
@@ -343,111 +344,27 @@ def cmd_tunnel_login() -> None:
         sys.exit(1)
 
 
-def cmd_tunnel() -> None:
-    """Start a Cloudflare tunnel to expose the local dev stack.
-
-    Two modes:
-      python dev.py tunnel           Quick tunnel (*.trycloudflare.com)
-      python dev.py tunnel --named   Named tunnel (requires tunnel-login)
-    """
-    if not has_cloudflared():
-        print(f"{RED}cloudflared is not installed.{RESET}")
-        print("Install it: brew install cloudflare/cloudflare/cloudflared")
+def _get_cf_domain() -> str:
+    """Read the base domain from SHOWDESK_DOMAIN env var."""
+    domain = os.environ.get("SHOWDESK_DOMAIN", "").strip()
+    if not domain or domain == "localhost":
+        print(f"{RED}SHOWDESK_DOMAIN is not set (or is 'localhost').{RESET}")
+        print(f"Set it in your .env to your Cloudflare-managed domain.")
+        print(f"  Example: SHOWDESK_DOMAIN=showdesk.io")
         sys.exit(1)
-
-    # Stop any existing tunnel
-    tunnel_stop()
-
-    named = "--named" in sys.argv
-
-    if named:
-        _tunnel_named()
-    else:
-        _tunnel_quick()
+    return domain
 
 
-def _tunnel_quick() -> None:
-    """Start a quick tunnel -- no auth, temporary URL."""
-    log_step("Starting quick tunnel")
-    log("Mode: quick tunnel (*.trycloudflare.com)")
-    log("No authentication required. URL is temporary.")
-    print()
-
-    # cloudflared tunnel --url runs in foreground and prints the URL to stderr.
-    # We run it as a subprocess and parse the URL.
-    proc = subprocess.Popen(
-        ["cloudflared", "tunnel", "--url", "http://localhost:80"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    # Save PID for cleanup
-    CF_PID_FILE.write_text(str(proc.pid))
-
-    # Parse the assigned URL from cloudflared stderr output
-    tunnel_url = None
-    try:
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            line = proc.stderr.readline()
-            if not line:
-                break
-            # cloudflared prints the URL line like:
-            # ... | https://xxx-yyy-zzz.trycloudflare.com
-            if "trycloudflare.com" in line or ".cloudflare" in line:
-                # Extract URL from the log line
-                for word in line.split():
-                    if word.startswith("https://"):
-                        tunnel_url = word
-                        break
-            if tunnel_url:
-                break
-    except KeyboardInterrupt:
-        proc.terminate()
-        CF_PID_FILE.unlink(missing_ok=True)
-        return
-
-    if tunnel_url:
-        print(f"""
-{GREEN}{BOLD}{'=' * 60}
-  Tunnel is running!
-{'=' * 60}{RESET}
-
-  {BOLD}Public URL{RESET}   {tunnel_url}
-  {BOLD}Local{RESET}        http://localhost
-
-  {DIM}This URL is temporary and will change on restart.
-  For a permanent subdomain, use: python dev.py tunnel --named{RESET}
-
-  Press Ctrl+C to stop the tunnel.
-""")
-    else:
-        log("Tunnel started, but could not parse URL.")
-        log("Check cloudflared output for the URL.")
-
-    # Keep running until Ctrl+C
-    try:
-        proc.wait()
-    except KeyboardInterrupt:
-        log("Stopping tunnel...")
-        proc.terminate()
-        proc.wait(timeout=5)
-    finally:
-        CF_PID_FILE.unlink(missing_ok=True)
+def _get_tunnel_name() -> str:
+    """Get tunnel name from argv or default."""
+    if len(sys.argv) >= 3 and not sys.argv[2].startswith("-"):
+        return sys.argv[2]
+    return CF_DEFAULT_TUNNEL
 
 
-def _tunnel_named() -> None:
-    """Start a named tunnel with a stable subdomain."""
-    if not CF_CERT.exists():
-        print(f"{RED}No Cloudflare cert found for Showdesk.{RESET}")
-        print(f"Run {BOLD}python dev.py tunnel-login{RESET} first to authenticate.")
-        print()
-        print(f"  {DIM}This is separate from ~/.cloudflared/ and won't affect")
-        print(f"  your other Cloudflare accounts.{RESET}")
-        sys.exit(1)
-
-    log_step("Starting named tunnel")
+def _find_or_create_tunnel(name: str) -> str:
+    """Find an existing tunnel by name or create it. Returns tunnel ID."""
+    import json as _json
 
     # Check if tunnel already exists
     result = run(
@@ -456,39 +373,71 @@ def _tunnel_named() -> None:
         check=False,
     )
 
-    tunnel_id = None
     if result.returncode == 0 and result.stdout.strip():
-        import json
         try:
-            tunnels = json.loads(result.stdout)
+            tunnels = _json.loads(result.stdout)
             for t in tunnels:
-                if t.get("name") == CF_TUNNEL_NAME:
+                if t.get("name") == name:
                     tunnel_id = t["id"]
-                    log(f"Found existing tunnel: {CF_TUNNEL_NAME} ({tunnel_id})")
-                    break
-        except (json.JSONDecodeError, KeyError):
+                    log(f"Found existing tunnel: {name} ({tunnel_id})")
+                    return tunnel_id
+        except (_json.JSONDecodeError, KeyError):
             pass
 
-    # Create tunnel if it doesn't exist
-    if not tunnel_id:
-        log(f"Creating tunnel: {CF_TUNNEL_NAME}")
-        result = run(
-            cf_cmd("tunnel", "create", CF_TUNNEL_NAME),
-            capture=True,
-        )
-        # Parse tunnel ID from output: "Created tunnel <name> with id <uuid>"
-        for word in result.stdout.split():
-            if len(word) == 36 and word.count("-") == 4:
-                tunnel_id = word
-                break
+    # Create tunnel
+    log(f"Creating tunnel: {name}")
+    result = run(
+        cf_cmd("tunnel", "create", name),
+        capture=True,
+    )
+    # Parse tunnel ID from output: "Created tunnel <name> with id <uuid>"
+    for word in result.stdout.split():
+        if len(word) == 36 and word.count("-") == 4:
+            log(f"Tunnel created: {word}")
+            return word
 
-        if not tunnel_id:
-            print(f"{RED}Failed to create tunnel.{RESET}")
-            print(result.stdout)
-            print(result.stderr if hasattr(result, "stderr") else "")
-            sys.exit(1)
+    print(f"{RED}Failed to create tunnel.{RESET}")
+    print(result.stdout)
+    sys.exit(1)
 
-        log(f"Tunnel created: {tunnel_id}")
+
+def cmd_tunnel() -> None:
+    """Create a Cloudflare tunnel and bind it to a DNS record.
+
+    Usage:
+      python dev.py tunnel              # tunnel "dev" -> dev.DOMAIN
+      python dev.py tunnel staging       # tunnel "staging" -> staging.DOMAIN
+
+    Requires tunnel-login first. Reads SHOWDESK_DOMAIN from .env.
+    """
+    if not has_cloudflared():
+        print(f"{RED}cloudflared is not installed.{RESET}")
+        print("Install it: brew install cloudflare/cloudflare/cloudflared")
+        sys.exit(1)
+
+    if not CF_CERT.exists():
+        print(f"{RED}No Cloudflare cert found for Showdesk.{RESET}")
+        print(f"Run {BOLD}python dev.py tunnel-login{RESET} first to authenticate.")
+        print()
+        print(f"  {DIM}This is separate from ~/.cloudflared/ and won't affect")
+        print(f"  your other Cloudflare accounts.{RESET}")
+        sys.exit(1)
+
+    # Stop any existing tunnel
+    tunnel_stop()
+
+    tunnel_name = _get_tunnel_name()
+    domain = _get_cf_domain()
+    hostname = f"{tunnel_name}.{domain}"
+
+    log_step(f"Tunnel: {tunnel_name} -> {hostname}")
+
+    # Find or create the tunnel
+    tunnel_id = _find_or_create_tunnel(tunnel_name)
+
+    # Create DNS CNAME record (idempotent -- cloudflared updates if exists)
+    log(f"Setting DNS: {hostname} -> {tunnel_id}.cfargotunnel.com")
+    run(cf_cmd("tunnel", "route", "dns", "--overwrite-dns", tunnel_name, hostname), check=False)
 
     # Write tunnel config
     tunnel_config = CF_DIR / "config.yml"
@@ -497,26 +446,15 @@ def _tunnel_named() -> None:
         f"credentials-file: {CF_DIR / (tunnel_id + '.json')}\n"
         f"\n"
         f"ingress:\n"
-        f"  - service: http://localhost:80\n"
+        f"  - hostname: {hostname}\n"
+        f"    service: http://localhost:80\n"
+        f"  - service: http_status:404\n"
     )
     log(f"Tunnel config written to {tunnel_config}")
 
-    # Show DNS instructions
-    print(f"""
-  {BOLD}Next steps:{RESET}
-
-  1. Add a DNS CNAME record pointing to the tunnel:
-
-     {BOLD}python dev.py tunnel-dns <subdomain.yourdomain.com>{RESET}
-
-     Or manually: CNAME {tunnel_id}.cfargotunnel.com
-
-  2. The tunnel will now start and forward traffic.
-""")
-
     # Run the tunnel
     proc = subprocess.Popen(
-        cf_cmd("tunnel", "--config", str(tunnel_config), "run", CF_TUNNEL_NAME),
+        cf_cmd("tunnel", "--config", str(tunnel_config), "run", tunnel_name),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -526,10 +464,12 @@ def _tunnel_named() -> None:
 
     print(f"""
 {GREEN}{BOLD}{'=' * 60}
-  Named tunnel is running!
+  Tunnel is running!
 {'=' * 60}{RESET}
 
-  {BOLD}Tunnel{RESET}       {CF_TUNNEL_NAME} ({tunnel_id})
+  {BOLD}Tunnel{RESET}       {tunnel_name} ({tunnel_id})
+  {BOLD}URL{RESET}          https://{hostname}
+  {BOLD}Local{RESET}        http://localhost
 
   Press Ctrl+C to stop the tunnel.
 """)
@@ -542,27 +482,6 @@ def _tunnel_named() -> None:
         proc.wait(timeout=5)
     finally:
         CF_PID_FILE.unlink(missing_ok=True)
-
-
-def cmd_tunnel_dns() -> None:
-    """Create a DNS record pointing to the named tunnel.
-
-    Usage: python dev.py tunnel-dns <subdomain.yourdomain.com>
-    """
-    if not CF_CERT.exists():
-        print(f"{RED}No Cloudflare cert found. Run tunnel-login first.{RESET}")
-        sys.exit(1)
-
-    if len(sys.argv) < 3:
-        print(f"{RED}Usage: python dev.py tunnel-dns <hostname>{RESET}")
-        print(f"  Example: python dev.py tunnel-dns dev.showdesk.io")
-        sys.exit(1)
-
-    hostname = sys.argv[2]
-
-    log_step(f"Creating DNS record: {hostname}")
-    run(cf_cmd("tunnel", "route", "dns", CF_TUNNEL_NAME, hostname))
-    log(f"DNS record created: {hostname} -> {CF_TUNNEL_NAME}")
 
 
 def cmd_tunnel_status() -> None:
@@ -719,7 +638,6 @@ COMMANDS = {
     "status": cmd_status,
     "tunnel": cmd_tunnel,
     "tunnel-login": cmd_tunnel_login,
-    "tunnel-dns": cmd_tunnel_dns,
     "tunnel-status": cmd_tunnel_status,
     "tunnel-stop": cmd_tunnel_stop,
 }

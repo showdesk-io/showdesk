@@ -1,5 +1,5 @@
 .PHONY: help dev up down reset seed init status logs \
-       tunnel tunnel-login tunnel-status \
+       tunnel tunnel-login tunnel-status tunnel-stop \
        test lint format shell migrate makemigrations \
        build-widget dev-widget
 
@@ -42,17 +42,17 @@ logs: ## Tail all service logs
 # Cloudflare tunnel
 # ---------------------------------------------------------------------------
 
-tunnel: ## Start a quick tunnel (*.trycloudflare.com)
+tunnel: ## Start tunnel "dev" -> dev.DOMAIN
 	python3 dev.py tunnel
-
-tunnel-named: ## Start a named tunnel (requires tunnel-login)
-	python3 dev.py tunnel --named
 
 tunnel-login: ## Authenticate cloudflared for Showdesk
 	python3 dev.py tunnel-login
 
 tunnel-status: ## Show tunnel info
 	python3 dev.py tunnel-status
+
+tunnel-stop: ## Stop running tunnel
+	python3 dev.py tunnel-stop
 
 # ---------------------------------------------------------------------------
 # Django (quick access — requires running stack)
