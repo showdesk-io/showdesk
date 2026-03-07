@@ -1,0 +1,17 @@
+{
+  "name": "showdesk",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Showdesk - Open-source helpdesk with native video support",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:frontend": "cd frontend && npx vitest run",
+    "test:backend": "docker compose exec backend python -m pytest"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  },
+  "license": "AGPL-3.0"
+}

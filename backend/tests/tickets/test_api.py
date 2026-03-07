@@ -98,6 +98,22 @@ class TestTicketAPI:
         assert response.status_code == status.HTTP_200_OK
         assert response.data["status"] == "in_progress"
 
+    def test_reopen_ticket(self, authenticated_client, organization) -> None:
+        """Agents can reopen a resolved ticket."""
+        ticket = TicketFactory(organization=organization, status=Ticket.Status.RESOLVED)
+        response = authenticated_client.post(f"/api/v1/tickets/{ticket.id}/reopen/")
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["status"] == "open"
+        assert response.data["resolved_at"] is None
+        assert response.data["closed_at"] is None
+
+    def test_reopen_closed_ticket(self, authenticated_client, organization) -> None:
+        """Agents can reopen a closed ticket."""
+        ticket = TicketFactory(organization=organization, status=Ticket.Status.CLOSED)
+        response = authenticated_client.post(f"/api/v1/tickets/{ticket.id}/reopen/")
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["status"] == "open"
+
     def test_unauthenticated_access_denied(self, api_client) -> None:
         """Unauthenticated requests are rejected."""
         response = api_client.get("/api/v1/tickets/")
@@ -176,7 +192,7 @@ class TestTicketMessageAPI:
         })
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data["body"] == "Looking into this now."
-        assert response.data["author"] == str(agent.id)
+        assert str(response.data["author"]) == str(agent.id)
 
     def test_create_internal_note(self, authenticated_client, organization) -> None:
         """Agents can create internal notes."""
