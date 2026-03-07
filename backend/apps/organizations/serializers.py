@@ -8,6 +8,8 @@ from .models import Organization, Team, User
 class OrganizationSerializer(serializers.ModelSerializer):
     """Serializer for the Organization model."""
 
+    agent_count = serializers.SerializerMethodField()
+
     class Meta:
         model = Organization
         fields = [
@@ -16,16 +18,21 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "slug",
             "domain",
             "logo",
+            "api_token",
             "is_active",
             "widget_color",
             "widget_position",
             "widget_greeting",
             "video_expiration_days",
             "video_max_duration_seconds",
+            "agent_count",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "api_token", "created_at", "updated_at"]
+
+    def get_agent_count(self, obj: Organization) -> int:
+        return obj.users.filter(role__in=["admin", "agent"], is_active=True).count()
 
 
 class OrganizationPublicSerializer(serializers.ModelSerializer):
@@ -64,36 +71,23 @@ class UserSerializer(serializers.ModelSerializer):
             "date_joined",
         ]
         read_only_fields = ["id", "date_joined"]
-        extra_kwargs = {
-            "password": {"write_only": True, "required": False},
-        }
 
 
-class UserCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating new users."""
+class InviteAgentSerializer(serializers.Serializer):
+    """Serializer for inviting a new agent via email."""
 
-    password = serializers.CharField(write_only=True, min_length=8)
+    email = serializers.EmailField()
+    first_name = serializers.CharField(max_length=150, required=False, default="")
+    last_name = serializers.CharField(max_length=150, required=False, default="")
+    role = serializers.ChoiceField(
+        choices=[("admin", "Admin"), ("agent", "Agent")],
+        default="agent",
+    )
 
-    class Meta:
-        model = User
-        fields = [
-            "id",
-            "email",
-            "password",
-            "first_name",
-            "last_name",
-            "organization",
-            "role",
-        ]
-        read_only_fields = ["id"]
-
-    def create(self, validated_data: dict) -> User:
-        """Create a user with a hashed password."""
-        password = validated_data.pop("password")
-        user = User(**validated_data)
-        user.set_password(password)
-        user.save()
-        return user
+    def validate_email(self, value: str) -> str:
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value
 
 
 class TeamSerializer(serializers.ModelSerializer):

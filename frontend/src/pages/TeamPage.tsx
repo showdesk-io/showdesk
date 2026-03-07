@@ -1,11 +1,17 @@
 /**
- * Team and agents management page.
+ * Team management page with CRUD operations.
  */
 
-import { useQuery } from "@tanstack/react-query";
-import { fetchAgents, fetchTeams } from "@/api/users";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import toast from "react-hot-toast";
+import { fetchAgents, fetchTeams, createTeam, deleteTeam } from "@/api/users";
+import { useCurrentUser } from "@/hooks/useAuth";
 
 export function TeamPage() {
+  const queryClient = useQueryClient();
+  const { data: currentUser } = useCurrentUser();
+  const isAdmin = currentUser?.role === "admin";
   const { data: agents, isLoading: agentsLoading } = useQuery({
     queryKey: ["agents"],
     queryFn: fetchAgents,
@@ -15,15 +21,110 @@ export function TeamPage() {
     queryFn: fetchTeams,
   });
 
+  const [showCreate, setShowCreate] = useState(false);
+  const [newTeamName, setNewTeamName] = useState("");
+  const [newTeamDesc, setNewTeamDesc] = useState("");
+
+  const createMutation = useMutation({
+    mutationFn: createTeam,
+    onSuccess: () => {
+      toast.success("Team created.");
+      setShowCreate(false);
+      setNewTeamName("");
+      setNewTeamDesc("");
+      void queryClient.invalidateQueries({ queryKey: ["teams"] });
+    },
+    onError: () => toast.error("Failed to create team."),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteTeam,
+    onSuccess: () => {
+      toast.success("Team deleted.");
+      void queryClient.invalidateQueries({ queryKey: ["teams"] });
+    },
+    onError: () => toast.error("Failed to delete team."),
+  });
+
   return (
     <div className="p-6">
-      <h1 className="mb-6 text-2xl font-bold text-gray-900">Team</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">Team</h1>
+        {isAdmin && (
+          <button
+            onClick={() => setShowCreate(!showCreate)}
+            className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600"
+          >
+            + New Team
+          </button>
+        )}
+      </div>
+
+      {/* Create team form */}
+      {showCreate && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!newTeamName.trim()) return;
+            createMutation.mutate({
+              name: newTeamName,
+              description: newTeamDesc,
+            });
+          }}
+          className="mb-6 rounded-xl border border-gray-200 bg-white p-4"
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600">
+                Team Name *
+              </label>
+              <input
+                type="text"
+                value={newTeamName}
+                onChange={(e) => setNewTeamName(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                autoFocus
+                required
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600">
+                Description
+              </label>
+              <input
+                type="text"
+                value={newTeamDesc}
+                onChange={(e) => setNewTeamDesc(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowCreate(false)}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={createMutation.isPending}
+              className="rounded-lg bg-primary-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+            >
+              Create
+            </button>
+          </div>
+        </form>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Agents */}
         <div className="rounded-xl border border-gray-200 bg-white">
           <div className="border-b border-gray-200 px-6 py-4">
-            <h2 className="text-lg font-semibold text-gray-900">Agents</h2>
+            <h2 className="text-lg font-semibold text-gray-900">
+              Agents ({agents?.length ?? 0})
+            </h2>
           </div>
           {agentsLoading ? (
             <div className="flex justify-center py-8">
@@ -37,8 +138,8 @@ export function TeamPage() {
                   className="flex items-center gap-4 px-6 py-4"
                 >
                   <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-100 text-sm font-semibold text-primary-700">
-                    {agent.first_name.charAt(0)}
-                    {agent.last_name.charAt(0)}
+                    {agent.first_name?.charAt(0) ?? "?"}
+                    {agent.last_name?.charAt(0) ?? ""}
                   </div>
                   <div className="flex-1">
                     <p className="text-sm font-medium text-gray-900">
@@ -77,7 +178,9 @@ export function TeamPage() {
         {/* Teams */}
         <div className="rounded-xl border border-gray-200 bg-white">
           <div className="border-b border-gray-200 px-6 py-4">
-            <h2 className="text-lg font-semibold text-gray-900">Teams</h2>
+            <h2 className="text-lg font-semibold text-gray-900">
+              Teams ({teams?.length ?? 0})
+            </h2>
           </div>
           {teamsLoading ? (
             <div className="flex justify-center py-8">
@@ -91,9 +194,23 @@ export function TeamPage() {
                     <p className="text-sm font-medium text-gray-900">
                       {team.name}
                     </p>
-                    <span className="text-xs text-gray-500">
-                      {team.members.length} members
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">
+                        {team.members.length} members
+                      </span>
+                      {isAdmin && (
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Delete team "${team.name}"?`)) {
+                              deleteMutation.mutate(team.id);
+                            }
+                          }}
+                          className="text-xs text-red-500 hover:text-red-700"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {team.description && (
                     <p className="mt-1 text-xs text-gray-500">
@@ -107,7 +224,7 @@ export function TeamPage() {
                         className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-primary-100 text-xs font-medium text-primary-700"
                         title={`${member.first_name} ${member.last_name}`}
                       >
-                        {member.first_name.charAt(0)}
+                        {member.first_name?.charAt(0) ?? "?"}
                       </div>
                     ))}
                     {team.members.length > 5 && (

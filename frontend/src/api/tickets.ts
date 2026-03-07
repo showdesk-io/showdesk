@@ -38,6 +38,21 @@ export async function fetchTicket(id: string): Promise<Ticket> {
   return response.data;
 }
 
+export interface CreateTicketData {
+  title: string;
+  description?: string;
+  priority?: string;
+  assigned_agent?: string | null;
+  assigned_team?: string | null;
+  requester_name?: string;
+  requester_email?: string;
+}
+
+export async function createTicket(data: CreateTicketData): Promise<Ticket> {
+  const response = await apiClient.post<Ticket>("/tickets/", data);
+  return response.data;
+}
+
 export async function createMessage(
   ticketId: string,
   data: { body: string; message_type: string },
@@ -70,6 +85,13 @@ export async function resolveTicket(ticketId: string): Promise<Ticket> {
 export async function closeTicket(ticketId: string): Promise<Ticket> {
   const response = await apiClient.post<Ticket>(
     `/tickets/${ticketId}/close/`,
+  );
+  return response.data;
+}
+
+export async function reopenTicket(ticketId: string): Promise<Ticket> {
+  const response = await apiClient.post<Ticket>(
+    `/tickets/${ticketId}/reopen/`,
   );
   return response.data;
 }

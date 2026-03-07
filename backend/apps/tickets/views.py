@@ -127,6 +127,16 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket.save()
         return Response(TicketSerializer(ticket).data)
 
+    @action(detail=True, methods=["post"])
+    def reopen(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Reopen a resolved or closed ticket."""
+        ticket = self.get_object()
+        ticket.status = Ticket.Status.OPEN
+        ticket.resolved_at = None
+        ticket.closed_at = None
+        ticket.save()
+        return Response(TicketSerializer(ticket).data)
+
 
 class TicketMessageViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ticket messages."""

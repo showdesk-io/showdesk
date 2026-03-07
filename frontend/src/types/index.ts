@@ -12,12 +12,14 @@ export interface Organization {
   slug: string;
   domain: string;
   logo: string | null;
+  api_token: string;
   is_active: boolean;
   widget_color: string;
   widget_position: "bottom-right" | "bottom-left";
   widget_greeting: string;
   video_expiration_days: number;
   video_max_duration_seconds: number;
+  agent_count: number;
   created_at: string;
   updated_at: string;
 }

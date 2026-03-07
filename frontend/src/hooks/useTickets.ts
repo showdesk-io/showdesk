@@ -7,9 +7,12 @@ import {
   assignTicket,
   closeTicket,
   createMessage,
+  createTicket,
   fetchTicket,
   fetchTickets,
+  reopenTicket,
   resolveTicket,
+  type CreateTicketData,
   type TicketFilters,
 } from "@/api/tickets";
 
@@ -25,6 +28,18 @@ export function useTicket(id: string) {
     queryKey: ["ticket", id],
     queryFn: () => fetchTicket(id),
     enabled: !!id,
+  });
+}
+
+export function useCreateTicket() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CreateTicketData) => createTicket(data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
+    },
   });
 }
 
@@ -67,6 +82,7 @@ export function useResolveTicket() {
     onSuccess: (ticket) => {
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
     },
   });
 }
@@ -79,6 +95,20 @@ export function useCloseTicket() {
     onSuccess: (ticket) => {
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
+    },
+  });
+}
+
+export function useReopenTicket() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: reopenTicket,
+    onSuccess: (ticket) => {
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
     },
   });
 }

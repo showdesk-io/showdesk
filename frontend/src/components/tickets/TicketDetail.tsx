@@ -1,14 +1,19 @@
 /**
- * Ticket detail view with message thread and video player.
- *
- * Empathy by design: prominent video display, requester context
- * sidebar, emotional cues from webcam recordings.
+ * Ticket detail view with message thread, assignment, and status actions.
  */
 
 import { useState } from "react";
 import { clsx } from "clsx";
-import type { Ticket, TicketMessage as TicketMessageType } from "@/types";
-import { VideoPlayer } from "@/components/videos/VideoPlayer";
+import { useQuery } from "@tanstack/react-query";
+import toast from "react-hot-toast";
+import type { Ticket, TicketMessage as TicketMessageType, User, Team } from "@/types";
+import { fetchAgents, fetchTeams } from "@/api/users";
+import {
+  useAssignTicket,
+  useResolveTicket,
+  useCloseTicket,
+  useReopenTicket,
+} from "@/hooks/useTickets";
 
 interface TicketDetailProps {
   ticket: Ticket;
@@ -55,6 +60,11 @@ export function TicketDetail({
 
         {/* Messages */}
         <div className="flex-1 space-y-4 overflow-auto p-6">
+          {ticket.messages.length === 0 && (
+            <p className="text-center text-sm text-gray-400">
+              No messages yet.
+            </p>
+          )}
           {ticket.messages.map((message) => (
             <MessageBubble key={message.id} message={message} />
           ))}
@@ -112,67 +122,263 @@ export function TicketDetail({
       </div>
 
       {/* Context sidebar */}
-      <aside className="w-80 border-l border-gray-200 bg-gray-50 p-6">
-        <h2 className="mb-4 text-sm font-semibold text-gray-900">
-          Requester
-        </h2>
-        <div className="mb-6 space-y-2 text-sm">
-          <p className="text-gray-900">
-            {ticket.requester_detail?.first_name}{" "}
-            {ticket.requester_detail?.last_name}
-          </p>
-          <p className="text-gray-500">
-            {ticket.requester_detail?.email ?? ticket.requester_email}
-          </p>
-        </div>
-
-        {ticket.context_url && (
-          <>
-            <h2 className="mb-2 text-sm font-semibold text-gray-900">
-              Technical Context
-            </h2>
-            <div className="mb-6 space-y-1 text-xs text-gray-500">
-              <p>
-                <span className="font-medium">URL:</span> {ticket.context_url}
-              </p>
-              {ticket.context_browser && (
-                <p>
-                  <span className="font-medium">Browser:</span>{" "}
-                  {ticket.context_browser}
-                </p>
-              )}
-              {ticket.context_os && (
-                <p>
-                  <span className="font-medium">OS:</span> {ticket.context_os}
-                </p>
-              )}
-              {ticket.context_screen_resolution && (
-                <p>
-                  <span className="font-medium">Resolution:</span>{" "}
-                  {ticket.context_screen_resolution}
-                </p>
-              )}
-            </div>
-          </>
-        )}
-
-        <h2 className="mb-2 text-sm font-semibold text-gray-900">Details</h2>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between">
-            <span className="text-gray-500">Status</span>
-            <span className="font-medium">{ticket.status}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Priority</span>
-            <span className="font-medium">{ticket.priority}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Source</span>
-            <span className="font-medium">{ticket.source}</span>
-          </div>
-        </div>
-      </aside>
+      <TicketSidebar ticket={ticket} />
     </div>
+  );
+}
+
+// ── Sidebar with assignment + status actions ──────────────────────────
+
+function TicketSidebar({ ticket }: { ticket: Ticket }) {
+  const { data: agents } = useQuery({
+    queryKey: ["agents"],
+    queryFn: fetchAgents,
+  });
+  const { data: teams } = useQuery({
+    queryKey: ["teams"],
+    queryFn: fetchTeams,
+  });
+
+  const assignMutation = useAssignTicket();
+  const resolveMutation = useResolveTicket();
+  const closeMutation = useCloseTicket();
+  const reopenMutation = useReopenTicket();
+
+  const handleAssignAgent = (agentId: string) => {
+    assignMutation.mutate(
+      { ticketId: ticket.id, agent_id: agentId || undefined },
+      {
+        onSuccess: () => toast.success("Agent assigned."),
+        onError: () => toast.error("Failed to assign agent."),
+      },
+    );
+  };
+
+  const handleAssignTeam = (teamId: string) => {
+    assignMutation.mutate(
+      { ticketId: ticket.id, team_id: teamId || undefined },
+      {
+        onSuccess: () => toast.success("Team assigned."),
+        onError: () => toast.error("Failed to assign team."),
+      },
+    );
+  };
+
+  const isResolved = ticket.status === "resolved";
+  const isClosed = ticket.status === "closed";
+  const canResolve = !isResolved && !isClosed;
+  const canClose = !isClosed;
+  const canReopen = isResolved || isClosed;
+
+  return (
+    <aside className="w-80 overflow-auto border-l border-gray-200 bg-gray-50 p-6">
+      {/* Status Actions */}
+      <h2 className="mb-3 text-sm font-semibold text-gray-900">Actions</h2>
+      <div className="mb-6 flex flex-wrap gap-2">
+        {canResolve && (
+          <button
+            onClick={() =>
+              resolveMutation.mutate(ticket.id, {
+                onSuccess: () => toast.success("Ticket resolved."),
+                onError: () => toast.error("Failed to resolve ticket."),
+              })
+            }
+            disabled={resolveMutation.isPending}
+            className="rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600 disabled:opacity-50"
+          >
+            Resolve
+          </button>
+        )}
+        {canClose && (
+          <button
+            onClick={() =>
+              closeMutation.mutate(ticket.id, {
+                onSuccess: () => toast.success("Ticket closed."),
+                onError: () => toast.error("Failed to close ticket."),
+              })
+            }
+            disabled={closeMutation.isPending}
+            className="rounded-lg bg-gray-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-600 disabled:opacity-50"
+          >
+            Close
+          </button>
+        )}
+        {canReopen && (
+          <button
+            onClick={() =>
+              reopenMutation.mutate(ticket.id, {
+                onSuccess: () => toast.success("Ticket reopened."),
+                onError: () => toast.error("Failed to reopen ticket."),
+              })
+            }
+            disabled={reopenMutation.isPending}
+            className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+          >
+            Reopen
+          </button>
+        )}
+      </div>
+
+      {/* Assignment */}
+      <h2 className="mb-2 text-sm font-semibold text-gray-900">
+        Assigned Agent
+      </h2>
+      <select
+        value={ticket.assigned_agent ?? ""}
+        onChange={(e) => handleAssignAgent(e.target.value)}
+        className="mb-4 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+      >
+        <option value="">Unassigned</option>
+        {agents?.map((agent: User) => (
+          <option key={agent.id} value={agent.id}>
+            {agent.first_name} {agent.last_name} ({agent.email})
+          </option>
+        ))}
+      </select>
+
+      <h2 className="mb-2 text-sm font-semibold text-gray-900">
+        Assigned Team
+      </h2>
+      <select
+        value={ticket.assigned_team ?? ""}
+        onChange={(e) => handleAssignTeam(e.target.value)}
+        className="mb-6 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+      >
+        <option value="">No team</option>
+        {teams?.map((team: Team) => (
+          <option key={team.id} value={team.id}>
+            {team.name}
+          </option>
+        ))}
+      </select>
+
+      {/* Requester */}
+      <h2 className="mb-2 text-sm font-semibold text-gray-900">Requester</h2>
+      <div className="mb-6 space-y-1 text-sm">
+        <p className="text-gray-900">
+          {ticket.requester_detail
+            ? `${ticket.requester_detail.first_name} ${ticket.requester_detail.last_name}`
+            : ticket.requester_name || "Unknown"}
+        </p>
+        <p className="text-gray-500">
+          {ticket.requester_detail?.email ?? ticket.requester_email}
+        </p>
+      </div>
+
+      {/* Technical Context */}
+      {ticket.context_url && (
+        <>
+          <h2 className="mb-2 text-sm font-semibold text-gray-900">
+            Technical Context
+          </h2>
+          <div className="mb-6 space-y-1 text-xs text-gray-500">
+            <p>
+              <span className="font-medium">URL:</span> {ticket.context_url}
+            </p>
+            {ticket.context_browser && (
+              <p>
+                <span className="font-medium">Browser:</span>{" "}
+                {ticket.context_browser}
+              </p>
+            )}
+            {ticket.context_os && (
+              <p>
+                <span className="font-medium">OS:</span> {ticket.context_os}
+              </p>
+            )}
+            {ticket.context_screen_resolution && (
+              <p>
+                <span className="font-medium">Resolution:</span>{" "}
+                {ticket.context_screen_resolution}
+              </p>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Details */}
+      <h2 className="mb-2 text-sm font-semibold text-gray-900">Details</h2>
+      <div className="space-y-2 text-sm">
+        <div className="flex justify-between">
+          <span className="text-gray-500">Status</span>
+          <StatusLabel status={ticket.status} />
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">Priority</span>
+          <PriorityLabel priority={ticket.priority} />
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">Source</span>
+          <span className="font-medium capitalize">{ticket.source}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">Created</span>
+          <span className="font-medium">
+            {new Date(ticket.created_at).toLocaleDateString()}
+          </span>
+        </div>
+        {ticket.tags_detail.length > 0 && (
+          <div className="pt-2">
+            <span className="text-gray-500">Tags</span>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {ticket.tags_detail.map((tag) => (
+                <span
+                  key={tag.id}
+                  className="rounded-full px-2 py-0.5 text-xs font-medium"
+                  style={{
+                    backgroundColor: tag.color + "20",
+                    color: tag.color,
+                  }}
+                >
+                  {tag.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+// ── Small helpers ─────────────────────────────────────────────────────
+
+function StatusLabel({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    open: "text-blue-700 bg-blue-100",
+    in_progress: "text-yellow-700 bg-yellow-100",
+    waiting: "text-gray-700 bg-gray-100",
+    resolved: "text-green-700 bg-green-100",
+    closed: "text-gray-500 bg-gray-100",
+  };
+  return (
+    <span
+      className={clsx(
+        "rounded-full px-2 py-0.5 text-xs font-medium",
+        colors[status] ?? "text-gray-600 bg-gray-100",
+      )}
+    >
+      {status.replace("_", " ")}
+    </span>
+  );
+}
+
+function PriorityLabel({ priority }: { priority: string }) {
+  const colors: Record<string, string> = {
+    low: "text-gray-600 bg-gray-100",
+    medium: "text-blue-600 bg-blue-100",
+    high: "text-orange-600 bg-orange-100",
+    urgent: "text-red-600 bg-red-100",
+  };
+  return (
+    <span
+      className={clsx(
+        "rounded-full px-2 py-0.5 text-xs font-medium",
+        colors[priority] ?? "text-gray-600 bg-gray-100",
+      )}
+    >
+      {priority}
+    </span>
   );
 }
 
