@@ -408,6 +408,10 @@ class Command(BaseCommand):
                 self.stdout.write(f"  Created ticket: {ticket.reference} - {ticket.title}")
             tickets.append(ticket)
 
+        # Sync the org ticket_counter so next_ticket_reference() works
+        org.ticket_counter = len(tickets)
+        org.save(update_fields=["ticket_counter"])
+
         return tickets
 
     def _create_messages(
