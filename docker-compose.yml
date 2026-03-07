@@ -122,7 +122,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info -Q default,video_processing
+    command: celery -A config worker -l info -Q celery,default,video_processing
     volumes:
       - ./backend:/app
     env_file:

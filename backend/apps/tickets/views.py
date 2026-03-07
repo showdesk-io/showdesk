@@ -1,5 +1,7 @@
 """Views for ticket-related models."""
 
+import logging
+
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
@@ -7,6 +9,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.notifications.signals import notify_new_message, notify_new_ticket, notify_ticket_update
 from apps.organizations.models import Organization
 
 from .models import Tag, Ticket, TicketAttachment, TicketMessage
@@ -18,6 +21,14 @@ from .serializers import (
     TicketMessageSerializer,
     TicketSerializer,
 )
+from .tasks import (
+    send_ticket_assigned_email,
+    send_ticket_created_email,
+    send_ticket_reply_email,
+    send_ticket_resolved_email,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class TicketViewSet(viewsets.ModelViewSet):
@@ -51,10 +62,16 @@ class TicketViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:  # noqa: ANN001
         """Set organization and reference on creation."""
         org = self.request.user.organization
-        serializer.save(
+        ticket = serializer.save(
             organization=org,
             reference=org.next_ticket_reference(),
         )
+        # Notify via WebSocket + email
+        try:
+            notify_new_ticket(ticket)
+        except Exception:
+            logger.exception("WebSocket notification failed for %s", ticket.reference)
+        send_ticket_created_email.delay(str(ticket.id))
 
     @action(detail=False, methods=["post"], permission_classes=[AllowAny])
     def widget_submit(self, request):  # noqa: ANN001, ANN201
@@ -86,6 +103,13 @@ class TicketViewSet(viewsets.ModelViewSet):
             source=Ticket.Source.WIDGET,
         )
 
+        # Notify via WebSocket + email
+        try:
+            notify_new_ticket(ticket)
+        except Exception:
+            logger.exception("WebSocket notification failed for %s", ticket.reference)
+        send_ticket_created_email.delay(str(ticket.id))
+
         return Response(
             TicketSerializer(ticket).data,
             status=status.HTTP_201_CREATED,
@@ -107,6 +131,15 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         ticket.status = Ticket.Status.IN_PROGRESS
         ticket.save()
+
+        # Notify
+        try:
+            notify_ticket_update(ticket)
+        except Exception:
+            logger.exception("WebSocket notification failed for %s", ticket.reference)
+        if agent_id:
+            send_ticket_assigned_email.delay(str(ticket.id))
+
         return Response(TicketSerializer(ticket).data)
 
     @action(detail=True, methods=["post"])
@@ -116,6 +149,14 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket.status = Ticket.Status.RESOLVED
         ticket.resolved_at = timezone.now()
         ticket.save()
+
+        # Notify
+        try:
+            notify_ticket_update(ticket)
+        except Exception:
+            logger.exception("WebSocket notification failed for %s", ticket.reference)
+        send_ticket_resolved_email.delay(str(ticket.id))
+
         return Response(TicketSerializer(ticket).data)
 
     @action(detail=True, methods=["post"])
@@ -125,6 +166,12 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket.status = Ticket.Status.CLOSED
         ticket.closed_at = timezone.now()
         ticket.save()
+
+        try:
+            notify_ticket_update(ticket)
+        except Exception:
+            logger.exception("WebSocket notification failed for %s", ticket.reference)
+
         return Response(TicketSerializer(ticket).data)
 
     @action(detail=True, methods=["post"])
@@ -135,6 +182,12 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket.resolved_at = None
         ticket.closed_at = None
         ticket.save()
+
+        try:
+            notify_ticket_update(ticket)
+        except Exception:
+            logger.exception("WebSocket notification failed for %s", ticket.reference)
+
         return Response(TicketSerializer(ticket).data)
 
 
@@ -156,8 +209,17 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         return TicketMessage.objects.none()
 
     def perform_create(self, serializer) -> None:  # noqa: ANN001
-        """Set author on creation."""
-        serializer.save(author=self.request.user)
+        """Set author on creation and send notifications."""
+        message = serializer.save(author=self.request.user)
+
+        # WebSocket notification
+        try:
+            notify_new_message(message)
+        except Exception:
+            logger.exception("WebSocket notification failed for message %s", message.id)
+
+        # Email notification (async via Celery)
+        send_ticket_reply_email.delay(str(message.id))
 
 
 class TicketAttachmentViewSet(viewsets.ModelViewSet):

@@ -140,19 +140,19 @@ Make everything actually work end-to-end.
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Generate and run initial migrations | :hourglass: | `makemigrations` + `migrate` |
+| Generate and run initial migrations | :white_check_mark: | Via `dev.py` auto-migrate on startup |
 | Seed data management command | :white_check_mark: | `python manage.py seed` with demo org, agents, tickets |
 | Ticket reference auto-increment (robust) | :white_check_mark: | Atomic counter via `Organization.next_ticket_reference()` |
 | Email notifications on ticket creation | :hourglass: | Via Celery |
 | Email notifications on ticket reply | :hourglass: | |
-| Password reset flow | :hourglass: | |
+| Password reset flow | N/A | OTP-based auth, no passwords |
 | Pagination on all list endpoints | :white_check_mark: | DRF PageNumberPagination configured |
 | Rate limiting on widget endpoints | :hourglass: | Prevent abuse |
 | File upload validation (size, type) | :hourglass: | |
 | Video duration validation against org settings | :hourglass: | |
 | Celery Beat schedule for `cleanup_expired_videos` | :hourglass: | |
 | Whisper transcription integration | :hourglass: | Behind `AI_ENABLED` flag |
-| API tests (pytest) | :white_check_mark: | Tickets, widget submit, messages, organizations |
+| API tests (pytest) | :white_check_mark: | 60 tests: tickets, widget, messages, orgs, users, invite, toggle, reopen |
 | Model tests | :white_check_mark: | Organizations, tickets, videos |
 | Factory classes (factory_boy) | :white_check_mark: | All models covered |
 
@@ -162,17 +162,17 @@ Make everything actually work end-to-end.
 |------|--------|-------|
 | Auth guard (redirect to login if unauthenticated) | :white_check_mark: | `AuthGuard` component wrapping protected routes |
 | Dashboard stats wired to API | :white_check_mark: | Live counts: open, in progress, urgent, total |
-| Ticket creation form (agent-side) | :hourglass: | |
-| Ticket assignment UI (agent + team picker) | :hourglass: | |
-| Ticket status change actions (resolve, close, reopen) | :hourglass: | |
+| Ticket creation form (agent-side) | :white_check_mark: | CreateTicketModal in TicketListPage |
+| Ticket assignment UI (agent + team picker) | :white_check_mark: | TicketSidebar with agent/team dropdowns |
+| Ticket status change actions (resolve, close, reopen) | :white_check_mark: | Action buttons in TicketSidebar |
 | Video player wired to real video URLs | :hourglass: | |
 | Agent video reply (record + attach to message) | :hourglass: | |
 | File attachment upload on messages | :hourglass: | |
 | Tag management (create, assign, filter) | :hourglass: | |
 | Team management page | :white_check_mark: | Teams + agents list with avatars and roles |
 | Agent management page | :white_check_mark: | Combined in Team page |
-| Settings page: organization branding | :hourglass: | |
-| Settings page: widget configuration preview | :hourglass: | |
+| Settings page: organization branding | :white_check_mark: | Organization tab: name, slug, domain |
+| Settings page: widget configuration | :white_check_mark: | Widget tab: color, position, greeting, embed snippet, token regen |
 | Settings page: SLA policy editor | :hourglass: | |
 | Keyboard shortcuts for agents | :hourglass: | Navigate tickets, reply, assign |
 | Bulk actions on ticket list | :hourglass: | Multi-select, bulk assign/close |
@@ -193,7 +193,7 @@ Make everything actually work end-to-end.
 | Configurable max recording duration | :hourglass: | Read from org settings |
 | i18n support (language detection) | :hourglass: | |
 | Accessibility (ARIA, keyboard nav, focus trap) | :hourglass: | |
-| E2E browser tests | :hourglass: | |
+| E2E browser tests | :white_check_mark: | Playwright: 19 tests (widget demo, auth, API health) |
 
 ### DevOps
 
@@ -218,9 +218,9 @@ Settings and management for a single organization, accessible to users with the 
 
 | Feature | Priority | Status | Notes |
 |---------|----------|--------|-------|
-| Agent management (invite, deactivate, roles) | P0 | :hourglass: | Invite via email/OTP, toggle active, assign admin/agent role |
-| Team management (CRUD, assign agents, lead) | P0 | :hourglass: | Currently read-only in TeamPage |
-| Widget configuration (colors, position, texts) | P0 | :hourglass: | Live preview, copy embed snippet, regenerate API token |
+| Agent management (invite, deactivate, roles) | P0 | :white_check_mark: | Settings > Agents tab: invite, toggle active, role dropdown |
+| Team management (CRUD, assign agents, lead) | P0 | :white_check_mark: | TeamPage: create/delete teams, agent list |
+| Widget configuration (colors, position, texts) | P0 | :white_check_mark: | Settings > Widget tab: color, position, greeting, embed snippet, token regen |
 | Organization branding (logo, name, primary color) | P1 | :hourglass: | White-label appearance |
 | Custom domain for widget/portal | P1 | :hourglass: | CNAME-based, Caddy dynamic TLS in prod |
 | Tags & categories management | P1 | :hourglass: | CRUD for ticket tags, KB categories |
@@ -291,27 +291,26 @@ These features require GPU infrastructure and are behind `AI_ENABLED` / feature 
 | Area | Progress | Detail |
 |------|----------|--------|
 | **Project scaffolding** | :white_check_mark: **100%** | All files, config, Docker, docs, CI |
-| **Backend models & API** | :white_check_mark: **~95%** | Models, serializers, views, tasks, seed command, atomic refs. Missing: migrations run, email notifs |
-| **Frontend UI** | :construction: **~75%** | Auth guard, dashboard wired, team page, ticket list/detail. Missing: ticket create form, assignment UI, video reply |
+| **Backend models & API** | :white_check_mark: **~95%** | Models, serializers, views, tasks, seed, atomic refs. Missing: email notifs, rate limiting |
+| **Frontend UI** | :construction: **~85%** | Auth, dashboard, ticket CRUD, assignment, status actions, settings, teams. Missing: video player wiring, tag mgmt, keyboard shortcuts, WebSocket |
 | **Widget** | :white_check_mark: **~90%** | Full flow: form + validation + screen recording + upload progress + file attach. Missing: screenshot, i18n, a11y |
 | **DevOps / CI** | :white_check_mark: **~70%** | Docker + GitHub Actions (lint, test, build). Missing: image push, deploy automation |
-| **Tests** | :construction: **~50%** | Factories, model tests, API tests for tickets/orgs/widget. Missing: video API tests, frontend tests |
-| **Admin console (org)** | :hourglass: **0%** | Agent/team management, widget config, branding |
+| **Tests** | :white_check_mark: **~80%** | 94 total: 60 backend pytest, 15 frontend Vitest, 19 Playwright e2e |
+| **Admin console (org)** | :construction: **~40%** | Agent/team CRUD done, widget config done. Missing: tags, canned responses, SLA editor, audit log |
 | **Admin console (platform)** | :hourglass: **0%** | Multi-tenant management, billing, feature flags |
 | **Post-MVP features** | :hourglass: **0%** | |
 | **AI layer** | :hourglass: **0%** | Models/flags ready, no implementation |
 
 ### Immediate Next Steps
 
-1. **Run `python dev.py`** — Boot the full stack and verify schema
-2. **Test the full widget flow** — Script tag embed -> record -> submit -> appears in dashboard
-3. **Ticket creation form (agent-side)** — Agents should be able to create tickets manually
-4. **Ticket assignment UI** — Agent and team picker in ticket detail
-5. **Admin console: agent management** — Invite, deactivate, role assignment (P0)
-6. **Admin console: widget configuration** — Colors, preview, embed snippet, token regen (P0)
-7. **Admin console: org list (platform)** — Tenant lifecycle: create, suspend, delete (P0)
-8. **Email notifications** — Notify on ticket creation and reply
-9. **Frontend tests** — Add Vitest for React component tests
+1. **Email notifications** — Celery tasks for ticket creation + agent reply notifications
+2. **Real-time ticket updates** — Wire WebSocket consumer to frontend (backend already has consumer + signals)
+3. **Tag management UI** — CRUD tags in settings, assign/filter in ticket list
+4. **Rate limiting** — Throttle widget endpoints to prevent abuse
+5. **Celery Beat schedule** — Periodic cleanup of expired videos
+6. **Platform admin console** — Org list, usage stats, tenant lifecycle (P0)
+7. **File upload validation** — Size limits, allowed MIME types
+8. **Keyboard shortcuts** — Navigate tickets, quick reply, assign
 
 ---
 
