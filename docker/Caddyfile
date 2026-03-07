@@ -48,6 +48,20 @@
 	}
 
 	# -----------------------------------------------------------------------
+	# Widget demo page + built widget JS
+	# -----------------------------------------------------------------------
+	handle /widget-demo* {
+		rewrite /widget-demo /widget-demo.html
+		root * /srv
+		file_server
+	}
+
+	handle /widget.js {
+		root * /srv
+		file_server
+	}
+
+	# -----------------------------------------------------------------------
 	# Everything else → React frontend (Vite dev server)
 	# -----------------------------------------------------------------------
 	handle {

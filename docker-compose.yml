@@ -82,6 +82,8 @@ services:
       - "443:443"
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile
+      - ./docker/widget-demo.html:/srv/widget-demo.html:ro
+      - ./widget/dist/widget.js:/srv/widget.js:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

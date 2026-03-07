@@ -226,6 +226,27 @@ def collect_static() -> None:
     )
 
 
+def build_widget() -> None:
+    """Build the embeddable widget JS."""
+    widget_dir = ROOT / "widget"
+    dist_file = widget_dir / "dist" / "widget.js"
+
+    if not (widget_dir / "node_modules").exists():
+        log_step("Installing widget dependencies")
+        run(["npm", "install"], cwd=widget_dir)
+
+    log_step("Building widget")
+    run(["npm", "run", "build"], cwd=widget_dir)
+
+    if dist_file.exists():
+        log(f"Widget built: {dist_file}")
+    else:
+        # Create a placeholder so Docker volume mount doesn't fail
+        dist_file.parent.mkdir(parents=True, exist_ok=True)
+        dist_file.write_text("// Widget build failed. Run: cd widget && npm run build\n")
+        log("Widget build failed -- placeholder created", color=YELLOW)
+
+
 def mark_initialized() -> None:
     """Write a marker file so subsequent `up` skips init."""
     INIT_MARKER.write_text(
@@ -241,6 +262,7 @@ def print_banner() -> None:
 {'=' * 60}{RESET}
 
   {BOLD}App{RESET}          http://localhost
+  {BOLD}Widget Demo{RESET}  http://localhost/widget-demo/
   {BOLD}Mailpit{RESET}      http://localhost/mailpit/
   {BOLD}MinIO{RESET}        http://localhost:9001
   {BOLD}LiveKit{RESET}      ws://localhost:7880
@@ -542,8 +564,9 @@ def cmd_up() -> None:
 
 
 def cmd_default() -> None:
-    """Full bootstrap: infra -> init -> app -> migrate -> seed."""
+    """Full bootstrap: infra -> init -> app -> migrate -> seed -> widget."""
     ensure_env()
+    build_widget()
     start_infra()
     init_minio_buckets()
     start_app_services()
