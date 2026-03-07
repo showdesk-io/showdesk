@@ -278,6 +278,10 @@ def cmd_tunnel_login() -> None:
     Stores the cert in .cloudflared/cert.pem (project-local), completely
     independent of the system-wide ~/.cloudflared/cert.pem.
     This lets you use a different Cloudflare account for Showdesk.
+
+    Strategy: cloudflared login always writes to ~/.cloudflared/cert.pem and
+    doesn't support --origincert. So we temporarily back up any existing cert,
+    run the login, move the new cert to the project dir, then restore the backup.
     """
     if not has_cloudflared():
         print(f"{RED}cloudflared is not installed.{RESET}")
@@ -302,9 +306,35 @@ def cmd_tunnel_login() -> None:
   so it won't affect your other Cloudflare accounts.
 """)
 
-    # cloudflared login writes cert.pem to the directory specified by --origincert
-    # But the flag actually specifies the full path to the cert file, not a dir.
-    run(["cloudflared", "login", "--origincert", str(CF_CERT)])
+    # cloudflared login always writes to ~/.cloudflared/cert.pem.
+    # We back up any existing cert, run login, then move the new cert
+    # to our project-local directory and restore the original.
+    system_cf_dir = Path.home() / ".cloudflared"
+    system_cert = system_cf_dir / "cert.pem"
+    backup_cert = system_cf_dir / "cert.pem.showdesk-backup"
+
+    had_existing = system_cert.exists()
+    if had_existing:
+        log(f"Backing up existing {system_cert}")
+        shutil.copy2(system_cert, backup_cert)
+
+    try:
+        run(["cloudflared", "login"])
+
+        if system_cert.exists():
+            # Move the new cert to our project-local directory
+            shutil.move(str(system_cert), str(CF_CERT))
+            log(f"Cert moved to {CF_CERT}")
+        else:
+            print(f"{RED}Authentication failed or was cancelled.{RESET}")
+            sys.exit(1)
+    finally:
+        # Restore the original cert if there was one
+        if had_existing and backup_cert.exists():
+            shutil.move(str(backup_cert), str(system_cert))
+            log(f"Restored original {system_cert}")
+        elif backup_cert.exists():
+            backup_cert.unlink()
 
     if CF_CERT.exists():
         log(f"Authenticated! Cert saved to {CF_CERT}")
