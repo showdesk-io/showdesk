@@ -1,0 +1,56 @@
+# Showdesk - Development Caddyfile
+#
+# Single entry point for the entire stack.
+# In dev: http://localhost (port 80), no TLS.
+# Caddy routes requests to the correct upstream service.
+
+{
+	# Disable automatic HTTPS in development
+	auto_https off
+}
+
+:80 {
+	# -----------------------------------------------------------------------
+	# API + Admin + Static backend routes → Django (Daphne)
+	# -----------------------------------------------------------------------
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle /admin/* {
+		reverse_proxy backend:8000
+	}
+
+	handle /static/* {
+		reverse_proxy backend:8000
+	}
+
+	# -----------------------------------------------------------------------
+	# WebSocket → Django Channels (Daphne)
+	# -----------------------------------------------------------------------
+	handle /ws/* {
+		reverse_proxy backend:8000
+	}
+
+	# -----------------------------------------------------------------------
+	# MinIO S3 API (presigned URLs, direct uploads)
+	# -----------------------------------------------------------------------
+	handle /s3/* {
+		uri strip_prefix /s3
+		reverse_proxy minio:9000
+	}
+
+	# -----------------------------------------------------------------------
+	# Mailpit (dev email UI)
+	# -----------------------------------------------------------------------
+	handle /mailpit/* {
+		reverse_proxy mailpit:8025
+	}
+
+	# -----------------------------------------------------------------------
+	# Everything else → React frontend (Vite dev server)
+	# -----------------------------------------------------------------------
+	handle {
+		reverse_proxy frontend:5173
+	}
+}

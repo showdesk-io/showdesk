@@ -1,0 +1,51 @@
+"""API v1 URL configuration."""
+
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView
+
+from apps.organizations.auth_views import RequestOTPView, VerifyOTPView
+from apps.organizations.views import (
+    OrganizationViewSet,
+    TeamViewSet,
+    UserViewSet,
+)
+from apps.tickets.views import (
+    TagViewSet,
+    TicketAttachmentViewSet,
+    TicketMessageViewSet,
+    TicketViewSet,
+)
+from apps.videos.views import VideoRecordingViewSet
+from apps.knowledge_base.views import ArticleViewSet, CategoryViewSet
+from apps.core.views import HealthCheckView
+
+router = DefaultRouter()
+
+# Organizations
+router.register(r"organizations", OrganizationViewSet, basename="organization")
+router.register(r"teams", TeamViewSet, basename="team")
+router.register(r"users", UserViewSet, basename="user")
+
+# Tickets
+router.register(r"tickets", TicketViewSet, basename="ticket")
+router.register(r"messages", TicketMessageViewSet, basename="message")
+router.register(r"attachments", TicketAttachmentViewSet, basename="attachment")
+router.register(r"tags", TagViewSet, basename="tag")
+
+# Videos
+router.register(r"videos", VideoRecordingViewSet, basename="video")
+
+# Knowledge Base
+router.register(r"kb/categories", CategoryViewSet, basename="kb-category")
+router.register(r"kb/articles", ArticleViewSet, basename="kb-article")
+
+urlpatterns = [
+    path("", include(router.urls)),
+    # OTP authentication (passwordless)
+    path("auth/request-otp/", RequestOTPView.as_view(), name="request-otp"),
+    path("auth/verify-otp/", VerifyOTPView.as_view(), name="verify-otp"),
+    # JWT refresh (still needed for token rotation)
+    path("auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    path("health/", HealthCheckView.as_view(), name="health-check"),
+]

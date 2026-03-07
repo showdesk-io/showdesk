@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Backend: lint + test
+  # ---------------------------------------------------------------------------
+  backend-lint:
+    name: Backend Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install ruff
+
+      - name: Run ruff check
+        run: ruff check backend/
+
+      - name: Run ruff format check
+        run: ruff format --check backend/
+
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: showdesk_test
+          POSTGRES_USER: showdesk
+          POSTGRES_PASSWORD: showdesk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://showdesk:showdesk@localhost:5432/showdesk_test
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/1
+      DJANGO_SECRET_KEY: ci-test-secret-key
+      DJANGO_SETTINGS_MODULE: config.settings.development
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('backend/requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Run migrations
+        run: |
+          cd backend
+          python manage.py migrate --noinput
+
+      - name: Run tests
+        run: |
+          cd backend
+          python -m pytest -v --tb=short
+
+  # ---------------------------------------------------------------------------
+  # Frontend: lint + build
+  # ---------------------------------------------------------------------------
+  frontend-lint:
+    name: Frontend Lint & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: node-${{ hashFiles('frontend/package-lock.json', 'frontend/package.json') }}
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm install
+
+      - name: Type check
+        run: |
+          cd frontend
+          npx tsc --noEmit
+
+      - name: Build
+        run: |
+          cd frontend
+          npm run build
+
+  # ---------------------------------------------------------------------------
+  # Widget: lint + build
+  # ---------------------------------------------------------------------------
+  widget-build:
+    name: Widget Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: widget/node_modules
+          key: node-widget-${{ hashFiles('widget/package-lock.json', 'widget/package.json') }}
+
+      - name: Install dependencies
+        run: |
+          cd widget
+          npm install
+
+      - name: Type check
+        run: |
+          cd widget
+          npx tsc --noEmit
+
+      - name: Build widget
+        run: |
+          cd widget
+          npm run build

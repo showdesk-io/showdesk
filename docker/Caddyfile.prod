@@ -1,0 +1,57 @@
+# Showdesk - Production Caddyfile
+#
+# Automatic HTTPS via Let's Encrypt.
+# Set SHOWDESK_DOMAIN environment variable to your domain.
+
+{$SHOWDESK_DOMAIN:localhost} {
+	# -----------------------------------------------------------------------
+	# Security headers
+	# -----------------------------------------------------------------------
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		-Server
+	}
+
+	# -----------------------------------------------------------------------
+	# API + Admin → Django (Gunicorn + Uvicorn)
+	# -----------------------------------------------------------------------
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle /admin/* {
+		reverse_proxy backend:8000
+	}
+
+	# -----------------------------------------------------------------------
+	# Static files (collected by Django)
+	# -----------------------------------------------------------------------
+	handle /static/* {
+		reverse_proxy backend:8000
+	}
+
+	# -----------------------------------------------------------------------
+	# WebSocket → Django Channels
+	# -----------------------------------------------------------------------
+	handle /ws/* {
+		reverse_proxy backend:8000
+	}
+
+	# -----------------------------------------------------------------------
+	# MinIO S3 (presigned URLs)
+	# -----------------------------------------------------------------------
+	handle /s3/* {
+		uri strip_prefix /s3
+		reverse_proxy minio:9000
+	}
+
+	# -----------------------------------------------------------------------
+	# Frontend (nginx serving built React app)
+	# -----------------------------------------------------------------------
+	handle {
+		reverse_proxy frontend:80
+	}
+}

@@ -1,0 +1,726 @@
+#!/usr/bin/env python3
+"""
+Showdesk -- Development environment orchestrator.
+
+Single entry point to bootstrap and run the full dev stack.
+Handles everything that init containers and Makefile targets used to do,
+but in a single, readable, extensible script.
+
+Usage:
+    python dev.py                  # Full bootstrap + start
+    python dev.py up               # Start services (skip init if already done)
+    python dev.py init             # Run init steps only (no start)
+    python dev.py seed             # Seed database with demo data
+    python dev.py reset            # Nuke volumes and re-bootstrap everything
+    python dev.py down             # Stop all services
+    python dev.py logs             # Tail all logs
+    python dev.py status           # Show service status
+    python dev.py tunnel           # Quick tunnel (trycloudflare.com, no auth)
+    python dev.py tunnel --named   # Named tunnel (requires tunnel-login first)
+    python dev.py tunnel-login     # Authenticate cloudflared for Showdesk
+    python dev.py tunnel-status    # Show tunnel info
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+ROOT = Path(__file__).resolve().parent
+ENV_FILE = ROOT / ".env"
+ENV_EXAMPLE = ROOT / ".env.example"
+
+COMPOSE_CMD = ["docker", "compose"]
+
+# Services that must be healthy before we can run init steps
+INFRA_SERVICES = ["postgres", "redis", "minio"]
+
+# Marker file to skip init on subsequent `dev.py up`
+INIT_MARKER = ROOT / ".dev-initialized"
+
+# Cloudflare tunnel config -- separate cert from the default ~/.cloudflared/
+# This allows using a different Cloudflare account than the one configured
+# system-wide. The cert is stored in the project's .cloudflared/ directory.
+CF_DIR = ROOT / ".cloudflared"
+CF_CERT = CF_DIR / "cert.pem"
+CF_TUNNEL_NAME = "showdesk-dev"
+CF_PID_FILE = ROOT / ".tunnel.pid"
+
+BOLD = "\033[1m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+CYAN = "\033[36m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def log(msg: str, color: str = GREEN) -> None:
+    print(f"{color}{BOLD}>{RESET} {msg}")
+
+
+def log_step(msg: str) -> None:
+    print(f"\n{CYAN}{BOLD}{'_' * 60}{RESET}")
+    print(f"{CYAN}{BOLD}  {msg}{RESET}")
+    print(f"{CYAN}{BOLD}{'_' * 60}{RESET}\n")
+
+
+def run(
+    cmd: list[str] | str,
+    *,
+    check: bool = True,
+    capture: bool = False,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command, printing it first."""
+    if isinstance(cmd, str):
+        cmd = cmd.split()
+    display = " ".join(cmd)
+    log(f"$ {display}", color=YELLOW)
+    return subprocess.run(
+        cmd,
+        check=check,
+        capture_output=capture,
+        text=True,
+        cwd=cwd or ROOT,
+    )
+
+
+def compose(*args: str, **kwargs) -> subprocess.CompletedProcess[str]:
+    """Run a docker compose command."""
+    return run([*COMPOSE_CMD, *args], **kwargs)
+
+
+def compose_exec(service: str, *args: str, **kwargs) -> subprocess.CompletedProcess[str]:
+    """Run a command inside a running service container."""
+    return run([*COMPOSE_CMD, "exec", "-T", service, *args], **kwargs)
+
+
+def compose_run(service: str, *args: str, **kwargs) -> subprocess.CompletedProcess[str]:
+    """Run a one-off command in a new container."""
+    return run([*COMPOSE_CMD, "run", "--rm", "-T", service, *args], **kwargs)
+
+
+def wait_healthy(service: str, timeout: int = 60) -> None:
+    """Wait for a service to become healthy."""
+    log(f"Waiting for {service} to be healthy...")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = run(
+            [*COMPOSE_CMD, "ps", "--format", "{{.Health}}", service],
+            capture=True,
+            check=False,
+        )
+        status = result.stdout.strip().lower()
+        if status == "healthy":
+            log(f"{service} is healthy")
+            return
+        time.sleep(2)
+    print(f"{RED}Timeout waiting for {service} to become healthy.{RESET}")
+    sys.exit(1)
+
+
+def has_cloudflared() -> bool:
+    """Check if cloudflared is installed."""
+    return shutil.which("cloudflared") is not None
+
+
+def cf_cmd(*args: str) -> list[str]:
+    """Build a cloudflared command with the project-specific origincert."""
+    base = ["cloudflared"]
+    if CF_CERT.exists():
+        base += ["--origincert", str(CF_CERT)]
+    return [*base, *args]
+
+
+# ---------------------------------------------------------------------------
+# Steps
+# ---------------------------------------------------------------------------
+
+
+def ensure_env() -> None:
+    """Copy .env.example to .env if it doesn't exist."""
+    if ENV_FILE.exists():
+        log(".env already exists, skipping copy.")
+        return
+    if not ENV_EXAMPLE.exists():
+        print(f"{RED}.env.example not found. Something is wrong.{RESET}")
+        sys.exit(1)
+    shutil.copy(ENV_EXAMPLE, ENV_FILE)
+    log("Created .env from .env.example -- review and adjust as needed.")
+
+
+def start_infra() -> None:
+    """Start infrastructure services (db, cache, storage) and wait for health."""
+    log_step("Starting infrastructure services")
+    compose("up", "-d", *INFRA_SERVICES)
+    for svc in INFRA_SERVICES:
+        wait_healthy(svc)
+
+
+def init_minio_buckets() -> None:
+    """Create S3 buckets in MinIO."""
+    log_step("Initializing MinIO buckets")
+
+    access_key = os.environ.get("S3_ACCESS_KEY_ID", "showdesk")
+    secret_key = os.environ.get("S3_SECRET_ACCESS_KEY", "showdesk-secret")
+    bucket = os.environ.get("S3_BUCKET_NAME", "showdesk-media")
+
+    # Use the minio container's mc client directly
+    compose_exec(
+        "minio",
+        "mc", "alias", "set", "local", "http://localhost:9000", access_key, secret_key,
+        check=False,
+    )
+    compose_exec(
+        "minio",
+        "mc", "mb", f"local/{bucket}", "--ignore-existing",
+        check=False,
+    )
+    compose_exec(
+        "minio",
+        "mc", "anonymous", "set", "download", f"local/{bucket}/public",
+        check=False,
+    )
+    log(f"Bucket '{bucket}' ready")
+
+
+def start_app_services() -> None:
+    """Start all application services."""
+    log_step("Starting application services")
+    compose("up", "--build", "-d")
+
+
+def run_migrations() -> None:
+    """Run Django database migrations."""
+    log_step("Running database migrations")
+    compose_exec("backend", "python", "manage.py", "migrate", "--noinput")
+
+
+def seed_database() -> None:
+    """Seed the database with demo data."""
+    log_step("Seeding database")
+    compose_exec("backend", "python", "manage.py", "seed")
+
+
+def collect_static() -> None:
+    """Collect Django static files."""
+    compose_exec(
+        "backend", "python", "manage.py", "collectstatic", "--noinput",
+        check=False,
+    )
+
+
+def mark_initialized() -> None:
+    """Write a marker file so subsequent `up` skips init."""
+    INIT_MARKER.write_text(
+        "# Dev environment initialized. Delete this file to force re-init.\n"
+    )
+
+
+def print_banner() -> None:
+    """Print the final status banner."""
+    print(f"""
+{GREEN}{BOLD}{'=' * 60}
+  Showdesk is running!
+{'=' * 60}{RESET}
+
+  {BOLD}App{RESET}          http://localhost
+  {BOLD}Mailpit{RESET}      http://localhost/mailpit/
+  {BOLD}MinIO{RESET}        http://localhost:9001
+  {BOLD}LiveKit{RESET}      ws://localhost:7880
+
+  {BOLD}Login{RESET}        admin@showdesk.local (OTP via email)
+  {BOLD}Emails{RESET}       Check Mailpit for OTP codes
+
+  {YELLOW}Logs:{RESET}        python dev.py logs
+  {YELLOW}Stop:{RESET}        python dev.py down
+  {YELLOW}Tunnel:{RESET}      python dev.py tunnel
+  {YELLOW}Reset:{RESET}       python dev.py reset
+""")
+
+
+# ---------------------------------------------------------------------------
+# Tunnel
+# ---------------------------------------------------------------------------
+
+
+def tunnel_stop() -> None:
+    """Stop any running tunnel process."""
+    if CF_PID_FILE.exists():
+        pid_str = CF_PID_FILE.read_text().strip()
+        try:
+            pid = int(pid_str)
+            os.kill(pid, signal.SIGTERM)
+            log(f"Stopped tunnel process (PID {pid}).")
+        except (ValueError, ProcessLookupError):
+            pass
+        CF_PID_FILE.unlink(missing_ok=True)
+
+
+def cmd_tunnel_login() -> None:
+    """Authenticate cloudflared with a Cloudflare account for Showdesk.
+
+    Stores the cert in .cloudflared/cert.pem (project-local), completely
+    independent of the system-wide ~/.cloudflared/cert.pem.
+    This lets you use a different Cloudflare account for Showdesk.
+    """
+    if not has_cloudflared():
+        print(f"{RED}cloudflared is not installed.{RESET}")
+        print("Install it: brew install cloudflare/cloudflare/cloudflared")
+        sys.exit(1)
+
+    CF_DIR.mkdir(exist_ok=True)
+
+    if CF_CERT.exists():
+        log(f"Existing cert found at {CF_CERT}")
+        log("Delete it first if you want to re-authenticate.")
+        print(f"\n  {DIM}rm {CF_CERT}{RESET}\n")
+        return
+
+    log_step("Cloudflare authentication")
+    print(f"""  This will open a browser to authenticate with Cloudflare.
+  The certificate will be saved to:
+
+    {BOLD}{CF_CERT}{RESET}
+
+  This is {BOLD}separate{RESET} from your system-wide ~/.cloudflared/cert.pem,
+  so it won't affect your other Cloudflare accounts.
+""")
+
+    # cloudflared login writes cert.pem to the directory specified by --origincert
+    # But the flag actually specifies the full path to the cert file, not a dir.
+    run(["cloudflared", "login", "--origincert", str(CF_CERT)])
+
+    if CF_CERT.exists():
+        log(f"Authenticated! Cert saved to {CF_CERT}")
+    else:
+        print(f"{RED}Authentication failed or was cancelled.{RESET}")
+        sys.exit(1)
+
+
+def cmd_tunnel() -> None:
+    """Start a Cloudflare tunnel to expose the local dev stack.
+
+    Two modes:
+      python dev.py tunnel           Quick tunnel (*.trycloudflare.com)
+      python dev.py tunnel --named   Named tunnel (requires tunnel-login)
+    """
+    if not has_cloudflared():
+        print(f"{RED}cloudflared is not installed.{RESET}")
+        print("Install it: brew install cloudflare/cloudflare/cloudflared")
+        sys.exit(1)
+
+    # Stop any existing tunnel
+    tunnel_stop()
+
+    named = "--named" in sys.argv
+
+    if named:
+        _tunnel_named()
+    else:
+        _tunnel_quick()
+
+
+def _tunnel_quick() -> None:
+    """Start a quick tunnel -- no auth, temporary URL."""
+    log_step("Starting quick tunnel")
+    log("Mode: quick tunnel (*.trycloudflare.com)")
+    log("No authentication required. URL is temporary.")
+    print()
+
+    # cloudflared tunnel --url runs in foreground and prints the URL to stderr.
+    # We run it as a subprocess and parse the URL.
+    proc = subprocess.Popen(
+        ["cloudflared", "tunnel", "--url", "http://localhost:80"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    # Save PID for cleanup
+    CF_PID_FILE.write_text(str(proc.pid))
+
+    # Parse the assigned URL from cloudflared stderr output
+    tunnel_url = None
+    try:
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            line = proc.stderr.readline()
+            if not line:
+                break
+            # cloudflared prints the URL line like:
+            # ... | https://xxx-yyy-zzz.trycloudflare.com
+            if "trycloudflare.com" in line or ".cloudflare" in line:
+                # Extract URL from the log line
+                for word in line.split():
+                    if word.startswith("https://"):
+                        tunnel_url = word
+                        break
+            if tunnel_url:
+                break
+    except KeyboardInterrupt:
+        proc.terminate()
+        CF_PID_FILE.unlink(missing_ok=True)
+        return
+
+    if tunnel_url:
+        print(f"""
+{GREEN}{BOLD}{'=' * 60}
+  Tunnel is running!
+{'=' * 60}{RESET}
+
+  {BOLD}Public URL{RESET}   {tunnel_url}
+  {BOLD}Local{RESET}        http://localhost
+
+  {DIM}This URL is temporary and will change on restart.
+  For a permanent subdomain, use: python dev.py tunnel --named{RESET}
+
+  Press Ctrl+C to stop the tunnel.
+""")
+    else:
+        log("Tunnel started, but could not parse URL.")
+        log("Check cloudflared output for the URL.")
+
+    # Keep running until Ctrl+C
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        log("Stopping tunnel...")
+        proc.terminate()
+        proc.wait(timeout=5)
+    finally:
+        CF_PID_FILE.unlink(missing_ok=True)
+
+
+def _tunnel_named() -> None:
+    """Start a named tunnel with a stable subdomain."""
+    if not CF_CERT.exists():
+        print(f"{RED}No Cloudflare cert found for Showdesk.{RESET}")
+        print(f"Run {BOLD}python dev.py tunnel-login{RESET} first to authenticate.")
+        print()
+        print(f"  {DIM}This is separate from ~/.cloudflared/ and won't affect")
+        print(f"  your other Cloudflare accounts.{RESET}")
+        sys.exit(1)
+
+    log_step("Starting named tunnel")
+
+    # Check if tunnel already exists
+    result = run(
+        cf_cmd("tunnel", "list", "--output", "json"),
+        capture=True,
+        check=False,
+    )
+
+    tunnel_id = None
+    if result.returncode == 0 and result.stdout.strip():
+        import json
+        try:
+            tunnels = json.loads(result.stdout)
+            for t in tunnels:
+                if t.get("name") == CF_TUNNEL_NAME:
+                    tunnel_id = t["id"]
+                    log(f"Found existing tunnel: {CF_TUNNEL_NAME} ({tunnel_id})")
+                    break
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Create tunnel if it doesn't exist
+    if not tunnel_id:
+        log(f"Creating tunnel: {CF_TUNNEL_NAME}")
+        result = run(
+            cf_cmd("tunnel", "create", CF_TUNNEL_NAME),
+            capture=True,
+        )
+        # Parse tunnel ID from output: "Created tunnel <name> with id <uuid>"
+        for word in result.stdout.split():
+            if len(word) == 36 and word.count("-") == 4:
+                tunnel_id = word
+                break
+
+        if not tunnel_id:
+            print(f"{RED}Failed to create tunnel.{RESET}")
+            print(result.stdout)
+            print(result.stderr if hasattr(result, "stderr") else "")
+            sys.exit(1)
+
+        log(f"Tunnel created: {tunnel_id}")
+
+    # Write tunnel config
+    tunnel_config = CF_DIR / "config.yml"
+    tunnel_config.write_text(
+        f"tunnel: {tunnel_id}\n"
+        f"credentials-file: {CF_DIR / (tunnel_id + '.json')}\n"
+        f"\n"
+        f"ingress:\n"
+        f"  - service: http://localhost:80\n"
+    )
+    log(f"Tunnel config written to {tunnel_config}")
+
+    # Show DNS instructions
+    print(f"""
+  {BOLD}Next steps:{RESET}
+
+  1. Add a DNS CNAME record pointing to the tunnel:
+
+     {BOLD}python dev.py tunnel-dns <subdomain.yourdomain.com>{RESET}
+
+     Or manually: CNAME {tunnel_id}.cfargotunnel.com
+
+  2. The tunnel will now start and forward traffic.
+""")
+
+    # Run the tunnel
+    proc = subprocess.Popen(
+        cf_cmd("tunnel", "--config", str(tunnel_config), "run", CF_TUNNEL_NAME),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    CF_PID_FILE.write_text(str(proc.pid))
+
+    print(f"""
+{GREEN}{BOLD}{'=' * 60}
+  Named tunnel is running!
+{'=' * 60}{RESET}
+
+  {BOLD}Tunnel{RESET}       {CF_TUNNEL_NAME} ({tunnel_id})
+
+  Press Ctrl+C to stop the tunnel.
+""")
+
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        log("Stopping tunnel...")
+        proc.terminate()
+        proc.wait(timeout=5)
+    finally:
+        CF_PID_FILE.unlink(missing_ok=True)
+
+
+def cmd_tunnel_dns() -> None:
+    """Create a DNS record pointing to the named tunnel.
+
+    Usage: python dev.py tunnel-dns <subdomain.yourdomain.com>
+    """
+    if not CF_CERT.exists():
+        print(f"{RED}No Cloudflare cert found. Run tunnel-login first.{RESET}")
+        sys.exit(1)
+
+    if len(sys.argv) < 3:
+        print(f"{RED}Usage: python dev.py tunnel-dns <hostname>{RESET}")
+        print(f"  Example: python dev.py tunnel-dns dev.showdesk.io")
+        sys.exit(1)
+
+    hostname = sys.argv[2]
+
+    log_step(f"Creating DNS record: {hostname}")
+    run(cf_cmd("tunnel", "route", "dns", CF_TUNNEL_NAME, hostname))
+    log(f"DNS record created: {hostname} -> {CF_TUNNEL_NAME}")
+
+
+def cmd_tunnel_status() -> None:
+    """Show tunnel status and info."""
+    # Check for running tunnel process
+    if CF_PID_FILE.exists():
+        pid_str = CF_PID_FILE.read_text().strip()
+        try:
+            pid = int(pid_str)
+            os.kill(pid, 0)  # Check if process exists (signal 0)
+            log(f"Tunnel process is running (PID {pid})")
+        except (ValueError, ProcessLookupError):
+            log("No tunnel process running (stale PID file)")
+            CF_PID_FILE.unlink(missing_ok=True)
+    else:
+        log("No tunnel process running")
+
+    print()
+
+    # Check cert
+    if CF_CERT.exists():
+        log(f"Cloudflare cert: {CF_CERT}")
+        log("  Account: authenticated (project-local cert)")
+    else:
+        log("Cloudflare cert: not found")
+        log(f"  Run {BOLD}python dev.py tunnel-login{RESET} to authenticate")
+
+    print()
+
+    # List tunnels if authenticated
+    if CF_CERT.exists() and has_cloudflared():
+        log("Named tunnels:")
+        run(cf_cmd("tunnel", "list"), check=False)
+
+
+def cmd_tunnel_stop() -> None:
+    """Stop the running tunnel."""
+    tunnel_stop()
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+def cmd_up() -> None:
+    """Start services, run init only if not already done."""
+    ensure_env()
+
+    if INIT_MARKER.exists():
+        log("Already initialized -- starting services only.")
+        log("(Delete .dev-initialized to force re-init)")
+        start_app_services()
+        print_banner()
+        return
+
+    cmd_default()
+
+
+def cmd_default() -> None:
+    """Full bootstrap: infra -> init -> app -> migrate -> seed."""
+    ensure_env()
+    start_infra()
+    init_minio_buckets()
+    start_app_services()
+
+    # Wait for backend to be ready (Daphne startup)
+    log("Waiting for backend to accept connections...")
+    time.sleep(5)
+
+    run_migrations()
+    collect_static()
+
+    # Only seed if DB is empty (first run)
+    result = compose_exec(
+        "backend",
+        "python", "-c",
+        "import django; django.setup(); from apps.organizations.models import Organization; print(Organization.objects.count())",
+        capture=True,
+        check=False,
+    )
+    org_count = result.stdout.strip()
+    if org_count == "0":
+        seed_database()
+    else:
+        log(f"Database already has {org_count} organization(s), skipping seed.")
+
+    mark_initialized()
+    print_banner()
+
+
+def cmd_init() -> None:
+    """Run init steps only (no service start)."""
+    ensure_env()
+    start_infra()
+    init_minio_buckets()
+
+    # Need backend for migrations
+    start_app_services()
+    time.sleep(5)
+
+    run_migrations()
+    collect_static()
+    seed_database()
+    mark_initialized()
+    log("Init complete")
+
+
+def cmd_seed() -> None:
+    """Seed the database with demo data."""
+    seed_database()
+
+
+def cmd_reset() -> None:
+    """Nuke everything and start fresh."""
+    log_step("Resetting dev environment")
+    tunnel_stop()
+    compose("down", "-v", "--remove-orphans")
+    if INIT_MARKER.exists():
+        INIT_MARKER.unlink()
+        log("Removed .dev-initialized marker.")
+    log("Volumes destroyed. Re-bootstrapping...")
+    cmd_default()
+
+
+def cmd_down() -> None:
+    """Stop all services."""
+    tunnel_stop()
+    compose("down")
+    log("All services stopped.")
+
+
+def cmd_logs() -> None:
+    """Tail logs for all services."""
+    compose("logs", "-f", "--tail=100")
+
+
+def cmd_status() -> None:
+    """Show service status."""
+    compose("ps", "--format", "table {{.Name}}\t{{.Status}}\t{{.Ports}}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+COMMANDS = {
+    "up": cmd_up,
+    "init": cmd_init,
+    "seed": cmd_seed,
+    "reset": cmd_reset,
+    "down": cmd_down,
+    "logs": cmd_logs,
+    "status": cmd_status,
+    "tunnel": cmd_tunnel,
+    "tunnel-login": cmd_tunnel_login,
+    "tunnel-dns": cmd_tunnel_dns,
+    "tunnel-status": cmd_tunnel_status,
+    "tunnel-stop": cmd_tunnel_stop,
+}
+
+
+def main() -> None:
+    # Load .env into os.environ for variable interpolation
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                os.environ.setdefault(key.strip(), value.strip())
+
+    if len(sys.argv) < 2:
+        cmd_default()
+        return
+
+    command = sys.argv[1]
+    if command in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+
+    handler = COMMANDS.get(command)
+    if handler is None:
+        print(f"{RED}Unknown command: {command}{RESET}")
+        print(f"Available: {', '.join(COMMANDS.keys())}")
+        sys.exit(1)
+
+    handler()
+
+
+if __name__ == "__main__":
+    main()

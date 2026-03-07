@@ -1,0 +1,84 @@
+/**
+ * React Query hooks for ticket operations.
+ */
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  assignTicket,
+  closeTicket,
+  createMessage,
+  fetchTicket,
+  fetchTickets,
+  resolveTicket,
+  type TicketFilters,
+} from "@/api/tickets";
+
+export function useTickets(filters: TicketFilters = {}) {
+  return useQuery({
+    queryKey: ["tickets", filters],
+    queryFn: () => fetchTickets(filters),
+  });
+}
+
+export function useTicket(id: string) {
+  return useQuery({
+    queryKey: ["ticket", id],
+    queryFn: () => fetchTicket(id),
+    enabled: !!id,
+  });
+}
+
+export function useCreateMessage(ticketId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: { body: string; message_type: string }) =>
+      createMessage(ticketId, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
+    },
+  });
+}
+
+export function useAssignTicket() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      ticketId,
+      ...data
+    }: {
+      ticketId: string;
+      agent_id?: string;
+      team_id?: string;
+    }) => assignTicket(ticketId, data),
+    onSuccess: (ticket) => {
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    },
+  });
+}
+
+export function useResolveTicket() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: resolveTicket,
+    onSuccess: (ticket) => {
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    },
+  });
+}
+
+export function useCloseTicket() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: closeTicket,
+    onSuccess: (ticket) => {
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    },
+  });
+}

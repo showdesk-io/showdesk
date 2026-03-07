@@ -1,0 +1,68 @@
+"""Signals for sending real-time notifications via WebSocket."""
+
+import logging
+
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+
+logger = logging.getLogger(__name__)
+
+
+def notify_ticket_update(ticket) -> None:  # noqa: ANN001
+    """Send a ticket update notification to the organization channel."""
+    channel_layer = get_channel_layer()
+    group_name = f"org_{ticket.organization_id}"
+
+    async_to_sync(channel_layer.group_send)(
+        group_name,
+        {
+            "type": "ticket_update",
+            "data": {
+                "event": "ticket.updated",
+                "ticket_id": str(ticket.id),
+                "reference": ticket.reference,
+                "status": ticket.status,
+                "priority": ticket.priority,
+            },
+        },
+    )
+
+
+def notify_new_ticket(ticket) -> None:  # noqa: ANN001
+    """Send a new ticket notification to the organization channel."""
+    channel_layer = get_channel_layer()
+    group_name = f"org_{ticket.organization_id}"
+
+    async_to_sync(channel_layer.group_send)(
+        group_name,
+        {
+            "type": "ticket_new",
+            "data": {
+                "event": "ticket.created",
+                "ticket_id": str(ticket.id),
+                "reference": ticket.reference,
+                "title": ticket.title,
+                "priority": ticket.priority,
+            },
+        },
+    )
+
+
+def notify_new_message(message) -> None:  # noqa: ANN001
+    """Send a new message notification to the organization channel."""
+    channel_layer = get_channel_layer()
+    group_name = f"org_{message.ticket.organization_id}"
+
+    async_to_sync(channel_layer.group_send)(
+        group_name,
+        {
+            "type": "ticket_message",
+            "data": {
+                "event": "message.created",
+                "ticket_id": str(message.ticket_id),
+                "message_id": str(message.id),
+                "reference": message.ticket.reference,
+                "message_type": message.message_type,
+            },
+        },
+    )
