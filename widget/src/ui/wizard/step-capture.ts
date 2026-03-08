@@ -18,6 +18,7 @@ export function renderCaptureStep(
   _config: ShowdeskConfig,
   onComplete: (updates: Partial<WizardState>) => void,
   onBack: () => void,
+  onRecorderChange?: (recorder: ScreenRecorder | null) => void,
 ): void {
   container.innerHTML = "";
 
@@ -170,6 +171,7 @@ export function renderCaptureStep(
       recorder.onStop = (blob: Blob) => {
         currentBlob = blob;
         removeFloatingBar();
+        onRecorderChange?.(null);
         // Show the modal content again
         wrapper.style.display = "block";
         recordingPanel.style.display = "none";
@@ -178,12 +180,17 @@ export function renderCaptureStep(
       };
 
       await recorder.start({ audio: audioEnabled, camera: cameraEnabled });
+      onRecorderChange?.(recorder);
       recordingStartTime = Date.now();
 
       // Hide modal content and show floating recording bar
       wrapper.style.display = "none";
       showFloatingBar();
     } catch (err) {
+      // Ensure floating bar is removed if recording failed to start
+      removeFloatingBar();
+      onRecorderChange?.(null);
+      wrapper.style.display = "block";
       const errorDiv = document.createElement("div");
       errorDiv.className = "sd-error";
       errorDiv.textContent = `Could not start recording: ${err instanceof Error ? err.message : "Unknown error"}`;

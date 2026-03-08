@@ -6,17 +6,22 @@
  * any environment without breaking existing layouts.
  */
 
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const DEFAULT_PRIMARY = "#6366f1";
+
 export function injectStyles(primaryColor: string): void {
   if (document.getElementById("showdesk-widget-styles")) {
     return;
   }
 
+  const safeColor = HEX_COLOR_RE.test(primaryColor) ? primaryColor : DEFAULT_PRIMARY;
+
   const style = document.createElement("style");
   style.id = "showdesk-widget-styles";
   style.textContent = `
     #showdesk-widget-container {
-      --sd-primary: ${primaryColor};
-      --sd-primary-hover: ${adjustBrightness(primaryColor, -15)};
+      --sd-primary: ${safeColor};
+      --sd-primary-hover: ${adjustBrightness(safeColor, -15)};
       --sd-text: #1f2937;
       --sd-text-light: #6b7280;
       --sd-bg: #ffffff;
@@ -467,6 +472,9 @@ export function injectStyles(primaryColor: string): void {
 }
 
 function adjustBrightness(hex: string, amount: number): string {
+  if (!HEX_COLOR_RE.test(hex)) {
+    return hex;
+  }
   const num = parseInt(hex.replace("#", ""), 16);
   const r = Math.max(0, Math.min(255, ((num >> 16) & 0xff) + amount));
   const g = Math.max(0, Math.min(255, ((num >> 8) & 0xff) + amount));

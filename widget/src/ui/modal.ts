@@ -17,6 +17,9 @@ import { renderContactStep } from "./wizard/step-contact";
 import { renderConfirmationStep } from "./wizard/step-confirmation";
 import { captureContext } from "../api/context";
 import { submitTicket, uploadVideo } from "../api/submit";
+import { clearConsoleEntries } from "../collectors/console-collector";
+import { clearNetworkEntries } from "../collectors/network-collector";
+import type { ScreenRecorder } from "../recorder/screen-recorder";
 
 export function createModal(config: ShowdeskConfig): void {
   // Remove existing modal if any
@@ -25,6 +28,9 @@ export function createModal(config: ShowdeskConfig): void {
 
   const container = document.getElementById("showdesk-widget-container");
   if (!container) return;
+
+  // Track active screen recorder so we can clean up on modal close
+  let activeRecorder: ScreenRecorder | null = null;
 
   // Initialize wizard state with pre-filled user info
   const state = createInitialState(
@@ -83,6 +89,16 @@ export function createModal(config: ShowdeskConfig): void {
   document.addEventListener("keydown", onKeyDown);
 
   function closeModal(): void {
+    // Stop any active recording and clean up streams
+    if (activeRecorder) {
+      if (activeRecorder.isRecording) {
+        activeRecorder.stop();
+      }
+      // Remove the floating recording bar if present
+      const floatingBar = document.getElementById("sd-floating-recording-bar");
+      if (floatingBar) floatingBar.remove();
+      activeRecorder = null;
+    }
     document.removeEventListener("keydown", onKeyDown);
     overlay.remove();
   }
@@ -125,7 +141,9 @@ export function createModal(config: ShowdeskConfig): void {
       } else {
         goToContact();
       }
-    }, goToQualification);
+    }, goToQualification, (recorder) => {
+      activeRecorder = recorder;
+    });
   }
 
   function goToContact(): void {
@@ -166,6 +184,8 @@ export function createModal(config: ShowdeskConfig): void {
     try {
       // Capture context at submission time for freshest error data
       const context = captureContext();
+      clearConsoleEntries();
+      clearNetworkEntries();
 
       const ticketData = {
         title: state.description.slice(0, 100),
