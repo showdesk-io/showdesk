@@ -364,6 +364,134 @@ test.describe("Wizard Confirmation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Wizard — Bug not-visible flow (no recommended badge)
+// ---------------------------------------------------------------------------
+
+test.describe("Wizard Bug Not-Visible Flow", () => {
+  test("bug not-visible does NOT show recommended badge", async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+
+    await loadWidget(page);
+    await openWidget(page);
+
+    // Select Bug -> "No, it's an internal error" (not_visible)
+    await page.getByText("Bug / Problem").click();
+    await page.getByText("No, it's an internal error").click();
+
+    // Capture step should be visible
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+    // The "Recommended" badge should NOT be shown for bug+not_visible
+    await expect(page.locator(".sd-recommended-badge")).not.toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wizard — Contact form validation
+// ---------------------------------------------------------------------------
+
+test.describe("Wizard Contact Form Validation", () => {
+  test("clicking Send with empty fields does not advance", async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+
+    await loadWidget(page);
+    await openWidget(page);
+
+    // Navigate to contact step
+    await page.getByText("Other").click();
+    await page.locator(".sd-capture-textarea").fill("Validation test");
+    await page.locator(".sd-submit-btn", { hasText: "Continue" }).click();
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+
+    // Click Send without filling in any fields
+    await page.locator(".sd-submit-btn", { hasText: "Send" }).click();
+
+    // Should still be on the contact step (not advanced to sending/confirmation)
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+    await expect(page.getByPlaceholder("Your name")).toBeVisible();
+    await expect(page.getByPlaceholder("you@example.com")).toBeVisible();
+  });
+
+  test("clicking Send with only name filled does not advance", async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+
+    await loadWidget(page);
+    await openWidget(page);
+
+    // Navigate to contact step
+    await page.getByText("Other").click();
+    await page.locator(".sd-capture-textarea").fill("Validation test");
+    await page.locator(".sd-submit-btn", { hasText: "Continue" }).click();
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+
+    // Fill name but leave email empty
+    await page.getByPlaceholder("Your name").fill("Test User");
+    await page.locator(".sd-submit-btn", { hasText: "Send" }).click();
+
+    // Should still be on the contact step
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+  });
+
+  test("clicking Send with invalid email does not advance", async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+
+    await loadWidget(page);
+    await openWidget(page);
+
+    // Navigate to contact step
+    await page.getByText("Other").click();
+    await page.locator(".sd-capture-textarea").fill("Validation test");
+    await page.locator(".sd-submit-btn", { hasText: "Continue" }).click();
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+
+    // Fill name and invalid email (no @)
+    await page.getByPlaceholder("Your name").fill("Test User");
+    await page.getByPlaceholder("you@example.com").fill("not-an-email");
+    await page.locator(".sd-submit-btn", { hasText: "Send" }).click();
+
+    // Should still be on the contact step
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wizard — Pre-filled identity (skip contact step)
+// ---------------------------------------------------------------------------
+
+test.describe("Wizard Pre-filled Identity", () => {
+  test("pre-filled identity skips contact step", async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+
+    // Load the demo page with ?user=1 to pre-fill identity
+    await page.goto("/widget-demo?user=1");
+    await page.getByPlaceholder("paste your org API token").fill(apiToken);
+    await page.getByRole("button", { name: "Load Widget" }).click();
+    await expect(page.getByText("Widget loaded!")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open support widget" })).toBeVisible();
+
+    // Open widget and navigate through wizard
+    await page.getByRole("button", { name: "Open support widget" }).click();
+    await expect(page.locator(".sd-wizard-step")).toBeVisible();
+    await expect(page.locator("h3").filter({ hasText: "How can we help?" })).toBeVisible();
+
+    // Qualification: select "Other" (simplest path)
+    await page.getByText("Other").click();
+
+    // Capture: fill description and continue
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+    await page.locator(".sd-capture-textarea").fill("Testing pre-filled identity skip contact.");
+    await page.locator(".sd-submit-btn", { hasText: "Continue" }).click();
+
+    // Should skip the contact step entirely and go straight to sending/confirmation
+    // The "Your contact details" heading should NOT appear
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).not.toBeVisible();
+
+    // Should show either "Sending your message..." or the confirmation
+    await expect(page.getByText("Message sent!")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Reference: SD-\d+/)).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Widget — Close behaviour
 // ---------------------------------------------------------------------------
 

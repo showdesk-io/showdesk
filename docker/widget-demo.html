@@ -166,14 +166,25 @@
         try { Showdesk.destroy(); } catch(e) {}
       }
 
-      try {
-        Showdesk.init({
+      // Check for ?user=1 query param to pre-fill user identity (for E2E tests)
+      var params = new URLSearchParams(window.location.search);
+      var initOptions = {
           token: token,
           apiUrl: '/api/v1',
           position: 'bottom-right',
           color: '#6366f1',
           greeting: 'How can we help you today?'
-        });
+      };
+      if (params.get('user') === '1') {
+        initOptions.user = {
+          id: 'e2e-user-123',
+          name: 'Pre-filled User',
+          email: 'prefilled@test.example'
+        };
+      }
+
+      try {
+        Showdesk.init(initOptions);
         status.textContent = 'Widget loaded! Look for the Help button in the bottom-right corner.';
         status.className = 'ok';
 
