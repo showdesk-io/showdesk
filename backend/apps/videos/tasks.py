@@ -17,15 +17,37 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
+def _download_to_temp(file_field) -> str:  # noqa: ANN001
+    """Download a file from storage (S3/MinIO) to a local temp file.
+
+    S3-compatible storage backends don't support `.path` — files must
+    be downloaded locally before FFprobe/FFmpeg can read them.
+
+    Returns the path to the temp file. Caller is responsible for cleanup.
+    """
+    suffix = Path(file_field.name).suffix or ".webm"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        for chunk in file_field.chunks():
+            tmp.write(chunk)
+        tmp.flush()
+        tmp.close()
+        return tmp.name
+    except Exception:
+        tmp.close()
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
+
+
 @shared_task(bind=True, queue="video_processing", max_retries=3)
 def process_video(self, video_id: str) -> dict:  # noqa: ANN001
     """Process an uploaded video recording.
 
     Pipeline:
     1. Mark as processing
-    2. Extract metadata (duration, resolution) via FFprobe
-    3. Generate thumbnail via FFmpeg
-    4. Compress/transcode if needed
+    2. Download original file from S3 to local temp
+    3. Extract metadata (duration, resolution) via FFprobe
+    4. Generate thumbnail via FFmpeg
     5. Mark as ready
 
     If AI features are enabled, triggers transcription as a follow-up task.
@@ -42,12 +64,16 @@ def process_video(self, video_id: str) -> dict:  # noqa: ANN001
     video.processing_started_at = timezone.now()
     video.save(update_fields=["status", "processing_started_at"])
 
+    local_path = None
     try:
+        # Download from S3 to a local temp file for FFprobe/FFmpeg
+        local_path = _download_to_temp(video.original_file)
+
         # Extract metadata with ffprobe
-        _extract_metadata(video)
+        _extract_metadata(video, local_path)
 
         # Generate thumbnail
-        _generate_thumbnail(video)
+        _generate_thumbnail(video, local_path)
 
         # Mark as ready
         video.status = VideoRecording.Status.READY
@@ -76,9 +102,17 @@ def process_video(self, video_id: str) -> dict:  # noqa: ANN001
         logger.exception("Failed to process video %s.", video_id)
         raise self.retry(exc=exc, countdown=60)
 
+    finally:
+        # Always clean up the temp file
+        if local_path:
+            Path(local_path).unlink(missing_ok=True)
 
-def _extract_metadata(video) -> None:  # noqa: ANN001
-    """Extract video metadata using ffprobe."""
+
+def _extract_metadata(video, local_path: str) -> None:  # noqa: ANN001
+    """Extract video metadata using ffprobe.
+
+    Uses a local file path because ffprobe cannot read from S3 directly.
+    """
     try:
         result = subprocess.run(
             [
@@ -87,7 +121,7 @@ def _extract_metadata(video) -> None:  # noqa: ANN001
                 "-print_format", "json",
                 "-show_format",
                 "-show_streams",
-                video.original_file.path,
+                local_path,
             ],
             capture_output=True,
             text=True,
@@ -113,8 +147,11 @@ def _extract_metadata(video) -> None:  # noqa: ANN001
         logger.warning("ffprobe failed for video %s: %s", video.id, exc)
 
 
-def _generate_thumbnail(video) -> None:  # noqa: ANN001
-    """Generate a thumbnail from the video using FFmpeg."""
+def _generate_thumbnail(video, local_path: str) -> None:  # noqa: ANN001
+    """Generate a thumbnail from the video using FFmpeg.
+
+    Uses a local file path because ffmpeg cannot read from S3 directly.
+    """
     try:
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             thumbnail_path = tmp.name
@@ -122,7 +159,7 @@ def _generate_thumbnail(video) -> None:  # noqa: ANN001
         subprocess.run(
             [
                 "ffmpeg",
-                "-i", video.original_file.path,
+                "-i", local_path,
                 "-ss", "00:00:01",
                 "-vframes", "1",
                 "-vf", f"scale={settings.VIDEO_THUMBNAIL_WIDTH}:{settings.VIDEO_THUMBNAIL_HEIGHT}",
