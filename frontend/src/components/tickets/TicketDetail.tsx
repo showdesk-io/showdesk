@@ -94,6 +94,18 @@ export function TicketDetail({
             <h1 className="text-lg font-semibold text-gray-900">
               {ticket.title}
             </h1>
+            {ticket.issue_type && ticket.issue_type !== "other" && (
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                ticket.issue_type === "bug" ? "bg-red-100 text-red-700" :
+                ticket.issue_type === "question" ? "bg-blue-100 text-blue-700" :
+                ticket.issue_type === "suggestion" ? "bg-green-100 text-green-700" :
+                "bg-gray-100 text-gray-700"
+              }`}>
+                {ticket.issue_type === "bug" ? "Bug" :
+                 ticket.issue_type === "question" ? "Question" :
+                 ticket.issue_type === "suggestion" ? "Suggestion" : ticket.issue_type}
+              </span>
+            )}
           </div>
           {ticket.description && (
             <p className="mt-2 text-sm text-gray-600">{ticket.description}</p>
@@ -405,6 +417,50 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
         </>
       )}
 
+      {/* Console Errors */}
+      {ticket.context_metadata?.console_errors &&
+        ticket.context_metadata.console_errors.length > 0 && (
+        <CollapsibleSection
+          title={`Console Errors (${ticket.context_metadata.console_errors.length})`}
+          defaultOpen={true}
+        >
+          <div className="space-y-1.5 max-h-48 overflow-y-auto">
+            {ticket.context_metadata.console_errors.map((entry, i) => (
+              <div key={i} className="rounded bg-gray-50 p-2 text-xs font-mono">
+                <span className={entry.level === "error" ? "text-red-600" : "text-amber-600"}>
+                  {entry.level === "error" ? "\u2715" : "\u26A0"} {entry.message}
+                </span>
+                {entry.source && (
+                  <div className="text-gray-400 mt-0.5 text-[10px]">{entry.source}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {/* Network Errors */}
+      {ticket.context_metadata?.network_errors &&
+        ticket.context_metadata.network_errors.length > 0 && (
+        <CollapsibleSection
+          title={`Network Errors (${ticket.context_metadata.network_errors.length})`}
+          defaultOpen={true}
+        >
+          <div className="space-y-1.5 max-h-48 overflow-y-auto">
+            {ticket.context_metadata.network_errors.map((entry, i) => (
+              <div key={i} className="rounded bg-gray-50 p-2 text-xs font-mono">
+                <span className="text-red-600">
+                  {entry.status} {entry.method} {entry.url}
+                </span>
+                <div className="text-gray-400 mt-0.5 text-[10px]">
+                  {entry.duration_ms}ms
+                </div>
+              </div>
+            ))}
+          </div>
+        </CollapsibleSection>
+      )}
+
       {/* Details */}
       <h2 className="mb-2 text-sm font-semibold text-gray-900">Details</h2>
       <div className="space-y-2 text-sm">
@@ -605,6 +661,28 @@ function TicketTagPicker({ ticket }: { ticket: Ticket }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Collapsible Section ───────────────────────────────────────────────
+
+function CollapsibleSection({ title, defaultOpen = false, children }: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mt-3">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-900"
+      >
+        <span className={`transition-transform ${open ? "rotate-90" : ""}`}>{"\u25B6"}</span>
+        {title}
+      </button>
+      {open && <div className="mt-1.5">{children}</div>}
     </div>
   );
 }

@@ -110,6 +110,21 @@ export interface TicketMessage {
   updated_at: string;
 }
 
+export interface ConsoleErrorEntry {
+  level: "error" | "warning";
+  message: string;
+  source: string;
+  timestamp: string;
+}
+
+export interface NetworkErrorEntry {
+  method: string;
+  url: string;
+  status: number;
+  duration_ms: number;
+  timestamp: string;
+}
+
 export interface Ticket {
   id: string;
   organization: string;
@@ -134,7 +149,14 @@ export interface Ticket {
   context_os: string;
   context_browser: string;
   context_screen_resolution: string;
-  context_metadata: Record<string, unknown>;
+  context_metadata: {
+    language?: string;
+    timezone?: string;
+    referrer?: string;
+    console_errors?: ConsoleErrorEntry[];
+    network_errors?: NetworkErrorEntry[];
+    [key: string]: unknown;
+  };
   sla_policy: string | null;
   first_response_at: string | null;
   resolved_at: string | null;
