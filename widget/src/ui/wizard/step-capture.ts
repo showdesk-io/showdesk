@@ -10,6 +10,7 @@ import type { WizardState } from "./wizard-state";
 import { getCaptureOptions, getTextareaPlaceholder } from "./wizard-state";
 import type { ShowdeskConfig } from "../../types";
 import { ScreenRecorder } from "../../recorder/screen-recorder";
+import type { BubblePosition } from "../../recorder/pip-compositor";
 
 export function renderCaptureStep(
   container: HTMLElement,
@@ -231,6 +232,89 @@ export function renderCaptureStep(
       const secs = elapsed % 60;
       timerSpan.textContent = `${mins}:${secs.toString().padStart(2, "0")}`;
     }, 1000);
+
+    // PiP bubble position controls (only when compositor is active)
+    const compositor = recorder.pipCompositor;
+    if (compositor) {
+      const posContainer = document.createElement("div");
+      posContainer.style.cssText = `
+        display: flex;
+        gap: 4px;
+        align-items: center;
+        margin-left: 4px;
+        border-left: 1px solid rgba(255,255,255,0.2);
+        padding-left: 8px;
+      `;
+
+      const positions: { pos: BubblePosition; label: string }[] = [
+        { pos: "top-left", label: "\u25F0" },
+        { pos: "top-right", label: "\u25F1" },
+        { pos: "bottom-left", label: "\u25F2" },
+        { pos: "bottom-right", label: "\u25F3" },
+      ];
+
+      const posButtons: HTMLButtonElement[] = [];
+
+      for (const { pos, label } of positions) {
+        const btn = document.createElement("button");
+        btn.textContent = label;
+        btn.title = `Camera ${pos}`;
+        const isActive = compositor.position === pos;
+        btn.style.cssText = `
+          width: 26px;
+          height: 26px;
+          border: 1px solid ${isActive ? "white" : "rgba(255,255,255,0.3)"};
+          border-radius: 4px;
+          background: ${isActive ? "rgba(255,255,255,0.2)" : "transparent"};
+          color: white;
+          cursor: pointer;
+          font-size: 12px;
+          line-height: 1;
+          padding: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        `;
+        btn.addEventListener("click", () => {
+          compositor.position = pos;
+          // Update active state on all position buttons
+          posButtons.forEach((b, i) => {
+            const entry = positions[i];
+            const active = entry ? entry.pos === pos : false;
+            b.style.border = `1px solid ${active ? "white" : "rgba(255,255,255,0.3)"}`;
+            b.style.background = active ? "rgba(255,255,255,0.2)" : "transparent";
+          });
+        });
+        posButtons.push(btn);
+        posContainer.appendChild(btn);
+      }
+
+      // Size toggle button
+      const sizeBtn = document.createElement("button");
+      sizeBtn.textContent = compositor.size === "large" ? "L" : "S";
+      sizeBtn.title = "Toggle bubble size";
+      sizeBtn.style.cssText = `
+        width: 26px;
+        height: 26px;
+        border: 1px solid rgba(255,255,255,0.3);
+        border-radius: 4px;
+        background: transparent;
+        color: white;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 0;
+        margin-left: 4px;
+      `;
+      sizeBtn.addEventListener("click", () => {
+        compositor.toggleSize();
+        sizeBtn.textContent = compositor.size === "large" ? "L" : "S";
+      });
+      posContainer.appendChild(sizeBtn);
+
+      bar.appendChild(posContainer);
+    }
 
     const stopBtn = document.createElement("button");
     stopBtn.textContent = "Stop";

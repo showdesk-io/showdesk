@@ -5,9 +5,17 @@
  * the user's screen, optionally with camera (picture-in-picture) and
  * microphone audio. It produces a single WebM blob ready for upload.
  *
+ * When camera is enabled and canvas.captureStream is available, a
+ * PipCompositor draws the screen + circular camera bubble on an
+ * offscreen canvas, producing a single composited video stream.
+ * If captureStream is not supported, falls back to adding the camera
+ * as a separate video track.
+ *
  * No external dependencies. No LiveKit needed for basic recording.
  * LiveKit integration is reserved for real-time streaming features.
  */
+
+import { PipCompositor } from "./pip-compositor";
 
 export interface RecorderOptions {
   audio: boolean;
@@ -18,17 +26,24 @@ export class ScreenRecorder {
   private mediaRecorder: MediaRecorder | null = null;
   private chunks: Blob[] = [];
   private streams: MediaStream[] = [];
+  private _compositor: PipCompositor | null = null;
 
   /** Callback invoked when recording stops with the final blob. */
   public onStop: ((blob: Blob) => void) | null = null;
+
+  /** The PiP compositor instance (available when recording with camera). */
+  get pipCompositor(): PipCompositor | null {
+    return this._compositor;
+  }
 
   /**
    * Start recording the screen.
    *
    * Prompts the user for screen sharing permission. If camera is
-   * enabled, requests camera access and composites it into the
-   * recording via a canvas (future enhancement) or as a separate
-   * track for now.
+   * enabled, creates a PipCompositor to composite the camera bubble
+   * onto the screen recording via an offscreen canvas. Falls back to
+   * adding the camera as a separate track if captureStream is not
+   * available.
    */
   async start(options: RecorderOptions): Promise<void> {
     this.cleanup();
@@ -45,7 +60,10 @@ export class ScreenRecorder {
 
     this.streams.push(displayStream);
 
-    const tracks: MediaStreamTrack[] = [...displayStream.getTracks()];
+    const tracks: MediaStreamTrack[] = [];
+
+    // Collect audio tracks from display stream (system audio)
+    tracks.push(...displayStream.getAudioTracks());
 
     // Request microphone if audio enabled and not already captured
     if (options.audio && !displayStream.getAudioTracks().length) {
@@ -64,9 +82,10 @@ export class ScreenRecorder {
     }
 
     // Request camera if enabled
+    let cameraStream: MediaStream | null = null;
     if (options.camera) {
       try {
-        const cameraStream = await navigator.mediaDevices.getUserMedia({
+        cameraStream = await navigator.mediaDevices.getUserMedia({
           video: {
             width: { ideal: 320 },
             height: { ideal: 240 },
@@ -74,9 +93,34 @@ export class ScreenRecorder {
           },
         });
         this.streams.push(cameraStream);
-        tracks.push(...cameraStream.getVideoTracks());
       } catch (err) {
         console.warn("[Showdesk] Camera access denied:", err);
+      }
+    }
+
+    // Determine video tracks: use PiP compositor if possible, else fallback
+    const canComposite =
+      cameraStream && typeof HTMLCanvasElement.prototype.captureStream === "function";
+
+    if (canComposite && cameraStream) {
+      // Get screen video dimensions from the display track settings
+      const screenTrack = displayStream.getVideoTracks()[0];
+      const settings = screenTrack?.getSettings();
+      const width = settings?.width || 1920;
+      const height = settings?.height || 1080;
+
+      this._compositor = new PipCompositor(displayStream, cameraStream, width, height);
+      await this._compositor.start();
+
+      const compositedStream = this._compositor.stream;
+      tracks.push(...compositedStream.getVideoTracks());
+    } else {
+      // Fallback: add screen video track directly
+      tracks.push(...displayStream.getVideoTracks());
+
+      // If camera was obtained but captureStream not supported, add as separate track
+      if (cameraStream) {
+        tracks.push(...cameraStream.getVideoTracks());
       }
     }
 
@@ -133,6 +177,10 @@ export class ScreenRecorder {
    * Clean up all media streams and resources.
    */
   private cleanup(): void {
+    if (this._compositor) {
+      this._compositor.destroy();
+      this._compositor = null;
+    }
     this.streams.forEach((stream) => {
       stream.getTracks().forEach((track) => track.stop());
     });
