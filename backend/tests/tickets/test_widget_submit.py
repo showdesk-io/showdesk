@@ -80,3 +80,46 @@ class TestWidgetSubmitNewFields:
         )
         assert response.status_code == 201
         assert response.data["external_user_id"] == ""
+
+    def test_widget_submit_with_console_and_network_errors(self):
+        """Widget can submit enriched context_metadata with console and network errors."""
+        context_metadata = {
+            "language": "fr-FR",
+            "timezone": "Europe/Paris",
+            "referrer": "https://app.acme.com/dashboard",
+            "console_errors": [
+                {
+                    "level": "error",
+                    "message": "TypeError: Cannot read property 'id' of undefined",
+                    "source": "Settings.tsx:142",
+                    "timestamp": "2026-03-08T10:32:15.123Z",
+                }
+            ],
+            "network_errors": [
+                {
+                    "method": "POST",
+                    "url": "/api/v1/settings/",
+                    "status": 500,
+                    "duration_ms": 234,
+                    "timestamp": "2026-03-08T10:32:14.456Z",
+                }
+            ],
+        }
+        response = self.client.post(
+            "/api/v1/tickets/widget_submit/",
+            data={
+                "title": "Settings crash",
+                "description": "Page broke",
+                "requester_name": "Jean",
+                "requester_email": "jean@acme.com",
+                "context_metadata": context_metadata,
+            },
+            format="json",
+            HTTP_X_WIDGET_TOKEN=self.organization.api_token,
+        )
+        assert response.status_code == 201
+        metadata = response.data["context_metadata"]
+        assert len(metadata["console_errors"]) == 1
+        assert metadata["console_errors"][0]["level"] == "error"
+        assert len(metadata["network_errors"]) == 1
+        assert metadata["network_errors"][0]["status"] == 500
