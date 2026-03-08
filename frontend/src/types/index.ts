@@ -74,6 +74,7 @@ export type TicketStatus =
 export type TicketPriority = "low" | "medium" | "high" | "urgent";
 
 export type TicketSource = "widget" | "email" | "api" | "agent";
+export type IssueType = "bug" | "question" | "suggestion" | "other";
 
 export interface Tag {
   id: string;
@@ -118,7 +119,7 @@ export interface Ticket {
   status: TicketStatus;
   priority: TicketPriority;
   source: TicketSource;
-  issue_type: string;
+  issue_type: IssueType;
   external_user_id: string;
   requester: string | null;
   requester_detail: User | null;
@@ -152,6 +153,7 @@ export interface TicketListItem {
   status: TicketStatus;
   priority: TicketPriority;
   source: TicketSource;
+  issue_type: IssueType;
   requester_detail: User | null;
   requester_name: string;
   requester_email: string;

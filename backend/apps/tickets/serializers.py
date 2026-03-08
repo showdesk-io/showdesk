@@ -207,6 +207,7 @@ class TicketListSerializer(serializers.ModelSerializer):
             "status",
             "priority",
             "source",
+            "issue_type",
             "requester_detail",
             "requester_name",
             "requester_email",
