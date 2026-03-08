@@ -30,7 +30,7 @@ import { createButton } from "./ui/button";
 import { createModal } from "./ui/modal";
 import { injectStyles } from "./ui/styles";
 import { captureContext } from "./api/context";
-import type { ShowdeskConfig } from "./types";
+import type { ShowdeskConfig, ShowdeskUserIdentity } from "./types";
 
 let isInitialized = false;
 let config: ShowdeskConfig;
@@ -66,6 +66,7 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
       scriptTag?.dataset["greeting"] ??
       "How can we help you?",
     hideButton: userConfig.hideButton ?? false,
+    user: userConfig.user,
   };
 
   if (!config.token) {
@@ -102,6 +103,17 @@ function open(): void {
 }
 
 /**
+ * Set or update user identity after initialization.
+ */
+function setUser(user: ShowdeskUserIdentity): void {
+  if (!isInitialized) {
+    console.warn("[Showdesk] Call init() before setUser()");
+    return;
+  }
+  config.user = user;
+}
+
+/**
  * Destroy the widget and clean up DOM elements.
  */
 function destroy(): void {
@@ -125,4 +137,4 @@ if (typeof document !== "undefined") {
 }
 
 // Export public API
-export { init, open, destroy };
+export { init, open, destroy, setUser };

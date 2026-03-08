@@ -171,6 +171,12 @@ export function createModal(
     }
   });
 
+  // Pre-fill contact fields from user identity
+  const nameInput = modal.querySelector("#sd-name") as HTMLInputElement;
+  const emailInput = modal.querySelector("#sd-email") as HTMLInputElement;
+  nameInput.value = config.user?.name || "";
+  emailInput.value = config.user?.email || "";
+
   // Start mic as active by default
   micBtn.classList.add("active");
 
@@ -279,6 +285,7 @@ export function createModal(
           console_errors: context.consoleErrors,
           network_errors: context.networkErrors,
         },
+        external_user_id: config.user?.id || "",
       });
 
       // Upload video if recorded

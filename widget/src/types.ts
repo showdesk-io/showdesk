@@ -5,6 +5,12 @@
 import type { ConsoleEntry } from "./collectors/console-collector";
 import type { NetworkEntry } from "./collectors/network-collector";
 
+export interface ShowdeskUserIdentity {
+  id?: string;
+  name?: string;
+  email?: string;
+}
+
 export interface ShowdeskConfig {
   /** Organization API token for authentication. */
   token: string;
@@ -20,6 +26,8 @@ export interface ShowdeskConfig {
   greeting: string;
   /** Hide the default floating button (for programmatic use). */
   hideButton: boolean;
+  /** Optional user identity for pre-filling contact fields and tracking. */
+  user?: ShowdeskUserIdentity;
 }
 
 export interface TechnicalContext {
@@ -47,6 +55,7 @@ export interface TicketSubmission {
   context_browser: string;
   context_screen_resolution: string;
   context_metadata: Record<string, unknown>;
+  external_user_id?: string;
 }
 
 export interface RecorderState {
