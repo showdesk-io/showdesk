@@ -2,6 +2,9 @@
  * Type definitions for the Showdesk widget.
  */
 
+import type { ConsoleEntry } from "./collectors/console-collector";
+import type { NetworkEntry } from "./collectors/network-collector";
+
 export interface ShowdeskConfig {
   /** Organization API token for authentication. */
   token: string;
@@ -28,6 +31,8 @@ export interface TechnicalContext {
   language: string;
   timezone: string;
   referrer: string;
+  consoleErrors: ConsoleEntry[];
+  networkErrors: NetworkEntry[];
 }
 
 export interface TicketSubmission {
@@ -41,7 +46,7 @@ export interface TicketSubmission {
   context_os: string;
   context_browser: string;
   context_screen_resolution: string;
-  context_metadata: Record<string, string>;
+  context_metadata: Record<string, unknown>;
 }
 
 export interface RecorderState {

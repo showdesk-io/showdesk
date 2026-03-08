@@ -7,6 +7,8 @@
  */
 
 import type { TechnicalContext } from "../types";
+import { getConsoleEntries } from "../collectors/console-collector";
+import { getNetworkEntries } from "../collectors/network-collector";
 
 export function captureContext(): TechnicalContext {
   const ua = navigator.userAgent;
@@ -20,6 +22,8 @@ export function captureContext(): TechnicalContext {
     language: navigator.language,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     referrer: document.referrer,
+    consoleErrors: getConsoleEntries(),
+    networkErrors: getNetworkEntries(),
   };
 }
 

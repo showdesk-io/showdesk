@@ -276,6 +276,8 @@ export function createModal(
           language: context.language,
           timezone: context.timezone,
           referrer: context.referrer,
+          console_errors: context.consoleErrors,
+          network_errors: context.networkErrors,
         },
       });
 

@@ -18,6 +18,14 @@
  *   Showdesk.open(); // Bind to your own button
  */
 
+import { installConsoleCollector } from "./collectors/console-collector";
+import { installNetworkCollector } from "./collectors/network-collector";
+
+// Install collectors immediately at script load — before init(), before any user interaction.
+// This captures errors that occurred before the user opened the widget.
+installConsoleCollector();
+installNetworkCollector();
+
 import { createButton } from "./ui/button";
 import { createModal } from "./ui/modal";
 import { injectStyles } from "./ui/styles";
