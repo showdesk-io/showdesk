@@ -264,9 +264,192 @@ export function injectStyles(primaryColor: string): void {
       margin-bottom: 12px;
     }
 
+    .sd-wizard-step {
+      padding: 4px 0;
+      animation: sd-wizardFadeIn 0.25s ease;
+    }
+
+    .sd-wizard-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--sd-text);
+      margin: 0 0 16px;
+    }
+
+    .sd-wizard-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .sd-issue-type-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .sd-issue-type-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 16px 12px;
+      border: 1px solid var(--sd-border);
+      border-radius: var(--sd-radius);
+      background: var(--sd-bg);
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--sd-text);
+      transition: all 0.15s;
+    }
+
+    .sd-issue-type-btn:hover {
+      border-color: var(--sd-primary);
+      color: var(--sd-primary);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    }
+
+    .sd-issue-type-icon {
+      font-size: 24px;
+    }
+
+    .sd-followup-btn {
+      display: block;
+      width: 100%;
+      padding: 14px 16px;
+      border: 1px solid var(--sd-border);
+      border-radius: var(--sd-radius);
+      background: var(--sd-bg);
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--sd-text);
+      text-align: left;
+      transition: all 0.15s;
+      margin-bottom: 8px;
+    }
+
+    .sd-followup-btn:hover {
+      border-color: var(--sd-primary);
+      color: var(--sd-primary);
+    }
+
+    .sd-back-btn {
+      background: none;
+      border: none;
+      color: var(--sd-text-light);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 6px 4px;
+      transition: color 0.15s;
+    }
+
+    .sd-back-btn:hover {
+      color: var(--sd-text);
+    }
+
+    .sd-step-dots {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .sd-step-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--sd-border);
+      transition: background 0.2s;
+    }
+
+    .sd-step-dot.sd-step-active {
+      background: var(--sd-primary);
+    }
+
+    .sd-recommended-badge {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--sd-primary);
+      background: color-mix(in srgb, var(--sd-primary) 10%, transparent);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .sd-recap-card {
+      border: 1px solid var(--sd-border);
+      border-radius: var(--sd-radius);
+      padding: 16px;
+      margin-bottom: 8px;
+    }
+
+    .sd-recap-row {
+      font-size: 13px;
+      color: var(--sd-text);
+      margin-bottom: 8px;
+    }
+
+    .sd-recap-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .sd-recap-description {
+      font-size: 13px;
+      color: var(--sd-text-light);
+      margin: 8px 0;
+      line-height: 1.5;
+    }
+
+    .sd-recap-context {
+      font-size: 11px;
+      color: var(--sd-text-light);
+      font-style: italic;
+    }
+
+    .sd-issue-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: capitalize;
+      color: var(--sd-primary);
+      background: color-mix(in srgb, var(--sd-primary) 10%, transparent);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .sd-recording-panel {
+      padding: 12px;
+      border: 1px solid var(--sd-border);
+      border-radius: var(--sd-radius);
+      margin-bottom: 12px;
+    }
+
+    .sd-recording-preview {
+      margin-bottom: 12px;
+    }
+
+    .sd-loading-spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--sd-border);
+      border-top-color: var(--sd-primary);
+      border-radius: 50%;
+      animation: sd-spin 0.7s linear infinite;
+      margin: 0 auto;
+    }
+
+    @keyframes sd-spin {
+      to { transform: rotate(360deg); }
+    }
+
     @keyframes sd-fadeIn {
       from { opacity: 0; }
       to { opacity: 1; }
+    }
+
+    @keyframes sd-wizardFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
     @keyframes sd-slideIn {

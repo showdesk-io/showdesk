@@ -29,7 +29,6 @@ installNetworkCollector();
 import { createButton } from "./ui/button";
 import { createModal } from "./ui/modal";
 import { injectStyles } from "./ui/styles";
-import { captureContext } from "./api/context";
 import type { ShowdeskConfig, ShowdeskUserIdentity } from "./types";
 
 let isInitialized = false;
@@ -98,8 +97,7 @@ function open(): void {
     return;
   }
 
-  const context = captureContext();
-  createModal(config, context);
+  createModal(config);
 }
 
 /**

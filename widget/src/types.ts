@@ -49,6 +49,7 @@ export interface TicketSubmission {
   requester_name: string;
   requester_email: string;
   priority: string;
+  issue_type: string;
   context_url: string;
   context_user_agent: string;
   context_os: string;
