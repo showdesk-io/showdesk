@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from apps.organizations.serializers import UserSerializer
 
-from .models import PriorityLevel, SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
+from .models import PriorityLevel, SavedView, SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
 
 
 class PriorityLevelSerializer(serializers.ModelSerializer):
@@ -126,7 +126,10 @@ class TicketMessageSerializer(serializers.ModelSerializer):
 class TicketSerializer(serializers.ModelSerializer):
     """Serializer for the Ticket model."""
 
+    from apps.videos.serializers import VideoRecordingSerializer
+
     messages = TicketMessageSerializer(many=True, read_only=True)
+    videos = VideoRecordingSerializer(many=True, read_only=True)
     tags_detail = TagSerializer(source="tags", many=True, read_only=True)
     tag_ids = serializers.PrimaryKeyRelatedField(
         many=True,
@@ -169,6 +172,7 @@ class TicketSerializer(serializers.ModelSerializer):
             "resolved_at",
             "closed_at",
             "messages",
+            "videos",
             "created_at",
             "updated_at",
         ]
@@ -240,3 +244,40 @@ class TicketCreateFromWidgetSerializer(serializers.ModelSerializer):
             "context_screen_resolution",
             "context_metadata",
         ]
+
+
+class SavedViewSerializer(serializers.ModelSerializer):
+    """Serializer for saved ticket filter views."""
+
+    created_by_detail = UserSerializer(source="created_by", read_only=True)
+
+    class Meta:
+        model = SavedView
+        fields = [
+            "id",
+            "organization",
+            "created_by",
+            "created_by_detail",
+            "name",
+            "filters",
+            "is_shared",
+            "position",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "organization", "created_by", "created_at", "updated_at"]
+
+    def validate_name(self, value):  # noqa: ANN001, ANN201
+        """Ensure the name is unique within the organization."""
+        request = self.context.get("request")
+        if not request or not request.user.organization:
+            return value
+        qs = SavedView.objects.filter(
+            organization=request.user.organization,
+            name=value,
+        )
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("A view with this name already exists.")
+        return value

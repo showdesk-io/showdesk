@@ -10,7 +10,7 @@ import factory
 from django.utils import timezone
 
 from apps.organizations.models import Organization, Team, User
-from apps.tickets.models import PriorityLevel, SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
+from apps.tickets.models import PriorityLevel, SavedView, SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
 from apps.videos.models import VideoRecording
 
 
@@ -94,6 +94,20 @@ class PriorityLevelFactory(factory.django.DjangoModelFactory):
     color = "#6B7280"
     position = factory.Sequence(lambda n: n)
     is_default = False
+
+
+class SavedViewFactory(factory.django.DjangoModelFactory):
+    """Factory for creating SavedView instances."""
+
+    class Meta:
+        model = SavedView
+
+    organization = factory.SubFactory(OrganizationFactory)
+    created_by = factory.SubFactory(UserFactory)
+    name = factory.Sequence(lambda n: f"View {n}")
+    filters = factory.LazyFunction(lambda: {"status": "open"})
+    is_shared = False
+    position = factory.Sequence(lambda n: n)
 
 
 class SLAPolicyFactory(factory.django.DjangoModelFactory):

@@ -137,6 +137,7 @@ export interface Ticket {
   resolved_at: string | null;
   closed_at: string | null;
   messages: TicketMessage[];
+  videos: VideoRecording[];
   created_at: string;
   updated_at: string;
 }
@@ -156,6 +157,32 @@ export interface TicketListItem {
   assigned_team: string | null;
   tags_detail: Tag[];
   message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Saved Views
+// ---------------------------------------------------------------------------
+
+export interface SavedViewFilters {
+  status?: string;
+  priority?: string;
+  assigned_agent?: string;
+  assigned_team?: string;
+  tags?: string;
+  search?: string;
+}
+
+export interface SavedView {
+  id: string;
+  organization: string;
+  created_by: string;
+  created_by_detail: User | null;
+  name: string;
+  filters: SavedViewFilters;
+  is_shared: boolean;
+  position: number;
   created_at: string;
   updated_at: string;
 }

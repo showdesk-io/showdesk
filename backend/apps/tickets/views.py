@@ -2,6 +2,7 @@
 
 import logging
 
+from django.db import models
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
@@ -12,9 +13,10 @@ from apps.core.throttling import WidgetSubmitThrottle
 from apps.notifications.signals import notify_new_message, notify_new_ticket, notify_ticket_update
 from apps.organizations.models import Organization
 
-from .models import PriorityLevel, Tag, Ticket, TicketAttachment, TicketMessage
+from .models import PriorityLevel, SavedView, Tag, Ticket, TicketAttachment, TicketMessage
 from .serializers import (
     PriorityLevelSerializer,
+    SavedViewSerializer,
     TagSerializer,
     TicketAttachmentSerializer,
     TicketCreateFromWidgetSerializer,
@@ -73,6 +75,74 @@ class TicketViewSet(viewsets.ModelViewSet):
         except Exception:
             logger.exception("WebSocket notification failed for %s", ticket.reference)
         send_ticket_created_email.delay(str(ticket.id))
+
+    @action(detail=False, methods=["get"])
+    def stats(self, request):  # noqa: ANN001, ANN201
+        """Return aggregated statistics for the current filtered queryset.
+
+        Accepts the same filter params as the list endpoint (status, priority,
+        assigned_agent, assigned_team, tags, search). Returns breakdowns by
+        status, priority, and agent workload.
+        """
+        qs = self.filter_queryset(self.get_queryset())
+        total = qs.count()
+
+        # Status breakdown
+        status_counts = dict(
+            qs.values_list("status")
+            .annotate(count=models.Count("id"))
+            .values_list("status", "count")
+        )
+
+        # Priority breakdown
+        priority_counts = dict(
+            qs.values_list("priority")
+            .annotate(count=models.Count("id"))
+            .values_list("priority", "count")
+        )
+
+        # Agent workload (top agents by ticket count)
+        agent_rows = (
+            qs.filter(assigned_agent__isnull=False)
+            .values(
+                "assigned_agent",
+                "assigned_agent__first_name",
+                "assigned_agent__last_name",
+                "assigned_agent__email",
+            )
+            .annotate(count=models.Count("id"))
+            .order_by("-count")[:10]
+        )
+        agent_workload = [
+            {
+                "agent_id": str(row["assigned_agent"]),
+                "name": f'{row["assigned_agent__first_name"]} {row["assigned_agent__last_name"]}'.strip()
+                or row["assigned_agent__email"],
+                "count": row["count"],
+            }
+            for row in agent_rows
+        ]
+        unassigned = qs.filter(assigned_agent__isnull=True).count()
+
+        # Average age in hours
+        from django.db.models import Avg
+        from django.db.models.functions import Now
+
+        avg_age = qs.aggregate(
+            avg_age=Avg(Now() - models.F("created_at"))
+        )["avg_age"]
+        avg_age_hours = round(avg_age.total_seconds() / 3600, 1) if avg_age else 0
+
+        return Response(
+            {
+                "total": total,
+                "by_status": status_counts,
+                "by_priority": priority_counts,
+                "agent_workload": agent_workload,
+                "unassigned": unassigned,
+                "avg_age_hours": avg_age_hours,
+            }
+        )
 
     @action(
         detail=False,
@@ -308,3 +378,48 @@ class PriorityLevelViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:  # noqa: ANN001
         """Set organization from the current user."""
         serializer.save(organization=self.request.user.organization)
+
+
+class SavedViewViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing saved ticket filter views.
+
+    Returns views owned by the current user plus shared views from the
+    same organization. Only the creator can update or delete a view.
+    """
+
+    serializer_class = SavedViewSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):  # noqa: ANN201
+        """Return personal views + shared views from the same org."""
+        user = self.request.user
+        if user.is_superuser:
+            return SavedView.objects.all()
+        if user.organization:
+            return SavedView.objects.filter(
+                organization=user.organization,
+            ).filter(
+                models.Q(created_by=user) | models.Q(is_shared=True),
+            )
+        return SavedView.objects.none()
+
+    def perform_create(self, serializer) -> None:  # noqa: ANN001
+        """Set organization and creator from the current user."""
+        serializer.save(
+            organization=self.request.user.organization,
+            created_by=self.request.user,
+        )
+
+    def perform_update(self, serializer) -> None:  # noqa: ANN001
+        """Only the creator can update a saved view."""
+        if serializer.instance.created_by != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You can only edit your own saved views.")
+        serializer.save()
+
+    def perform_destroy(self, instance) -> None:  # noqa: ANN001
+        """Only the creator can delete a saved view."""
+        if instance.created_by != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You can only delete your own saved views.")
+        instance.delete()

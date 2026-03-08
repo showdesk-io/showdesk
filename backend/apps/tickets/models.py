@@ -296,6 +296,47 @@ class TicketMessage(TimestampedModel):
         return f"Message on {self.ticket.reference} by {self.author}"
 
 
+class SavedView(TimestampedModel):
+    """A saved filter preset for the ticket list.
+
+    Saved views store a combination of filters (status, priority, agent, team,
+    tags, search) that can be quickly reapplied. Views can be personal
+    (visible only to the creator) or shared with the entire organization.
+    """
+
+    organization = models.ForeignKey(
+        "organizations.Organization",
+        on_delete=models.CASCADE,
+        related_name="saved_views",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="saved_views",
+    )
+    name = models.CharField(max_length=100)
+    filters = models.JSONField(
+        default=dict,
+        help_text="Filter values: {status, priority, assigned_agent, assigned_team, tags, search}.",
+    )
+    is_shared = models.BooleanField(
+        default=False,
+        help_text="If true, visible to all agents in the organization.",
+    )
+    position = models.PositiveIntegerField(
+        default=0,
+        help_text="Sort order for display in the chips bar.",
+    )
+
+    class Meta:
+        ordering = ["position", "created_at"]
+        unique_together = [("organization", "name")]
+
+    def __str__(self) -> str:
+        scope = "shared" if self.is_shared else "personal"
+        return f"{self.name} ({scope}, {self.organization})"
+
+
 class TicketAttachment(TimestampedModel):
     """A file attached to a ticket or message.
 

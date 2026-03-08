@@ -12,6 +12,7 @@ from apps.organizations.views import (
 )
 from apps.tickets.views import (
     PriorityLevelViewSet,
+    SavedViewViewSet,
     TagViewSet,
     TicketAttachmentViewSet,
     TicketMessageViewSet,
@@ -34,6 +35,7 @@ router.register(r"messages", TicketMessageViewSet, basename="message")
 router.register(r"attachments", TicketAttachmentViewSet, basename="attachment")
 router.register(r"tags", TagViewSet, basename="tag")
 router.register(r"priorities", PriorityLevelViewSet, basename="priority")
+router.register(r"saved-views", SavedViewViewSet, basename="saved-view")
 
 # Videos
 router.register(r"videos", VideoRecordingViewSet, basename="video")
