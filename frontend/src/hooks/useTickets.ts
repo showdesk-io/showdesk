@@ -12,6 +12,7 @@ import {
   fetchTickets,
   reopenTicket,
   resolveTicket,
+  updateTicket,
   type CreateTicketData,
   type TicketFilters,
 } from "@/api/tickets";
@@ -37,6 +38,28 @@ export function useCreateTicket() {
   return useMutation({
     mutationFn: (data: CreateTicketData) => createTicket(data),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
+    },
+  });
+}
+
+export function useUpdateTicket() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      ticketId,
+      ...data
+    }: {
+      ticketId: string;
+      priority?: string;
+      assigned_agent?: string | null;
+    }) => updateTicket(ticketId, data),
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["ticket", variables.ticketId],
+      });
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
       void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
     },

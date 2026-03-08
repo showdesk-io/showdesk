@@ -6,6 +6,65 @@ from django.db import models
 from apps.core.models import TimestampedModel
 
 
+class PriorityLevel(TimestampedModel):
+    """Custom priority level defined per organization.
+
+    Organizations can define their own priorities with custom names, colors,
+    and ordering. Default priorities (low, medium, high, urgent) are seeded
+    automatically when an organization is created.
+    """
+
+    organization = models.ForeignKey(
+        "organizations.Organization",
+        on_delete=models.CASCADE,
+        related_name="priority_levels",
+    )
+    name = models.CharField(max_length=50)
+    slug = models.SlugField(
+        max_length=50,
+        help_text="URL-friendly identifier used in ticket.priority field.",
+    )
+    color = models.CharField(
+        max_length=7,
+        default="#6B7280",
+        help_text="Priority color in hex format.",
+    )
+    position = models.PositiveIntegerField(
+        default=0,
+        help_text="Sort order (lower = less urgent).",
+    )
+    is_default = models.BooleanField(
+        default=False,
+        help_text="If true, new tickets get this priority by default.",
+    )
+
+    class Meta:
+        ordering = ["position"]
+        unique_together = [
+            ("organization", "slug"),
+            ("organization", "name"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.organization})"
+
+    @classmethod
+    def create_defaults(cls, organization) -> None:  # noqa: ANN001
+        """Create the four default priority levels for an organization."""
+        defaults = [
+            {"name": "Low", "slug": "low", "color": "#6B7280", "position": 0},
+            {"name": "Medium", "slug": "medium", "color": "#3B82F6", "position": 1, "is_default": True},
+            {"name": "High", "slug": "high", "color": "#F97316", "position": 2},
+            {"name": "Urgent", "slug": "urgent", "color": "#EF4444", "position": 3},
+        ]
+        for d in defaults:
+            cls.objects.get_or_create(
+                organization=organization,
+                slug=d["slug"],
+                defaults=d,
+            )
+
+
 class Tag(TimestampedModel):
     """Labels that can be applied to tickets for categorization.
 
@@ -121,8 +180,7 @@ class Ticket(TimestampedModel):
         db_index=True,
     )
     priority = models.CharField(
-        max_length=10,
-        choices=Priority.choices,
+        max_length=50,
         default=Priority.MEDIUM,
         db_index=True,
     )

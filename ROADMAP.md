@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-03-07
+> Last updated: 2026-03-08
 
 ---
 
@@ -98,18 +98,21 @@ Everything needed before writing real feature code. **All done.**
 - [x] Email notification: ticket assigned (notify agent)
 - [x] Email notification: ticket resolved (notify requester)
 - [x] WebSocket signals wired in all ticket views
-- [x] API tests: 60 pytest tests (tickets, widget, messages, orgs, users, invite, toggle, reopen)
+- [x] API tests: 77 pytest tests (tickets, widget, messages, orgs, users, tags, attachments, priorities)
 - [x] Model tests + factory_boy factories
-- [ ] Rate limiting on widget endpoints
-- [ ] File upload validation (size, type)
+- [x] Rate limiting on widget endpoints (10/min submit, 20/min upload)
+- [x] Celery Beat schedule for expired video cleanup (every 6 hours)
+- [x] File upload validation (size, type: 20 MB limit, blocked executables)
+- [x] Video upload validation (size, MIME type)
 - [ ] Video duration validation against org settings
-- [ ] Celery Beat schedule for expired video cleanup
 
 ### Frontend
 
 - [x] Auth guard (redirect to /login)
 - [x] Dashboard with live stats
 - [x] Ticket list page + filters (status, priority, search)
+- [x] Ticket list: compact/expanded view modes (toggle)
+- [x] Ticket list: inline quick actions (priority, assign, tags)
 - [x] Ticket creation form (agent-side, modal)
 - [x] Ticket detail + message thread (reply + internal note)
 - [x] Ticket assignment UI (agent + team dropdowns)
@@ -118,11 +121,11 @@ Everything needed before writing real feature code. **All done.**
 - [x] Settings page: Agents tab (invite, deactivate, role change)
 - [x] Settings page: Widget tab (color, position, greeting, embed snippet, token regen)
 - [x] Settings page: Organization tab (name, slug, domain)
-- [ ] Real-time ticket updates via WebSocket (backend ready, frontend not wired)
+- [x] Real-time ticket updates via WebSocket (JWT auth, auto-reconnect, cache invalidation, toast notifications)
 - [ ] Video player wired to real video URLs
 - [ ] Agent video reply (record + attach to message)
 - [ ] File attachment upload on messages
-- [ ] Tag management (create, assign, filter)
+- [x] Tag management (CRUD in Settings, assign on tickets, filter in list)
 - [ ] SLA policy editor
 - [ ] Keyboard shortcuts
 - [ ] Bulk actions on ticket list
@@ -152,10 +155,10 @@ Everything needed before writing real feature code. **All done.**
 
 ### Tests
 
-- [x] Backend: 60 pytest tests (API + models)
+- [x] Backend: 77 pytest tests (API + models)
 - [x] Frontend: 15 Vitest tests (components + stores)
 - [x] E2E: 19 Playwright tests (widget demo, auth, API health)
-- Total: **94 tests**
+- Total: **111 tests**
 
 ---
 
@@ -168,7 +171,8 @@ Everything needed before writing real feature code. **All done.**
 - [x] P0: Widget configuration (colors, position, embed snippet, token regen)
 - [ ] P1: Organization branding (logo, primary color, white-label)
 - [ ] P1: Custom domain for widget/portal
-- [ ] P1: Tags & categories management
+- [x] P1: Tags & categories management
+- [x] P1: Custom priority management (CRUD, custom colors, per-org)
 - [ ] P1: Canned responses / macros
 - [ ] P2: SLA policy editor
 - [ ] P2: Notification preferences (per-agent, webhooks)
@@ -203,7 +207,6 @@ Everything needed before writing real feature code. **All done.**
 - [ ] Reporting & analytics dashboard
 - [ ] Multi-language support (i18n)
 - [ ] SSO / SAML / OAuth
-- [ ] Rate limiting + usage quotas
 - [ ] Webhook integrations (Slack, Discord)
 
 ---
@@ -225,23 +228,23 @@ Everything needed before writing real feature code. **All done.**
 | Area | Progress | What's done | What's left |
 |------|----------|-------------|-------------|
 | Scaffolding | **100%** | All infra, Docker, CI, docs | -- |
-| Backend API | **~95%** | Models, views, tasks, seeds, email notifs, WebSocket signals | Rate limiting, file validation, Celery Beat |
-| Frontend | **~85%** | Auth, tickets CRUD, assignment, status, settings, teams | WebSocket, video player, tags, shortcuts |
+| Backend API | **~98%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities | Video duration validation |
+| Frontend | **~94%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities | Video player, shortcuts |
 | Widget | **~90%** | Full form, recording, upload, e2e tests | Screenshot, i18n, a11y |
-| Tests | **~80%** | 94 tests (pytest + Vitest + Playwright) | Video API tests, more frontend tests |
-| Admin (org) | **~40%** | Agent/team CRUD, widget config | Tags, canned responses, SLA, audit log |
+| Tests | **~85%** | 111 tests (pytest + Vitest + Playwright) | Video API tests, more frontend tests |
+| Admin (org) | **~55%** | Agent/team CRUD, widget config, tags, custom priorities | Canned responses, SLA, audit log |
 | Admin (platform) | **0%** | -- | Everything |
 | Post-MVP | **0%** | -- | Everything |
 | AI | **0%** | Models/flags ready | All implementation |
 
 ### Next priorities
 
-1. Real-time ticket updates (wire WebSocket to frontend)
-2. Tag management UI
-3. Rate limiting on widget endpoints
-4. Celery Beat for video cleanup
-5. Platform admin console (P0: org list + details)
+1. Video player wired to real video URLs
+2. File attachment upload on messages
+3. Platform admin console (P0: org list + details)
+4. Keyboard shortcuts
+5. Canned responses / macros
 
 ---
 
-*This roadmap is a living document. Last updated: 2026-03-07.*
+*This roadmap is a living document. Last updated: 2026-03-08.*

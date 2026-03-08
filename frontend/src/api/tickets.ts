@@ -14,6 +14,7 @@ export interface TicketFilters {
   status?: string;
   priority?: string;
   assigned_agent?: string;
+  tags?: string;
   search?: string;
   page?: number;
 }
@@ -50,6 +51,14 @@ export interface CreateTicketData {
 
 export async function createTicket(data: CreateTicketData): Promise<Ticket> {
   const response = await apiClient.post<Ticket>("/tickets/", data);
+  return response.data;
+}
+
+export async function updateTicket(
+  ticketId: string,
+  data: Partial<CreateTicketData>,
+): Promise<Ticket> {
+  const response = await apiClient.patch<Ticket>(`/tickets/${ticketId}/`, data);
   return response.data;
 }
 

@@ -173,6 +173,14 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
 CELERY_TASK_TRACK_STARTED = True
 
+# Celery Beat schedule
+CELERY_BEAT_SCHEDULE = {
+    "cleanup-expired-videos": {
+        "task": "apps.videos.tasks.cleanup_expired_videos",
+        "schedule": 60 * 60 * 6,  # Every 6 hours
+    },
+}
+
 # =============================================================================
 # S3-compatible Storage
 # =============================================================================

@@ -7,7 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-
+from apps.core.throttling import WidgetUploadThrottle
 from apps.organizations.models import Organization
 
 from .models import VideoRecording
@@ -42,6 +42,7 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
         methods=["post"],
         permission_classes=[AllowAny],
         serializer_class=VideoUploadSerializer,
+        throttle_classes=[WidgetUploadThrottle],
     )
     def widget_upload(self, request):  # noqa: ANN001, ANN201
         """Upload a video recording from the widget.

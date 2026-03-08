@@ -9,6 +9,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { clsx } from "clsx";
 import { useAuthStore } from "@/store/authStore";
 import { useCurrentUser } from "@/hooks/useAuth";
+import { useWebSocket } from "@/hooks/useWebSocket";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: "grid" },
@@ -42,6 +43,9 @@ export function AppLayout() {
   const navigate = useNavigate();
   const logout = useAuthStore((s) => s.logout);
   const { data: user } = useCurrentUser();
+
+  // Maintain WebSocket connection for real-time updates
+  useWebSocket();
 
   const handleLogout = () => {
     logout();

@@ -5,8 +5,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import { TicketList } from "@/components/tickets/TicketList";
+import { TicketList, type ViewMode } from "@/components/tickets/TicketList";
 import { useTickets, useCreateTicket } from "@/hooks/useTickets";
+import { useTags } from "@/hooks/useTags";
 import type { TicketPriority } from "@/types";
 
 const statusOptions: { value: string; label: string }[] = [
@@ -30,12 +31,17 @@ export function TicketListPage() {
   const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [viewMode, setViewMode] = useState<ViewMode>("compact");
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  const { data: tags } = useTags();
 
   const { data, isLoading } = useTickets({
     status: statusFilter || undefined,
     priority: priorityFilter || undefined,
+    tags: tagFilter || undefined,
     search: searchQuery || undefined,
   });
 
@@ -71,6 +77,35 @@ export function TicketListPage() {
             <span className="text-sm text-gray-500">
               {data?.count ?? 0} tickets
             </span>
+            {/* View mode toggle */}
+            <div className="flex rounded-lg border border-gray-300">
+              <button
+                onClick={() => setViewMode("compact")}
+                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  viewMode === "compact"
+                    ? "bg-gray-100 text-gray-900"
+                    : "text-gray-500 hover:text-gray-700"
+                } rounded-l-lg`}
+                title="Compact view"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setViewMode("expanded")}
+                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  viewMode === "expanded"
+                    ? "bg-gray-100 text-gray-900"
+                    : "text-gray-500 hover:text-gray-700"
+                } rounded-r-lg`}
+                title="Expanded view"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                </svg>
+              </button>
+            </div>
             <button
               onClick={() => setShowCreateModal(true)}
               className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600"
@@ -111,12 +146,26 @@ export function TicketListPage() {
               </option>
             ))}
           </select>
+          {tags && tags.length > 0 && (
+            <select
+              value={tagFilter}
+              onChange={(e) => setTagFilter(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+            >
+              <option value="">All Tags</option>
+              {tags.map((tag) => (
+                <option key={tag.id} value={tag.id}>
+                  {tag.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
 
       {/* Ticket list */}
       <div className="flex-1 overflow-auto bg-white">
-        <TicketList tickets={data?.results ?? []} isLoading={isLoading} />
+        <TicketList tickets={data?.results ?? []} isLoading={isLoading} viewMode={viewMode} />
       </div>
 
       {/* Create ticket modal */}

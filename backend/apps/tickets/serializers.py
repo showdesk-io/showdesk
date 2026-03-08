@@ -4,7 +4,26 @@ from rest_framework import serializers
 
 from apps.organizations.serializers import UserSerializer
 
-from .models import SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
+from .models import PriorityLevel, SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
+
+
+class PriorityLevelSerializer(serializers.ModelSerializer):
+    """Serializer for the PriorityLevel model."""
+
+    class Meta:
+        model = PriorityLevel
+        fields = [
+            "id",
+            "organization",
+            "name",
+            "slug",
+            "color",
+            "position",
+            "is_default",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "organization", "created_at", "updated_at"]
 
 
 class TagSerializer(serializers.ModelSerializer):
@@ -13,7 +32,7 @@ class TagSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tag
         fields = ["id", "organization", "name", "color", "created_at"]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "organization", "created_at"]
 
 
 class SLAPolicySerializer(serializers.ModelSerializer):
@@ -36,7 +55,17 @@ class SLAPolicySerializer(serializers.ModelSerializer):
 
 
 class TicketAttachmentSerializer(serializers.ModelSerializer):
-    """Serializer for ticket attachments."""
+    """Serializer for ticket attachments with file validation."""
+
+    # Max 20 MB per file
+    MAX_FILE_SIZE = 20 * 1024 * 1024
+
+    # Blocked extensions (executable, dangerous)
+    BLOCKED_EXTENSIONS = {
+        ".exe", ".bat", ".cmd", ".com", ".msi", ".scr",
+        ".pif", ".vbs", ".vbe", ".js", ".jse", ".wsf",
+        ".wsh", ".ps1", ".sh", ".csh", ".dll", ".sys",
+    }
 
     class Meta:
         model = TicketAttachment
@@ -52,6 +81,24 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def validate_file(self, value):  # noqa: ANN001, ANN201
+        """Validate file size and type."""
+        if value.size > self.MAX_FILE_SIZE:
+            max_mb = self.MAX_FILE_SIZE // (1024 * 1024)
+            raise serializers.ValidationError(
+                f"File size exceeds the {max_mb} MB limit."
+            )
+
+        import os
+
+        _, ext = os.path.splitext(value.name)
+        if ext.lower() in self.BLOCKED_EXTENSIONS:
+            raise serializers.ValidationError(
+                f"File type '{ext}' is not allowed."
+            )
+
+        return value
 
 
 class TicketMessageSerializer(serializers.ModelSerializer):
@@ -150,6 +197,7 @@ class TicketListSerializer(serializers.ModelSerializer):
             "id",
             "reference",
             "title",
+            "description",
             "status",
             "priority",
             "source",

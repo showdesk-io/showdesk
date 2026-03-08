@@ -145,6 +145,7 @@ export interface TicketListItem {
   id: string;
   reference: string;
   title: string;
+  description: string;
   status: TicketStatus;
   priority: TicketPriority;
   source: TicketSource;

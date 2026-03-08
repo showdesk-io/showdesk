@@ -8,12 +8,13 @@ from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-
+from apps.core.throttling import WidgetSubmitThrottle
 from apps.notifications.signals import notify_new_message, notify_new_ticket, notify_ticket_update
 from apps.organizations.models import Organization
 
-from .models import Tag, Ticket, TicketAttachment, TicketMessage
+from .models import PriorityLevel, Tag, Ticket, TicketAttachment, TicketMessage
 from .serializers import (
+    PriorityLevelSerializer,
     TagSerializer,
     TicketAttachmentSerializer,
     TicketCreateFromWidgetSerializer,
@@ -40,7 +41,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["status", "priority", "assigned_agent", "assigned_team", "source"]
+    filterset_fields = ["status", "priority", "assigned_agent", "assigned_team", "source", "tags"]
     search_fields = ["title", "description", "reference", "requester_email"]
     ordering_fields = ["created_at", "updated_at", "priority", "status"]
 
@@ -73,7 +74,12 @@ class TicketViewSet(viewsets.ModelViewSet):
             logger.exception("WebSocket notification failed for %s", ticket.reference)
         send_ticket_created_email.delay(str(ticket.id))
 
-    @action(detail=False, methods=["post"], permission_classes=[AllowAny])
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[AllowAny],
+        throttle_classes=[WidgetSubmitThrottle],
+    )
     def widget_submit(self, request):  # noqa: ANN001, ANN201
         """Submit a ticket from the embeddable widget.
 
@@ -190,6 +196,26 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         return Response(TicketSerializer(ticket).data)
 
+    @action(detail=True, methods=["post"])
+    def set_tags(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Set tags on a ticket (replaces existing tags)."""
+        ticket = self.get_object()
+        tag_ids = request.data.get("tag_ids", [])
+
+        # Validate that tags belong to the same org
+        tags = Tag.objects.filter(
+            id__in=tag_ids,
+            organization=ticket.organization,
+        )
+        ticket.tags.set(tags)
+
+        try:
+            notify_ticket_update(ticket)
+        except Exception:
+            logger.exception("WebSocket notification failed for %s", ticket.reference)
+
+        return Response(TicketSerializer(ticket).data)
+
 
 class TicketMessageViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ticket messages."""
@@ -258,3 +284,27 @@ class TagViewSet(viewsets.ModelViewSet):
         if user.organization:
             return Tag.objects.filter(organization=user.organization)
         return Tag.objects.none()
+
+    def perform_create(self, serializer) -> None:  # noqa: ANN001
+        """Set organization from the current user."""
+        serializer.save(organization=self.request.user.organization)
+
+
+class PriorityLevelViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing custom priority levels."""
+
+    serializer_class = PriorityLevelSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):  # noqa: ANN201
+        """Filter priority levels by user's organization."""
+        user = self.request.user
+        if user.is_superuser:
+            return PriorityLevel.objects.all()
+        if user.organization:
+            return PriorityLevel.objects.filter(organization=user.organization)
+        return PriorityLevel.objects.none()
+
+    def perform_create(self, serializer) -> None:  # noqa: ANN001
+        """Set organization from the current user."""
+        serializer.save(organization=self.request.user.organization)

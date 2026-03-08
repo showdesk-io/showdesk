@@ -14,6 +14,7 @@ import {
   useCloseTicket,
   useReopenTicket,
 } from "@/hooks/useTickets";
+import { useTags, useSetTicketTags } from "@/hooks/useTags";
 
 interface TicketDetailProps {
   ticket: Ticket;
@@ -317,27 +318,110 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
             {new Date(ticket.created_at).toLocaleDateString()}
           </span>
         </div>
-        {ticket.tags_detail.length > 0 && (
-          <div className="pt-2">
-            <span className="text-gray-500">Tags</span>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {ticket.tags_detail.map((tag) => (
-                <span
-                  key={tag.id}
-                  className="rounded-full px-2 py-0.5 text-xs font-medium"
-                  style={{
-                    backgroundColor: tag.color + "20",
-                    color: tag.color,
-                  }}
-                >
-                  {tag.name}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Tags */}
+      <TicketTagPicker ticket={ticket} />
     </aside>
+  );
+}
+
+// ── Tag Picker ────────────────────────────────────────────────────────
+
+function TicketTagPicker({ ticket }: { ticket: Ticket }) {
+  const { data: allTags } = useTags();
+  const setTagsMutation = useSetTicketTags(ticket.id);
+  const [isOpen, setIsOpen] = useState(false);
+
+  const currentTagIds = ticket.tags_detail.map((t) => t.id);
+
+  const toggleTag = (tagId: string) => {
+    const newTagIds = currentTagIds.includes(tagId)
+      ? currentTagIds.filter((id) => id !== tagId)
+      : [...currentTagIds, tagId];
+
+    setTagsMutation.mutate(newTagIds, {
+      onError: () => toast.error("Failed to update tags."),
+    });
+  };
+
+  return (
+    <div className="mt-4">
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-900">Tags</h2>
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="text-xs text-primary-600 hover:text-primary-700"
+        >
+          {isOpen ? "Done" : "Edit"}
+        </button>
+      </div>
+
+      {/* Current tags */}
+      <div className="flex flex-wrap gap-1">
+        {ticket.tags_detail.length === 0 && !isOpen && (
+          <span className="text-xs text-gray-400">No tags</span>
+        )}
+        {ticket.tags_detail.map((tag) => (
+          <span
+            key={tag.id}
+            className="rounded-full px-2 py-0.5 text-xs font-medium"
+            style={{
+              backgroundColor: tag.color + "20",
+              color: tag.color,
+            }}
+          >
+            {tag.name}
+          </span>
+        ))}
+      </div>
+
+      {/* Tag picker dropdown */}
+      {isOpen && allTags && (
+        <div className="mt-2 max-h-48 overflow-auto rounded-lg border border-gray-200 bg-white">
+          {allTags.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-gray-400">
+              No tags. Create them in Settings.
+            </p>
+          ) : (
+            allTags.map((tag) => {
+              const isSelected = currentTagIds.includes(tag.id);
+              return (
+                <button
+                  key={tag.id}
+                  onClick={() => toggleTag(tag.id)}
+                  className={clsx(
+                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-gray-50",
+                    isSelected && "bg-gray-50",
+                  )}
+                >
+                  <span
+                    className="h-3 w-3 rounded-full"
+                    style={{ backgroundColor: tag.color }}
+                  />
+                  <span className="flex-1 text-gray-700">{tag.name}</span>
+                  {isSelected && (
+                    <svg
+                      className="h-4 w-4 text-primary-500"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M5 13l4 4L19 7"
+                      />
+                    </svg>
+                  )}
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

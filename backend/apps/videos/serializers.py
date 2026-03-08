@@ -62,6 +62,16 @@ class VideoRecordingSerializer(serializers.ModelSerializer):
 class VideoUploadSerializer(serializers.ModelSerializer):
     """Serializer for uploading a video from the widget."""
 
+    # Max 500 MB per video (configurable via settings)
+    MAX_FILE_SIZE = 500 * 1024 * 1024
+
+    ALLOWED_MIME_TYPES = {
+        "video/webm",
+        "video/mp4",
+        "video/ogg",
+        "video/quicktime",
+    }
+
     class Meta:
         model = VideoRecording
         fields = [
@@ -72,3 +82,24 @@ class VideoUploadSerializer(serializers.ModelSerializer):
             "has_camera",
             "mime_type",
         ]
+
+    def validate_original_file(self, value):  # noqa: ANN001, ANN201
+        """Validate video file size and type."""
+        from django.conf import settings as django_settings
+
+        max_size = getattr(django_settings, "VIDEO_MAX_FILE_SIZE_MB", 500) * 1024 * 1024
+        if value.size > max_size:
+            max_mb = max_size // (1024 * 1024)
+            raise serializers.ValidationError(
+                f"Video file exceeds the {max_mb} MB limit."
+            )
+
+        # Check content type from the request
+        content_type = getattr(value, "content_type", "")
+        if content_type and content_type not in self.ALLOWED_MIME_TYPES:
+            raise serializers.ValidationError(
+                f"Video type '{content_type}' is not supported. "
+                f"Allowed: {', '.join(sorted(self.ALLOWED_MIME_TYPES))}"
+            )
+
+        return value

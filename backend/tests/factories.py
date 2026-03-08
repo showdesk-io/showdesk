@@ -10,7 +10,7 @@ import factory
 from django.utils import timezone
 
 from apps.organizations.models import Organization, Team, User
-from apps.tickets.models import SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
+from apps.tickets.models import PriorityLevel, SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
 from apps.videos.models import VideoRecording
 
 
@@ -80,6 +80,20 @@ class TagFactory(factory.django.DjangoModelFactory):
     organization = factory.SubFactory(OrganizationFactory)
     name = factory.Sequence(lambda n: f"tag-{n}")
     color = "#EF4444"
+
+
+class PriorityLevelFactory(factory.django.DjangoModelFactory):
+    """Factory for creating PriorityLevel instances."""
+
+    class Meta:
+        model = PriorityLevel
+
+    organization = factory.SubFactory(OrganizationFactory)
+    name = factory.Sequence(lambda n: f"Priority {n}")
+    slug = factory.Sequence(lambda n: f"priority-{n}")
+    color = "#6B7280"
+    position = factory.Sequence(lambda n: n)
+    is_default = False
 
 
 class SLAPolicyFactory(factory.django.DjangoModelFactory):
