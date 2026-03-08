@@ -185,6 +185,7 @@ CELERY_BEAT_SCHEDULE = {
 # S3-compatible Storage
 # =============================================================================
 S3_ENDPOINT_URL = config("S3_ENDPOINT_URL", default="http://localhost:9000")
+S3_PUBLIC_URL = config("S3_PUBLIC_URL", default="")
 S3_ACCESS_KEY_ID = config("S3_ACCESS_KEY_ID", default="showdesk")
 S3_SECRET_ACCESS_KEY = config("S3_SECRET_ACCESS_KEY", default="showdesk-secret")
 S3_BUCKET_NAME = config("S3_BUCKET_NAME", default="showdesk-media")
@@ -192,7 +193,7 @@ S3_REGION = config("S3_REGION", default="us-east-1")
 
 STORAGES = {
     "default": {
-        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        "BACKEND": "apps.core.storage.PublicURLS3Storage",
         "OPTIONS": {
             "endpoint_url": S3_ENDPOINT_URL,
             "access_key": S3_ACCESS_KEY_ID,
