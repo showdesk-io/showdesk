@@ -153,6 +153,12 @@ class Ticket(TimestampedModel):
         HIGH = "high", "High"
         URGENT = "urgent", "Urgent"
 
+    class IssueType(models.TextChoices):
+        BUG = "bug", "Bug"
+        QUESTION = "question", "Question"
+        SUGGESTION = "suggestion", "Suggestion"
+        OTHER = "other", "Other"
+
     class Source(models.TextChoices):
         WIDGET = "widget", "Widget"
         EMAIL = "email", "Email"
@@ -188,6 +194,20 @@ class Ticket(TimestampedModel):
         max_length=10,
         choices=Source.choices,
         default=Source.WIDGET,
+    )
+
+    issue_type = models.CharField(
+        max_length=20,
+        choices=IssueType.choices,
+        default=IssueType.OTHER,
+        blank=True,
+    )
+    external_user_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="User ID from the host application, passed via widget init.",
     )
 
     # People

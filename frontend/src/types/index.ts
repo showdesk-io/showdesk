@@ -118,6 +118,8 @@ export interface Ticket {
   status: TicketStatus;
   priority: TicketPriority;
   source: TicketSource;
+  issue_type: string;
+  external_user_id: string;
   requester: string | null;
   requester_detail: User | null;
   requester_name: string;
