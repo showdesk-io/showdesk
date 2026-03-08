@@ -1,20 +1,23 @@
 /**
- * Ticket detail view with message thread, assignment, and status actions.
+ * Ticket detail view with message thread, video player, file attachments,
+ * assignment, and status actions.
  */
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { clsx } from "clsx";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import type { Ticket, TicketMessage as TicketMessageType, User, Team } from "@/types";
+import type { Ticket, TicketAttachment, TicketMessage as TicketMessageType, User, Team } from "@/types";
 import { fetchAgents, fetchTeams } from "@/api/users";
+import { uploadAttachment } from "@/api/attachments";
 import {
   useAssignTicket,
   useResolveTicket,
   useCloseTicket,
   useReopenTicket,
 } from "@/hooks/useTickets";
-import { useTags, useSetTicketTags } from "@/hooks/useTags";
+import { useTags, useCreateTag, useSetTicketTags } from "@/hooks/useTags";
+import { VideoPlayer } from "@/components/videos/VideoPlayer";
 
 interface TicketDetailProps {
   ticket: Ticket;
@@ -29,15 +32,53 @@ export function TicketDetail({
 }: TicketDetailProps) {
   const [messageBody, setMessageBody] = useState("");
   const [isInternalNote, setIsInternalNote] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!messageBody.trim()) return;
-    onSendMessage(
-      messageBody,
-      isInternalNote ? "internal_note" : "reply",
-    );
-    setMessageBody("");
+    if (!messageBody.trim() && attachedFiles.length === 0) return;
+
+    // Send message first
+    if (messageBody.trim()) {
+      onSendMessage(
+        messageBody,
+        isInternalNote ? "internal_note" : "reply",
+      );
+      setMessageBody("");
+    }
+
+    // Upload attached files
+    if (attachedFiles.length > 0) {
+      setIsUploading(true);
+      try {
+        for (const file of attachedFiles) {
+          await uploadAttachment({ ticket: ticket.id, file });
+        }
+        toast.success(
+          `${attachedFiles.length} file${attachedFiles.length > 1 ? "s" : ""} uploaded.`,
+        );
+        setAttachedFiles([]);
+        void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
+      } catch {
+        toast.error("Failed to upload files.");
+      } finally {
+        setIsUploading(false);
+      }
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    setAttachedFiles((prev) => [...prev, ...files]);
+    // Reset input so same file can be selected again
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeFile = (index: number) => {
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   return (
@@ -58,6 +99,23 @@ export function TicketDetail({
             <p className="mt-2 text-sm text-gray-600">{ticket.description}</p>
           )}
         </div>
+
+        {/* Video recordings */}
+        {ticket.videos && ticket.videos.length > 0 && (
+          <div className="border-b border-gray-200 px-6 py-4">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-900">
+              <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              Recordings ({ticket.videos.length})
+            </h2>
+            <div className="space-y-3">
+              {ticket.videos.map((video) => (
+                <VideoPlayer key={video.id} video={video} />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Messages */}
         <div className="flex-1 space-y-4 overflow-auto p-6">
@@ -110,13 +168,63 @@ export function TicketDetail({
             className="w-full resize-none rounded-lg border border-gray-300 px-4 py-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             rows={3}
           />
-          <div className="mt-2 flex justify-end">
+
+          {/* Attached files preview */}
+          {attachedFiles.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {attachedFiles.map((file, i) => (
+                <div
+                  key={`${file.name}-${i}`}
+                  className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700"
+                >
+                  <svg className="h-3.5 w-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                  </svg>
+                  <span className="max-w-[150px] truncate">{file.name}</span>
+                  <span className="text-gray-400">
+                    ({formatFileSize(file.size)})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(i)}
+                    className="ml-1 text-gray-400 hover:text-red-500"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-2 flex items-center justify-between">
+            <div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+                title="Attach files"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                </svg>
+                Attach
+              </button>
+            </div>
             <button
               type="submit"
-              disabled={isSending || !messageBody.trim()}
+              disabled={isSending || isUploading || (!messageBody.trim() && attachedFiles.length === 0)}
               className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:opacity-50"
             >
-              {isSending ? "Sending..." : "Send"}
+              {isUploading ? "Uploading..." : isSending ? "Sending..." : "Send"}
             </button>
           </div>
         </form>
@@ -328,12 +436,31 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
 
 // ── Tag Picker ────────────────────────────────────────────────────────
 
+/** Random color from a curated palette for quick tag creation. */
+const TAG_QUICK_COLORS = [
+  "#EF4444", "#F97316", "#EAB308", "#22C55E", "#3B82F6",
+  "#8B5CF6", "#EC4899", "#14B8A6", "#6366F1", "#6B7280",
+];
+
+function randomTagColor(): string {
+  return TAG_QUICK_COLORS[Math.floor(Math.random() * TAG_QUICK_COLORS.length)];
+}
+
 function TicketTagPicker({ ticket }: { ticket: Ticket }) {
   const { data: allTags } = useTags();
   const setTagsMutation = useSetTicketTags(ticket.id);
+  const createTagMutation = useCreateTag();
   const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState("");
 
   const currentTagIds = ticket.tags_detail.map((t) => t.id);
+
+  const filteredTags = (allTags ?? []).filter((t) =>
+    t.name.toLowerCase().includes(search.toLowerCase()),
+  );
+  const exactMatch = (allTags ?? []).some(
+    (t) => t.name.toLowerCase() === search.trim().toLowerCase(),
+  );
 
   const toggleTag = (tagId: string) => {
     const newTagIds = currentTagIds.includes(tagId)
@@ -345,12 +472,33 @@ function TicketTagPicker({ ticket }: { ticket: Ticket }) {
     });
   };
 
+  const handleCreateTag = () => {
+    const name = search.trim();
+    if (!name) return;
+    createTagMutation.mutate(
+      { name, color: randomTagColor() },
+      {
+        onSuccess: (newTag) => {
+          // Immediately assign the new tag to the ticket
+          setTagsMutation.mutate([...currentTagIds, newTag.id], {
+            onError: () => toast.error("Failed to assign tag."),
+          });
+          setSearch("");
+        },
+        onError: () => toast.error("Failed to create tag."),
+      },
+    );
+  };
+
   return (
     <div className="mt-4">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-900">Tags</h2>
         <button
-          onClick={() => setIsOpen(!isOpen)}
+          onClick={() => {
+            setIsOpen(!isOpen);
+            if (isOpen) setSearch("");
+          }}
           className="text-xs text-primary-600 hover:text-primary-700"
         >
           {isOpen ? "Done" : "Edit"}
@@ -377,14 +525,28 @@ function TicketTagPicker({ ticket }: { ticket: Ticket }) {
       </div>
 
       {/* Tag picker dropdown */}
-      {isOpen && allTags && (
-        <div className="mt-2 max-h-48 overflow-auto rounded-lg border border-gray-200 bg-white">
-          {allTags.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-gray-400">
-              No tags. Create them in Settings.
-            </p>
-          ) : (
-            allTags.map((tag) => {
+      {isOpen && (
+        <div className="mt-2 rounded-lg border border-gray-200 bg-white">
+          {/* Search / filter input */}
+          <div className="border-b border-gray-100 p-2">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && search.trim() && !exactMatch) {
+                  e.preventDefault();
+                  handleCreateTag();
+                }
+              }}
+              placeholder="Search or create tag..."
+              className="w-full rounded border border-gray-200 px-2 py-1 text-xs focus:border-primary-400 focus:outline-none"
+              autoFocus
+            />
+          </div>
+
+          <div className="max-h-48 overflow-auto">
+            {filteredTags.map((tag) => {
               const isSelected = currentTagIds.includes(tag.id);
               return (
                 <button
@@ -417,8 +579,30 @@ function TicketTagPicker({ ticket }: { ticket: Ticket }) {
                   )}
                 </button>
               );
-            })
-          )}
+            })}
+
+            {/* Create new tag option */}
+            {search.trim() && !exactMatch && (
+              <button
+                onClick={handleCreateTag}
+                disabled={createTagMutation.isPending}
+                className="flex w-full items-center gap-2 border-t border-gray-100 px-3 py-2 text-sm text-primary-600 hover:bg-primary-50"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                <span>
+                  {createTagMutation.isPending ? "Creating..." : `Create "${search.trim()}"`}
+                </span>
+              </button>
+            )}
+
+            {filteredTags.length === 0 && !search.trim() && (
+              <p className="px-3 py-2 text-xs text-gray-400">
+                No tags yet. Type a name to create one.
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -466,6 +650,36 @@ function PriorityLabel({ priority }: { priority: string }) {
   );
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentList({ attachments }: { attachments: TicketAttachment[] }) {
+  if (attachments.length === 0) return null;
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {attachments.map((att) => (
+        <a
+          key={att.id}
+          href={att.file}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-700 hover:bg-gray-100"
+        >
+          <svg className="h-3.5 w-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+          </svg>
+          <span className="max-w-[150px] truncate">{att.filename}</span>
+          <span className="text-gray-400">({formatFileSize(att.file_size)})</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function MessageBubble({ message }: { message: TicketMessageType }) {
   const isInternal = message.message_type === "internal_note";
 
@@ -497,6 +711,7 @@ function MessageBubble({ message }: { message: TicketMessageType }) {
       <p className="whitespace-pre-wrap text-sm text-gray-700">
         {message.body}
       </p>
+      <AttachmentList attachments={message.attachments} />
     </div>
   );
 }

@@ -14,6 +14,7 @@ export interface TicketFilters {
   status?: string;
   priority?: string;
   assigned_agent?: string;
+  assigned_team?: string;
   tags?: string;
   search?: string;
   page?: number;
@@ -101,6 +102,32 @@ export async function closeTicket(ticketId: string): Promise<Ticket> {
 export async function reopenTicket(ticketId: string): Promise<Ticket> {
   const response = await apiClient.post<Ticket>(
     `/tickets/${ticketId}/reopen/`,
+  );
+  return response.data;
+}
+
+// ── Filtered Stats ───────────────────────────────────────────────────
+
+export interface FilteredTicketStats {
+  total: number;
+  by_status: Record<string, number>;
+  by_priority: Record<string, number>;
+  agent_workload: { agent_id: string; name: string; count: number }[];
+  unassigned: number;
+  avg_age_hours: number;
+}
+
+export async function fetchFilteredStats(
+  filters: TicketFilters = {},
+): Promise<FilteredTicketStats> {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") {
+      params.append(key, String(value));
+    }
+  });
+  const response = await apiClient.get<FilteredTicketStats>(
+    `/tickets/stats/?${params.toString()}`,
   );
   return response.data;
 }

@@ -13,7 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import type { TicketListItem, TicketStatus, Tag } from "@/types";
 import { useUpdateTicket, useAssignTicket } from "@/hooks/useTickets";
-import { useTags, useSetTicketTags } from "@/hooks/useTags";
+import { useTags, useCreateTag, useSetTicketTags } from "@/hooks/useTags";
 import { usePriorities } from "@/hooks/usePriorities";
 import { fetchAgents } from "@/api/users";
 
@@ -223,14 +223,33 @@ function AssignMenu({ ticket }: { ticket: TicketListItem }) {
   );
 }
 
+/** Random color from a curated palette for quick tag creation. */
+const TAG_QUICK_COLORS = [
+  "#EF4444", "#F97316", "#EAB308", "#22C55E", "#3B82F6",
+  "#8B5CF6", "#EC4899", "#14B8A6", "#6366F1", "#6B7280",
+];
+
+function randomTagColor(): string {
+  return TAG_QUICK_COLORS[Math.floor(Math.random() * TAG_QUICK_COLORS.length)];
+}
+
 // ── Tags Menu ─────────────────────────────────────────────────────────
 
 function TagsMenu({ ticket }: { ticket: TicketListItem }) {
   const { open, setOpen, ref } = useDropdown();
   const { data: allTags } = useTags();
   const setTicketTags = useSetTicketTags();
+  const createTag = useCreateTag();
+  const [search, setSearch] = useState("");
 
   const currentTagIds = new Set(ticket.tags_detail.map((t) => t.id));
+
+  const filteredTags = (allTags ?? []).filter((t) =>
+    t.name.toLowerCase().includes(search.toLowerCase()),
+  );
+  const exactMatch = (allTags ?? []).some(
+    (t) => t.name.toLowerCase() === search.trim().toLowerCase(),
+  );
 
   const handleToggleTag = (tag: Tag) => {
     const newIds = new Set(currentTagIds);
@@ -243,6 +262,27 @@ function TagsMenu({ ticket }: { ticket: TicketListItem }) {
       { ticketId: ticket.id, tagIds: Array.from(newIds) },
       {
         onError: () => toast.error("Failed to update tags"),
+      },
+    );
+  };
+
+  const handleCreateTag = () => {
+    const name = search.trim();
+    if (!name) return;
+    createTag.mutate(
+      { name, color: randomTagColor() },
+      {
+        onSuccess: (newTag) => {
+          // Immediately assign the new tag to the ticket
+          const newIds = new Set(currentTagIds);
+          newIds.add(newTag.id);
+          setTicketTags.mutate(
+            { ticketId: ticket.id, tagIds: Array.from(newIds) },
+            { onError: () => toast.error("Failed to assign tag") },
+          );
+          setSearch("");
+        },
+        onError: () => toast.error("Failed to create tag"),
       },
     );
   };
@@ -266,9 +306,29 @@ function TagsMenu({ ticket }: { ticket: TicketListItem }) {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-48 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
-          {allTags && allTags.length > 0 ? (
-            allTags.map((tag) => (
+        <div className="absolute right-0 top-full z-30 mt-1 w-52 rounded-lg border border-gray-200 bg-white shadow-lg">
+          {/* Search / filter input */}
+          <div className="border-b border-gray-100 p-2">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && search.trim() && !exactMatch) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleCreateTag();
+                }
+              }}
+              onClick={(e) => e.stopPropagation()}
+              placeholder="Search or create tag..."
+              className="w-full rounded border border-gray-200 px-2 py-1 text-xs focus:border-primary-400 focus:outline-none"
+              autoFocus
+            />
+          </div>
+
+          <div className="max-h-48 overflow-auto py-1">
+            {filteredTags.map((tag) => (
               <button
                 key={tag.id}
                 onClick={(e) => {
@@ -289,10 +349,32 @@ function TagsMenu({ ticket }: { ticket: TicketListItem }) {
                   </svg>
                 )}
               </button>
-            ))
-          ) : (
-            <div className="px-3 py-2 text-xs text-gray-400">No tags defined</div>
-          )}
+            ))}
+
+            {/* Create new tag option */}
+            {search.trim() && !exactMatch && (
+              <button
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleCreateTag();
+                }}
+                disabled={createTag.isPending}
+                className="flex w-full items-center gap-2 border-t border-gray-100 px-3 py-2 text-xs text-primary-600 hover:bg-primary-50"
+              >
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                <span>
+                  {createTag.isPending ? "Creating..." : `Create "${search.trim()}"`}
+                </span>
+              </button>
+            )}
+
+            {filteredTags.length === 0 && !search.trim() && (
+              <div className="px-3 py-2 text-xs text-gray-400">No tags defined</div>
+            )}
+          </div>
         </div>
       )}
     </div>
