@@ -1,10 +1,11 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, Page } from "@playwright/test";
 
 /**
  * E2E tests for the Showdesk widget demo page.
  *
- * These tests exercise the full flow: loading the widget demo,
- * initializing the widget with an API token, and submitting a ticket.
+ * These tests exercise the full wizard flow: loading the widget demo,
+ * initializing the widget with an API token, and navigating through the
+ * multi-step wizard (qualification -> capture -> contact -> confirmation).
  *
  * Prerequisites:
  *   - Full dev stack running (docker compose up)
@@ -15,18 +16,40 @@ import { test, expect } from "@playwright/test";
 let apiToken: string;
 
 test.beforeAll(async ({ request }) => {
-  // Use the Django API to get the org token via a seeded admin user
-  // We'll use the widget_submit endpoint to validate the token works
-  // For now, fetch directly from the seed output or env
   apiToken = process.env.SHOWDESK_API_TOKEN || "";
 
   if (!apiToken) {
     // Try to get token from the API by checking the demo page
     const response = await request.get("/widget-demo");
     expect(response.status()).toBe(200);
-    // If no token env var, we'll type it manually in tests or skip
   }
 });
+
+/**
+ * Helper: loads the widget demo page and initialises the widget with the API token.
+ * Returns after the widget button is visible.
+ */
+async function loadWidget(page: Page): Promise<void> {
+  await page.goto("/widget-demo");
+  await page.getByPlaceholder("paste your org API token").fill(apiToken);
+  await page.getByRole("button", { name: "Load Widget" }).click();
+  await expect(page.getByText("Widget loaded!")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open support widget" })).toBeVisible();
+}
+
+/**
+ * Helper: opens the widget modal and waits for the qualification step.
+ */
+async function openWidget(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Open support widget" }).click();
+  // The wizard opens on the qualification step with the title "How can we help?"
+  await expect(page.locator(".sd-wizard-step")).toBeVisible();
+  await expect(page.locator("h3").filter({ hasText: "How can we help?" })).toBeVisible();
+}
+
+// ---------------------------------------------------------------------------
+// Demo page basics (no token needed)
+// ---------------------------------------------------------------------------
 
 test.describe("Widget Demo Page", () => {
   test("loads the widget demo page", async ({ page }) => {
@@ -57,6 +80,10 @@ test.describe("Widget Demo Page", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Widget loading
+// ---------------------------------------------------------------------------
+
 test.describe("Widget Loading", () => {
   test("widget.js is served correctly", async ({ request }) => {
     const response = await request.get("/widget.js");
@@ -67,69 +94,288 @@ test.describe("Widget Loading", () => {
 
   test("loads widget with valid token", async ({ page }) => {
     test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+    await loadWidget(page);
+  });
+});
 
-    await page.goto("/widget-demo");
-    await page.getByPlaceholder("paste your org API token").fill(apiToken);
-    await page.getByRole("button", { name: "Load Widget" }).click();
+// ---------------------------------------------------------------------------
+// Wizard — Qualification step
+// ---------------------------------------------------------------------------
 
-    await expect(page.getByText("Widget loaded!")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open support widget" })).toBeVisible();
+test.describe("Wizard Qualification Step", () => {
+  test.beforeEach(async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+    await loadWidget(page);
+    await openWidget(page);
   });
 
-  test("opens the support form", async ({ page }) => {
-    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+  test("shows qualification step with issue type buttons", async ({ page }) => {
+    // Step dots should be visible
+    await expect(page.locator(".sd-step-dots")).toBeVisible();
 
-    await page.goto("/widget-demo");
-    await page.getByPlaceholder("paste your org API token").fill(apiToken);
-    await page.getByRole("button", { name: "Load Widget" }).click();
-    await expect(page.getByText("Widget loaded!")).toBeVisible();
+    // Four issue type buttons should be visible
+    const issueButtons = page.locator(".sd-issue-type-btn");
+    await expect(issueButtons).toHaveCount(4);
 
-    await page.getByRole("button", { name: "Open support widget" }).click();
-
-    await expect(page.getByText("How can we help you today?")).toBeVisible();
-    await expect(page.getByLabel("Your name")).toBeVisible();
-    await expect(page.getByLabel("Email")).toBeVisible();
-    await expect(page.getByLabel("Subject")).toBeVisible();
-    await expect(page.getByLabel("Details")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Record Screen" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Camera" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Submit Ticket" })).toBeVisible();
+    // Verify labels
+    await expect(page.getByText("Bug / Problem")).toBeVisible();
+    await expect(page.getByText("I can't find / understand")).toBeVisible();
+    await expect(page.getByText("Suggestion")).toBeVisible();
+    await expect(page.getByText("Other")).toBeVisible();
   });
 
-  test("submits a ticket successfully", async ({ page }) => {
+  test("selecting 'Bug' shows follow-up question", async ({ page }) => {
+    await page.getByText("Bug / Problem").click();
+
+    // Bug follow-up: "Is the problem visible on screen?"
+    await expect(page.locator("h3").filter({ hasText: "Is the problem visible on screen?" })).toBeVisible();
+    await expect(page.getByText("Yes, I can see it")).toBeVisible();
+    await expect(page.getByText("No, it's an internal error")).toBeVisible();
+  });
+
+  test("selecting 'Question' skips follow-up and goes to capture", async ({ page }) => {
+    await page.getByText("I can't find / understand").click();
+
+    // Should go directly to capture step
+    await expect(page.locator("h3").filter({ hasText: "Describe your issue" })).toBeVisible();
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+  });
+
+  test("selecting 'Suggestion' skips follow-up and goes to capture", async ({ page }) => {
+    await page.getByText("Suggestion").click();
+
+    await expect(page.locator("h3").filter({ hasText: "Describe your issue" })).toBeVisible();
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+  });
+
+  test("selecting 'Other' skips follow-up and goes to capture", async ({ page }) => {
+    await page.getByText("Other").click();
+
+    await expect(page.locator("h3").filter({ hasText: "Describe your issue" })).toBeVisible();
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+  });
+
+  test("bug follow-up 'Yes' advances to capture step", async ({ page }) => {
+    await page.getByText("Bug / Problem").click();
+    await page.getByText("Yes, I can see it").click();
+
+    await expect(page.locator("h3").filter({ hasText: "Describe your issue" })).toBeVisible();
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+  });
+
+  test("bug follow-up 'No' advances to capture step", async ({ page }) => {
+    await page.getByText("Bug / Problem").click();
+    await page.getByText("No, it's an internal error").click();
+
+    await expect(page.locator("h3").filter({ hasText: "Describe your issue" })).toBeVisible();
+  });
+
+  test("bug follow-up has Back button returning to issue types", async ({ page }) => {
+    await page.getByText("Bug / Problem").click();
+    await expect(page.getByText("Is the problem visible on screen?")).toBeVisible();
+
+    await page.getByText("◀ Back").click();
+
+    // Back to qualification
+    await expect(page.locator("h3").filter({ hasText: "How can we help?" })).toBeVisible();
+    await expect(page.locator(".sd-issue-type-btn")).toHaveCount(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wizard — Capture step
+// ---------------------------------------------------------------------------
+
+test.describe("Wizard Capture Step", () => {
+  test.beforeEach(async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+    await loadWidget(page);
+    await openWidget(page);
+    // Navigate to capture step via "Question" (simplest path, no follow-up)
+    await page.getByText("I can't find / understand").click();
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+  });
+
+  test("shows textarea with issue-type-specific placeholder", async ({ page }) => {
+    // "Question" placeholder: "What are you trying to do?"
+    await expect(page.locator(".sd-capture-textarea")).toHaveAttribute(
+      "placeholder",
+      "What are you trying to do?",
+    );
+  });
+
+  test("Continue button is disabled when textarea is empty", async ({ page }) => {
+    const continueBtn = page.locator(".sd-submit-btn", { hasText: "Continue" });
+    await expect(continueBtn).toBeDisabled();
+  });
+
+  test("Continue button enables when text is entered", async ({ page }) => {
+    await page.locator(".sd-capture-textarea").fill("I need help with something");
+    const continueBtn = page.locator(".sd-submit-btn", { hasText: "Continue" });
+    await expect(continueBtn).toBeEnabled();
+  });
+
+  test("Back button returns to qualification step", async ({ page }) => {
+    await page.getByText("◀ Back").click();
+    await expect(page.locator("h3").filter({ hasText: "How can we help?" })).toBeVisible();
+  });
+
+  test("clicking Continue advances to contact step", async ({ page }) => {
+    await page.locator(".sd-capture-textarea").fill("I need help with something");
+    await page.locator(".sd-submit-btn", { hasText: "Continue" }).click();
+
+    // Should show contact form (anonymous flow — no pre-filled identity)
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wizard — Contact step
+// ---------------------------------------------------------------------------
+
+test.describe("Wizard Contact Step", () => {
+  test.beforeEach(async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+    await loadWidget(page);
+    await openWidget(page);
+    // Navigate: Question -> fill description -> Continue
+    await page.getByText("I can't find / understand").click();
+    await page.locator(".sd-capture-textarea").fill("Test description for contact step");
+    await page.locator(".sd-submit-btn", { hasText: "Continue" }).click();
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+  });
+
+  test("shows name and email fields", async ({ page }) => {
+    await expect(page.getByPlaceholder("Your name")).toBeVisible();
+    await expect(page.getByPlaceholder("you@example.com")).toBeVisible();
+  });
+
+  test("Send button is present", async ({ page }) => {
+    await expect(page.locator(".sd-submit-btn", { hasText: "Send" })).toBeVisible();
+  });
+
+  test("Back button returns to capture step", async ({ page }) => {
+    await page.getByText("◀ Back").click();
+    await expect(page.locator("h3").filter({ hasText: "Describe your issue" })).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wizard — Full submission flow
+// ---------------------------------------------------------------------------
+
+test.describe("Wizard Full Submission", () => {
+  test("submits a ticket through the full wizard (question flow)", async ({ page }) => {
     test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
 
-    await page.goto("/widget-demo");
-    await page.getByPlaceholder("paste your org API token").fill(apiToken);
-    await page.getByRole("button", { name: "Load Widget" }).click();
-    await expect(page.getByText("Widget loaded!")).toBeVisible();
+    await loadWidget(page);
+    await openWidget(page);
 
-    await page.getByRole("button", { name: "Open support widget" }).click();
-    await expect(page.getByText("How can we help you today?")).toBeVisible();
+    // Step 1: Qualification — select "Question"
+    await page.getByText("I can't find / understand").click();
 
-    await page.getByLabel("Your name").fill("E2E Test User");
-    await page.getByLabel("Email").fill("e2e@test.example");
-    await page.getByLabel("Subject").fill("E2E test ticket");
-    await page.getByLabel("Details").fill("This ticket was created by Playwright e2e tests.");
+    // Step 2: Capture — fill description
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+    await page.locator(".sd-capture-textarea").fill("This ticket was created by Playwright E2E tests.");
+    await page.locator(".sd-submit-btn", { hasText: "Continue" }).click();
 
-    await page.getByRole("button", { name: "Submit Ticket" }).click();
+    // Step 3: Contact — fill name and email
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+    await page.getByPlaceholder("Your name").fill("E2E Test User");
+    await page.getByPlaceholder("you@example.com").fill("e2e@test.example");
+    await page.locator(".sd-submit-btn", { hasText: "Send" }).click();
 
-    await expect(page.getByText("Ticket submitted!")).toBeVisible({ timeout: 10_000 });
+    // Step 4: Confirmation — should show success
+    await expect(page.getByText("Message sent!")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Reference: SD-\d+/)).toBeVisible();
   });
 
-  test("closes the widget form", async ({ page }) => {
+  test("submits a ticket through the bug flow (visible)", async ({ page }) => {
     test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
 
-    await page.goto("/widget-demo");
-    await page.getByPlaceholder("paste your org API token").fill(apiToken);
-    await page.getByRole("button", { name: "Load Widget" }).click();
-    await expect(page.getByText("Widget loaded!")).toBeVisible();
+    await loadWidget(page);
+    await openWidget(page);
 
-    await page.getByRole("button", { name: "Open support widget" }).click();
-    await expect(page.getByText("How can we help you today?")).toBeVisible();
+    // Step 1: Qualification — select "Bug" then "Yes, I can see it"
+    await page.getByText("Bug / Problem").click();
+    await page.getByText("Yes, I can see it").click();
 
+    // Step 2: Capture — fill description, video button should have "Recommended" badge
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+    await expect(page.locator(".sd-recommended-badge")).toBeVisible();
+    await page.locator(".sd-capture-textarea").fill("Bug report: button is not clickable.");
+    await page.locator(".sd-submit-btn", { hasText: "Continue" }).click();
+
+    // Step 3: Contact — fill name and email
+    await expect(page.locator("h3").filter({ hasText: "Your contact details" })).toBeVisible();
+    await page.getByPlaceholder("Your name").fill("E2E Bug Reporter");
+    await page.getByPlaceholder("you@example.com").fill("bug@test.example");
+    await page.locator(".sd-submit-btn", { hasText: "Send" }).click();
+
+    // Step 4: Confirmation
+    await expect(page.getByText("Message sent!")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Reference: SD-\d+/)).toBeVisible();
+  });
+
+  test("question flow does not show video option", async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+
+    await loadWidget(page);
+    await openWidget(page);
+
+    // Select "Question"
+    await page.getByText("I can't find / understand").click();
+
+    // Capture step should NOT show the Video recorder button
+    await expect(page.locator(".sd-capture-textarea")).toBeVisible();
+    await expect(page.locator(".sd-recorder-btn", { hasText: "Video" })).not.toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wizard — Confirmation step
+// ---------------------------------------------------------------------------
+
+test.describe("Wizard Confirmation", () => {
+  test("confirmation screen shows checkmark, reference, and close button", async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+
+    await loadWidget(page);
+    await openWidget(page);
+
+    // Fast-path through wizard
+    await page.getByText("Other").click();
+    await page.locator(".sd-capture-textarea").fill("Confirmation test ticket");
+    await page.locator(".sd-submit-btn", { hasText: "Continue" }).click();
+    await page.getByPlaceholder("Your name").fill("Confirm User");
+    await page.getByPlaceholder("you@example.com").fill("confirm@test.example");
+    await page.locator(".sd-submit-btn", { hasText: "Send" }).click();
+
+    // Verify confirmation elements
+    await expect(page.getByText("Message sent!")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Reference: SD-\d+/)).toBeVisible();
+    await expect(page.locator(".sd-confirmation-checkmark")).toBeVisible();
+    await expect(page.getByText("We'll get back to you as soon as possible.")).toBeVisible();
+
+    // Close button should dismiss the modal
+    await page.locator(".sd-submit-btn", { hasText: "Close" }).click();
+    await expect(page.locator(".sd-wizard-step")).not.toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Widget — Close behaviour
+// ---------------------------------------------------------------------------
+
+test.describe("Widget Close", () => {
+  test("closes the widget modal with close button", async ({ page }) => {
+    test.skip(!apiToken, "SHOWDESK_API_TOKEN env var not set");
+
+    await loadWidget(page);
+    await openWidget(page);
+
+    // Close via the X button (aria-label="Close")
     await page.getByRole("button", { name: "Close" }).click();
-    await expect(page.getByText("How can we help you today?")).not.toBeVisible();
+    await expect(page.locator(".sd-wizard-step")).not.toBeVisible();
   });
 });
