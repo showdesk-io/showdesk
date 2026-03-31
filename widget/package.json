@@ -1,13 +1,41 @@
 {
-  "name": "showdesk-widget",
+  "name": "@showdesk/widget",
   "version": "0.1.0",
-  "private": true,
+  "description": "Showdesk embeddable support widget — video-first bug reports",
   "type": "module",
+  "main": "dist/widget.js",
+  "module": "dist/widget.esm.js",
+  "types": "dist/types/widget.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/widget.esm.js",
+      "require": "./dist/widget.js",
+      "types": "./dist/types/widget.d.ts"
+    },
+    "./widget.js": "./dist/widget.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "rollup -c -w",
-    "build": "rollup -c --environment BUILD:production",
+    "build": "rollup -c --environment BUILD:production && tsc --emitDeclarationOnly --declaration --declarationDir dist/types",
     "lint": "eslint src/"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/showdesk-io/showdesk.git",
+    "directory": "widget"
+  },
+  "keywords": [
+    "showdesk",
+    "widget",
+    "support",
+    "screen-recording",
+    "bug-report"
+  ],
+  "license": "AGPL-3.0",
+  "homepage": "https://showdesk.io",
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.3.0",
     "@rollup/plugin-terser": "^0.4.0",

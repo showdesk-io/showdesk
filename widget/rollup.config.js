@@ -4,15 +4,8 @@ import terser from "@rollup/plugin-terser";
 
 const isProduction = process.env.BUILD === "production";
 
-export default {
-  input: "src/widget.ts",
-  output: {
-    file: "dist/widget.js",
-    format: "iife",
-    name: "Showdesk",
-    sourcemap: !isProduction,
-  },
-  plugins: [
+function createPlugins() {
+  return [
     resolve(),
     typescript({
       tsconfig: "./tsconfig.json",
@@ -24,5 +17,29 @@ export default {
         comments: false,
       },
     }),
-  ].filter(Boolean),
-};
+  ].filter(Boolean);
+}
+
+export default [
+  // IIFE build — for <script> tag / CDN usage
+  {
+    input: "src/widget.ts",
+    output: {
+      file: "dist/widget.js",
+      format: "iife",
+      name: "Showdesk",
+      sourcemap: !isProduction,
+    },
+    plugins: createPlugins(),
+  },
+  // ESM build — for npm / bundler usage
+  {
+    input: "src/widget.ts",
+    output: {
+      file: "dist/widget.esm.js",
+      format: "esm",
+      sourcemap: !isProduction,
+    },
+    plugins: createPlugins(),
+  },
+];

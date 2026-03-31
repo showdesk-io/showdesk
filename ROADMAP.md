@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-03-08
+> Last updated: 2026-03-31
 
 ---
 
@@ -156,10 +156,11 @@ Everything needed before writing real feature code. **All done.**
 
 - [x] CI pipeline (GitHub Actions: lint, test, build)
 - [x] Health check endpoint
-- [ ] Docker image build + push in CI
+- [~] Docker image build + push in CI (workflow created, pending first run)
 - [ ] Automated migrations on deploy
 - [ ] Logging and monitoring (structured JSON)
 - [ ] Backup strategy docs
+- [ ] Publish widget to npmjs.com (`@showdesk/widget`) + CDN via unpkg/jsdelivr
 
 ### Tests
 
@@ -178,19 +179,19 @@ Transforming the widget from a simple form into a guided, context-rich support e
 
 Adaptive wizard with branching logic based on issue type.
 
-- [ ] Qualification step: issue type selector (bug, incomprehension, suggestion, other)
-- [ ] Adaptive follow-up question per type (e.g. "Is it visible on screen?" for bugs)
-- [ ] Context-aware capture tools (only show relevant options per issue type)
-- [ ] Contact step (name, email -- pre-filled from host app identity)
-- [ ] Suggestion type: text + optional video
+- [x] Qualification step: issue type selector (bug, question, suggestion, other)
+- [x] Adaptive follow-up question per type (e.g. "Is it visible on screen?" for bugs)
+- [x] Context-aware capture tools (only show relevant options per issue type)
+- [x] Contact step (name, email -- pre-filled from host app identity)
+- [x] Suggestion type: text + optional video
 
 ### Widget: Camera Picture-in-Picture (Priority 1)
 
 Loom-style webcam bubble composited on screen recording via Canvas API.
 
-- [ ] Canvas compositing: draw screen + camera bubble in requestAnimationFrame loop
-- [ ] Draggable/resizable camera bubble (circle, corner position)
-- [ ] Single output stream from canvas → MediaRecorder → one WebM file
+- [x] Canvas compositing: draw screen + camera bubble in requestAnimationFrame loop
+- [~] Draggable/resizable camera bubble (circle, corner presets, 2 sizes -- no free-form drag)
+- [x] Single output stream from canvas → MediaRecorder → one WebM file
 - [ ] Camera-only recording mode (no screen share)
 - [ ] Camera preview before recording starts
 
@@ -198,20 +199,20 @@ Loom-style webcam bubble composited on screen recording via Canvas API.
 
 Silent capture of debug data from script load (before widget opens).
 
-- [ ] Console error/warning capture from script load (not from widget open)
-- [ ] Network error capture (4xx/5xx) with URL, status, timing from script load
-- [ ] Browser metadata enrichment (URL, browser, OS, resolution -- already partial)
-- [ ] Attach context as structured JSON to ticket (new backend field or extended technical_context)
-- [ ] Agent-side display: collapsible "Technical Context" panel with console errors, network errors
+- [x] Console error/warning capture from script load (not from widget open)
+- [x] Network error capture (4xx/5xx) with URL, status, timing from script load
+- [x] Browser metadata enrichment (URL, browser, OS, resolution)
+- [x] Attach context as structured JSON to ticket (context_metadata JSONField)
+- [x] Agent-side display: collapsible "Technical Context" panel with console errors, network errors
 
 ### Widget: User Identity from Host App (Priority 1)
 
 Allow host applications to pass authenticated user info at widget init.
 
-- [ ] `Showdesk.init({ user: { id, name, email } })` programmatic API
+- [x] `Showdesk.init({ user: { id, name, email } })` programmatic API
 - [ ] `data-user-*` attributes on script tag (alternative)
-- [ ] Pre-fill contact fields from identity (skip contact step if complete)
-- [ ] Backend: link tickets to known external user ID for tracking
+- [x] Pre-fill contact fields from identity (skip contact step if complete)
+- [x] Backend: link tickets to known external user ID for tracking (`external_user_id` field)
 - [ ] Backend: endpoint to fetch previous tickets by external user ID
 
 ### Widget: Ticket History in Widget (Priority 2)
@@ -321,24 +322,24 @@ Lightweight replay of user interactions leading up to the bug report.
 | Area | Progress | What's done | What's left |
 |------|----------|-------------|-------------|
 | Scaffolding | **100%** | All infra, Docker, CI, docs | -- |
-| Backend API | **~98%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix | Video duration validation |
-| Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation | Shortcuts, bulk actions |
-| Widget | **~90%** | Full form, recording, upload, e2e tests | UX overhaul (Phase 2) |
-| Tests | **~85%** | 122 tests (pytest + Vitest + Playwright) | Video API tests, more frontend tests |
-| Widget UX (Phase 2) | **0%** | Design validated (wizard + PiP + context + identity) | All implementation |
-| Admin (org) | **~55%** | Agent/team CRUD, widget config, tags, custom priorities | Canned responses, SLA, audit log |
+| Backend API | **~98%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type | Video duration validation, endpoint fetch tickets by external_user_id |
+| Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation, technical context panel (console/network errors), issue type badge | Shortcuts, bulk actions, agent video reply, SLA editor |
+| Widget | **~95%** | Full form, recording, upload, e2e tests, guided wizard, camera PiP (canvas compositing), console/network collectors, user identity API, adaptive steps | Screenshot capture, retry on failure, i18n, accessibility |
+| Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright, including wizard flow + identity + context tests) | Video API tests, more frontend tests |
+| Widget UX (Phase 2) | **~55%** | P1: wizard flow (100%), auto context (100%), user identity (~60%), camera PiP (~60%) | P1 remaining: camera-only mode, camera preview, data-user-* attrs, fetch tickets endpoint. P2-P3: ticket history, screenshot+annotation, multi-attach, session replay, video markers |
+| Admin (org) | **~55%** | Agent/team CRUD, widget config, tags, custom priorities | Branding, canned responses, SLA, audit log |
 | Admin (platform) | **0%** | -- | Everything |
 | Post-MVP | **0%** | -- | Everything |
 | AI | **0%** | Models/flags ready | All implementation |
 
 ### Next priorities
 
-1. **Widget UX overhaul** (Phase 2 Priority 1: guided wizard + camera PiP + auto context + user identity)
-2. Platform admin console (P0: org list + details)
-3. Canned responses / macros
-4. Keyboard shortcuts
-5. Bulk actions on ticket list
+1. **Phase 2 P1 finitions** : camera-only mode, camera preview, `data-user-*` attrs, endpoint fetch tickets by external_user_id
+2. **Phase 2 P2** : ticket history in widget, screenshot + annotation
+3. Platform admin console (P0: org list + details)
+4. Canned responses / macros
+5. Keyboard shortcuts + bulk actions
 
 ---
 
-*This roadmap is a living document. Last updated: 2026-03-08.*
+*This roadmap is a living document. Last updated: 2026-03-31.*
