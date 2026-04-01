@@ -86,7 +86,9 @@ export async function fetchOrganization(): Promise<Organization> {
   const response = await apiClient.get<PaginatedResponse<Organization>>(
     "/organizations/",
   );
-  return response.data.results[0];
+  const org = response.data.results[0];
+  if (!org) throw new Error("No organization found");
+  return org;
 }
 
 export async function updateOrganization(

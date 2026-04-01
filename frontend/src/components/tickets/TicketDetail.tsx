@@ -499,7 +499,7 @@ const TAG_QUICK_COLORS = [
 ];
 
 function randomTagColor(): string {
-  return TAG_QUICK_COLORS[Math.floor(Math.random() * TAG_QUICK_COLORS.length)];
+  return TAG_QUICK_COLORS[Math.floor(Math.random() * TAG_QUICK_COLORS.length)] ?? "#6B7280";
 }
 
 function TicketTagPicker({ ticket }: { ticket: Ticket }) {

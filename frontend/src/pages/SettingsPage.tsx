@@ -320,13 +320,13 @@ function TagsTab({ isAdmin }: { isAdmin: boolean }) {
   const [showForm, setShowForm] = useState(false);
   const [editingTag, setEditingTag] = useState<Tag | null>(null);
   const [name, setName] = useState("");
-  const [color, setColor] = useState(TAG_COLORS[0]);
+  const [color, setColor] = useState(TAG_COLORS[0] ?? "#6B7280");
 
   const resetForm = () => {
     setShowForm(false);
     setEditingTag(null);
     setName("");
-    setColor(TAG_COLORS[0]);
+    setColor(TAG_COLORS[0] ?? "#6B7280");
   };
 
   const handleEdit = (tag: Tag) => {
@@ -527,7 +527,7 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
   const [editingPriority, setEditingPriority] = useState<PriorityLevel | null>(null);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [color, setColor] = useState(PRIORITY_COLORS[0]);
+  const [color, setColor] = useState(PRIORITY_COLORS[0] ?? "#6B7280");
   const [position, setPosition] = useState(0);
   const [isDefault, setIsDefault] = useState(false);
 
@@ -536,7 +536,7 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
     setEditingPriority(null);
     setName("");
     setSlug("");
-    setColor(PRIORITY_COLORS[0]);
+    setColor(PRIORITY_COLORS[0] ?? "#6B7280");
     setPosition(priorities?.length ?? 0);
     setIsDefault(false);
   };

@@ -8,7 +8,6 @@ import {
   deletePriority,
   fetchPriorities,
   updatePriority,
-  type PriorityLevel,
 } from "@/api/priorities";
 
 export function usePriorities() {
