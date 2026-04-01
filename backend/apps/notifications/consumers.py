@@ -1,6 +1,5 @@
 """WebSocket consumers for real-time notifications."""
 
-import json
 import logging
 
 from channels.db import database_sync_to_async

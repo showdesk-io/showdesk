@@ -16,7 +16,6 @@ class TicketsConfig(AppConfig):
 
         from apps.organizations.models import Organization
 
-        from .models import PriorityLevel
 
         post_save.connect(
             _seed_priorities_on_org_create,

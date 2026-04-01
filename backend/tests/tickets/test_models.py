@@ -84,6 +84,6 @@ class TestTicketMessage:
     def test_message_belongs_to_ticket(self) -> None:
         """Test the ticket-message relationship."""
         ticket = TicketFactory()
-        msg1 = TicketMessageFactory(ticket=ticket)
-        msg2 = TicketMessageFactory(ticket=ticket)
+        TicketMessageFactory(ticket=ticket)
+        TicketMessageFactory(ticket=ticket)
         assert ticket.messages.count() == 2

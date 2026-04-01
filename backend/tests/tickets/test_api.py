@@ -1,6 +1,5 @@
 """API tests for ticket endpoints."""
 
-import io
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -14,7 +13,6 @@ from tests.factories import (
     TagFactory,
     TicketFactory,
     UserFactory,
-    EndUserFactory,
 )
 
 

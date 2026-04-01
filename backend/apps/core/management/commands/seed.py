@@ -9,10 +9,9 @@ Usage:
     python manage.py seed --flush  # Clear existing data first
 """
 
-import uuid
 from datetime import timedelta
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from apps.organizations.models import Organization, Team, User

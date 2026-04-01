@@ -4,7 +4,7 @@ import pytest
 from rest_framework import status
 
 from apps.organizations.models import User
-from tests.factories import OrganizationFactory, UserFactory
+from tests.factories import UserFactory
 
 
 @pytest.mark.django_db

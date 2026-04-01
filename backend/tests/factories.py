@@ -4,7 +4,6 @@ Uses factory_boy to create model instances with sensible defaults.
 All factories are self-contained and can be used independently.
 """
 
-import uuid
 
 import factory
 from django.utils import timezone
