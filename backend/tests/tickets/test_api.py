@@ -344,8 +344,9 @@ class TestAttachmentValidation:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "limit" in str(response.data).lower()
 
-    def test_accept_valid_file(self, authenticated_client, organization) -> None:
+    def test_accept_valid_file(self, authenticated_client, organization, mocker) -> None:
         """Valid files are accepted."""
+        mocker.patch("django.core.files.storage.default_storage.save", return_value="attachments/report.pdf")
         ticket = TicketFactory(organization=organization)
         pdf_file = SimpleUploadedFile("report.pdf", b"%PDF-1.4 test content", content_type="application/pdf")
         response = authenticated_client.post(
