@@ -52,5 +52,11 @@ class TagAdmin(admin.ModelAdmin):
 class SLAPolicyAdmin(admin.ModelAdmin):
     """Admin for SLA policies."""
 
-    list_display = ["name", "priority", "first_response_minutes", "resolution_minutes", "is_active"]
+    list_display = [
+        "name",
+        "priority",
+        "first_response_minutes",
+        "resolution_minutes",
+        "is_active",
+    ]
     list_filter = ["priority", "is_active"]

@@ -6,34 +6,71 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('organizations', '0002_otpcode'),
-        ('tickets', '0001_initial'),
+        ("organizations", "0002_otpcode"),
+        ("tickets", "0001_initial"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='ticket',
-            name='priority',
-            field=models.CharField(db_index=True, default='medium', max_length=50),
+            model_name="ticket",
+            name="priority",
+            field=models.CharField(db_index=True, default="medium", max_length=50),
         ),
         migrations.CreateModel(
-            name='PriorityLevel',
+            name="PriorityLevel",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('name', models.CharField(max_length=50)),
-                ('slug', models.SlugField(help_text='URL-friendly identifier used in ticket.priority field.')),
-                ('color', models.CharField(default='#6B7280', help_text='Priority color in hex format.', max_length=7)),
-                ('position', models.PositiveIntegerField(default=0, help_text='Sort order (lower = less urgent).')),
-                ('is_default', models.BooleanField(default=False, help_text='If true, new tickets get this priority by default.')),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='priority_levels', to='organizations.organization')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("name", models.CharField(max_length=50)),
+                (
+                    "slug",
+                    models.SlugField(
+                        help_text="URL-friendly identifier used in ticket.priority field."
+                    ),
+                ),
+                (
+                    "color",
+                    models.CharField(
+                        default="#6B7280",
+                        help_text="Priority color in hex format.",
+                        max_length=7,
+                    ),
+                ),
+                (
+                    "position",
+                    models.PositiveIntegerField(
+                        default=0, help_text="Sort order (lower = less urgent)."
+                    ),
+                ),
+                (
+                    "is_default",
+                    models.BooleanField(
+                        default=False,
+                        help_text="If true, new tickets get this priority by default.",
+                    ),
+                ),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="priority_levels",
+                        to="organizations.organization",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['position'],
-                'unique_together': {('organization', 'name'), ('organization', 'slug')},
+                "ordering": ["position"],
+                "unique_together": {("organization", "name"), ("organization", "slug")},
             },
         ),
     ]

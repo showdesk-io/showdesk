@@ -8,78 +8,264 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('auth', '0012_alter_user_first_name_max_length'),
+        ("auth", "0012_alter_user_first_name_max_length"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='Organization',
+            name="Organization",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('name', models.CharField(max_length=255)),
-                ('slug', models.SlugField(max_length=255, unique=True)),
-                ('domain', models.CharField(blank=True, help_text='Primary domain for this organization.', max_length=255)),
-                ('logo', models.ImageField(blank=True, upload_to='organizations/logos/')),
-                ('api_token', models.UUIDField(db_index=True, default=uuid.uuid4, help_text='Token used by the widget to authenticate requests.', unique=True)),
-                ('is_active', models.BooleanField(default=True)),
-                ('widget_color', models.CharField(default='#6366F1', help_text='Primary color for the widget (hex).', max_length=7)),
-                ('widget_position', models.CharField(choices=[('bottom-right', 'Bottom Right'), ('bottom-left', 'Bottom Left')], default='bottom-right', max_length=20)),
-                ('widget_greeting', models.CharField(default='How can we help you?', max_length=255)),
-                ('video_expiration_days', models.PositiveIntegerField(default=90, help_text='Number of days before recorded videos are automatically deleted.')),
-                ('video_max_duration_seconds', models.PositiveIntegerField(default=600, help_text='Maximum recording duration in seconds.')),
-                ('ticket_counter', models.PositiveIntegerField(default=0, help_text='Auto-incremented counter for generating ticket references.')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("name", models.CharField(max_length=255)),
+                ("slug", models.SlugField(max_length=255, unique=True)),
+                (
+                    "domain",
+                    models.CharField(
+                        blank=True,
+                        help_text="Primary domain for this organization.",
+                        max_length=255,
+                    ),
+                ),
+                (
+                    "logo",
+                    models.ImageField(blank=True, upload_to="organizations/logos/"),
+                ),
+                (
+                    "api_token",
+                    models.UUIDField(
+                        db_index=True,
+                        default=uuid.uuid4,
+                        help_text="Token used by the widget to authenticate requests.",
+                        unique=True,
+                    ),
+                ),
+                ("is_active", models.BooleanField(default=True)),
+                (
+                    "widget_color",
+                    models.CharField(
+                        default="#6366F1",
+                        help_text="Primary color for the widget (hex).",
+                        max_length=7,
+                    ),
+                ),
+                (
+                    "widget_position",
+                    models.CharField(
+                        choices=[
+                            ("bottom-right", "Bottom Right"),
+                            ("bottom-left", "Bottom Left"),
+                        ],
+                        default="bottom-right",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "widget_greeting",
+                    models.CharField(default="How can we help you?", max_length=255),
+                ),
+                (
+                    "video_expiration_days",
+                    models.PositiveIntegerField(
+                        default=90,
+                        help_text="Number of days before recorded videos are automatically deleted.",
+                    ),
+                ),
+                (
+                    "video_max_duration_seconds",
+                    models.PositiveIntegerField(
+                        default=600, help_text="Maximum recording duration in seconds."
+                    ),
+                ),
+                (
+                    "ticket_counter",
+                    models.PositiveIntegerField(
+                        default=0,
+                        help_text="Auto-incremented counter for generating ticket references.",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['name'],
+                "ordering": ["name"],
             },
         ),
         migrations.CreateModel(
-            name='User',
+            name="User",
             fields=[
-                ('password', models.CharField(max_length=128, verbose_name='password')),
-                ('last_login', models.DateTimeField(blank=True, null=True, verbose_name='last login')),
-                ('is_superuser', models.BooleanField(default=False, help_text='Designates that this user has all permissions without explicitly assigning them.', verbose_name='superuser status')),
-                ('first_name', models.CharField(blank=True, max_length=150, verbose_name='first name')),
-                ('last_name', models.CharField(blank=True, max_length=150, verbose_name='last name')),
-                ('is_staff', models.BooleanField(default=False, help_text='Designates whether the user can log into this admin site.', verbose_name='staff status')),
-                ('is_active', models.BooleanField(default=True, help_text='Designates whether this user should be treated as active. Unselect this instead of deleting accounts.', verbose_name='active')),
-                ('date_joined', models.DateTimeField(default=django.utils.timezone.now, verbose_name='date joined')),
-                ('email', models.EmailField(max_length=254, unique=True)),
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('role', models.CharField(choices=[('admin', 'Admin'), ('agent', 'Agent'), ('end_user', 'End User')], default='end_user', max_length=20)),
-                ('avatar', models.ImageField(blank=True, upload_to='users/avatars/')),
-                ('phone', models.CharField(blank=True, max_length=30)),
-                ('timezone', models.CharField(default='UTC', max_length=50)),
-                ('is_available', models.BooleanField(default=True, help_text='Whether this agent is currently available for ticket assignment.')),
-                ('groups', models.ManyToManyField(blank=True, help_text='The groups this user belongs to. A user will get all permissions granted to each of their groups.', related_name='user_set', related_query_name='user', to='auth.group', verbose_name='groups')),
-                ('user_permissions', models.ManyToManyField(blank=True, help_text='Specific permissions for this user.', related_name='user_set', related_query_name='user', to='auth.permission', verbose_name='user permissions')),
-                ('organization', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='users', to='organizations.organization')),
+                ("password", models.CharField(max_length=128, verbose_name="password")),
+                (
+                    "last_login",
+                    models.DateTimeField(
+                        blank=True, null=True, verbose_name="last login"
+                    ),
+                ),
+                (
+                    "is_superuser",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Designates that this user has all permissions without explicitly assigning them.",
+                        verbose_name="superuser status",
+                    ),
+                ),
+                (
+                    "first_name",
+                    models.CharField(
+                        blank=True, max_length=150, verbose_name="first name"
+                    ),
+                ),
+                (
+                    "last_name",
+                    models.CharField(
+                        blank=True, max_length=150, verbose_name="last name"
+                    ),
+                ),
+                (
+                    "is_staff",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Designates whether the user can log into this admin site.",
+                        verbose_name="staff status",
+                    ),
+                ),
+                (
+                    "is_active",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Designates whether this user should be treated as active. Unselect this instead of deleting accounts.",
+                        verbose_name="active",
+                    ),
+                ),
+                (
+                    "date_joined",
+                    models.DateTimeField(
+                        default=django.utils.timezone.now, verbose_name="date joined"
+                    ),
+                ),
+                ("email", models.EmailField(max_length=254, unique=True)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "role",
+                    models.CharField(
+                        choices=[
+                            ("admin", "Admin"),
+                            ("agent", "Agent"),
+                            ("end_user", "End User"),
+                        ],
+                        default="end_user",
+                        max_length=20,
+                    ),
+                ),
+                ("avatar", models.ImageField(blank=True, upload_to="users/avatars/")),
+                ("phone", models.CharField(blank=True, max_length=30)),
+                ("timezone", models.CharField(default="UTC", max_length=50)),
+                (
+                    "is_available",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Whether this agent is currently available for ticket assignment.",
+                    ),
+                ),
+                (
+                    "groups",
+                    models.ManyToManyField(
+                        blank=True,
+                        help_text="The groups this user belongs to. A user will get all permissions granted to each of their groups.",
+                        related_name="user_set",
+                        related_query_name="user",
+                        to="auth.group",
+                        verbose_name="groups",
+                    ),
+                ),
+                (
+                    "user_permissions",
+                    models.ManyToManyField(
+                        blank=True,
+                        help_text="Specific permissions for this user.",
+                        related_name="user_set",
+                        related_query_name="user",
+                        to="auth.permission",
+                        verbose_name="user permissions",
+                    ),
+                ),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="users",
+                        to="organizations.organization",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['email'],
+                "ordering": ["email"],
             },
         ),
         migrations.CreateModel(
-            name='Team',
+            name="Team",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('name', models.CharField(max_length=255)),
-                ('description', models.TextField(blank=True)),
-                ('lead', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='led_teams', to=settings.AUTH_USER_MODEL)),
-                ('members', models.ManyToManyField(blank=True, related_name='teams', to=settings.AUTH_USER_MODEL)),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='teams', to='organizations.organization')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("name", models.CharField(max_length=255)),
+                ("description", models.TextField(blank=True)),
+                (
+                    "lead",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="led_teams",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "members",
+                    models.ManyToManyField(
+                        blank=True, related_name="teams", to=settings.AUTH_USER_MODEL
+                    ),
+                ),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="teams",
+                        to="organizations.organization",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['name'],
-                'unique_together': {('organization', 'name')},
+                "ordering": ["name"],
+                "unique_together": {("organization", "name")},
             },
         ),
     ]

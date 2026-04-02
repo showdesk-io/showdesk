@@ -7,127 +7,380 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('organizations', '0001_initial'),
+        ("organizations", "0001_initial"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='SLAPolicy',
+            name="SLAPolicy",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('name', models.CharField(max_length=255)),
-                ('priority', models.CharField(choices=[('low', 'Low'), ('medium', 'Medium'), ('high', 'High'), ('urgent', 'Urgent')], max_length=10)),
-                ('first_response_minutes', models.PositiveIntegerField(help_text='Target first response time in minutes.')),
-                ('resolution_minutes', models.PositiveIntegerField(help_text='Target resolution time in minutes.')),
-                ('is_active', models.BooleanField(default=True)),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='sla_policies', to='organizations.organization')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("name", models.CharField(max_length=255)),
+                (
+                    "priority",
+                    models.CharField(
+                        choices=[
+                            ("low", "Low"),
+                            ("medium", "Medium"),
+                            ("high", "High"),
+                            ("urgent", "Urgent"),
+                        ],
+                        max_length=10,
+                    ),
+                ),
+                (
+                    "first_response_minutes",
+                    models.PositiveIntegerField(
+                        help_text="Target first response time in minutes."
+                    ),
+                ),
+                (
+                    "resolution_minutes",
+                    models.PositiveIntegerField(
+                        help_text="Target resolution time in minutes."
+                    ),
+                ),
+                ("is_active", models.BooleanField(default=True)),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="sla_policies",
+                        to="organizations.organization",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'SLA Policy',
-                'verbose_name_plural': 'SLA Policies',
-                'ordering': ['organization', 'priority'],
-                'unique_together': {('organization', 'priority')},
+                "verbose_name": "SLA Policy",
+                "verbose_name_plural": "SLA Policies",
+                "ordering": ["organization", "priority"],
+                "unique_together": {("organization", "priority")},
             },
         ),
         migrations.CreateModel(
-            name='Tag',
+            name="Tag",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('name', models.CharField(max_length=100)),
-                ('color', models.CharField(default='#6B7280', help_text='Tag color in hex format.', max_length=7)),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='tags', to='organizations.organization')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("name", models.CharField(max_length=100)),
+                (
+                    "color",
+                    models.CharField(
+                        default="#6B7280",
+                        help_text="Tag color in hex format.",
+                        max_length=7,
+                    ),
+                ),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="tags",
+                        to="organizations.organization",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['name'],
-                'unique_together': {('organization', 'name')},
+                "ordering": ["name"],
+                "unique_together": {("organization", "name")},
             },
         ),
         migrations.CreateModel(
-            name='Ticket',
+            name="Ticket",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('reference', models.CharField(db_index=True, help_text='Human-readable ticket reference (e.g., SD-1234).', max_length=20, unique=True)),
-                ('title', models.CharField(max_length=500)),
-                ('description', models.TextField(blank=True)),
-                ('status', models.CharField(choices=[('open', 'Open'), ('in_progress', 'In Progress'), ('waiting', 'Waiting'), ('resolved', 'Resolved'), ('closed', 'Closed')], db_index=True, default='open', max_length=20)),
-                ('priority', models.CharField(choices=[('low', 'Low'), ('medium', 'Medium'), ('high', 'High'), ('urgent', 'Urgent')], db_index=True, default='medium', max_length=10)),
-                ('source', models.CharField(choices=[('widget', 'Widget'), ('email', 'Email'), ('api', 'API'), ('agent', 'Agent')], default='widget', max_length=10)),
-                ('context_url', models.URLField(blank=True, help_text='URL where the ticket was submitted from.', max_length=2048)),
-                ('context_user_agent', models.TextField(blank=True)),
-                ('context_os', models.CharField(blank=True, max_length=100)),
-                ('context_browser', models.CharField(blank=True, max_length=100)),
-                ('context_screen_resolution', models.CharField(blank=True, max_length=20)),
-                ('context_metadata', models.JSONField(blank=True, default=dict, help_text='Additional technical context captured by the widget.')),
-                ('requester_name', models.CharField(blank=True, max_length=255)),
-                ('requester_email', models.EmailField(blank=True, max_length=254)),
-                ('first_response_at', models.DateTimeField(blank=True, null=True)),
-                ('resolved_at', models.DateTimeField(blank=True, null=True)),
-                ('closed_at', models.DateTimeField(blank=True, null=True)),
-                ('assigned_agent', models.ForeignKey(blank=True, help_text='The agent currently assigned to this ticket.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='assigned_tickets', to=settings.AUTH_USER_MODEL)),
-                ('assigned_team', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='assigned_tickets', to='organizations.team')),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='tickets', to='organizations.organization')),
-                ('requester', models.ForeignKey(blank=True, help_text='The end-user who submitted this ticket.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='requested_tickets', to=settings.AUTH_USER_MODEL)),
-                ('sla_policy', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='tickets.slapolicy')),
-                ('tags', models.ManyToManyField(blank=True, related_name='tickets', to='tickets.tag')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "reference",
+                    models.CharField(
+                        db_index=True,
+                        help_text="Human-readable ticket reference (e.g., SD-1234).",
+                        max_length=20,
+                        unique=True,
+                    ),
+                ),
+                ("title", models.CharField(max_length=500)),
+                ("description", models.TextField(blank=True)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("open", "Open"),
+                            ("in_progress", "In Progress"),
+                            ("waiting", "Waiting"),
+                            ("resolved", "Resolved"),
+                            ("closed", "Closed"),
+                        ],
+                        db_index=True,
+                        default="open",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "priority",
+                    models.CharField(
+                        choices=[
+                            ("low", "Low"),
+                            ("medium", "Medium"),
+                            ("high", "High"),
+                            ("urgent", "Urgent"),
+                        ],
+                        db_index=True,
+                        default="medium",
+                        max_length=10,
+                    ),
+                ),
+                (
+                    "source",
+                    models.CharField(
+                        choices=[
+                            ("widget", "Widget"),
+                            ("email", "Email"),
+                            ("api", "API"),
+                            ("agent", "Agent"),
+                        ],
+                        default="widget",
+                        max_length=10,
+                    ),
+                ),
+                (
+                    "context_url",
+                    models.URLField(
+                        blank=True,
+                        help_text="URL where the ticket was submitted from.",
+                        max_length=2048,
+                    ),
+                ),
+                ("context_user_agent", models.TextField(blank=True)),
+                ("context_os", models.CharField(blank=True, max_length=100)),
+                ("context_browser", models.CharField(blank=True, max_length=100)),
+                (
+                    "context_screen_resolution",
+                    models.CharField(blank=True, max_length=20),
+                ),
+                (
+                    "context_metadata",
+                    models.JSONField(
+                        blank=True,
+                        default=dict,
+                        help_text="Additional technical context captured by the widget.",
+                    ),
+                ),
+                ("requester_name", models.CharField(blank=True, max_length=255)),
+                ("requester_email", models.EmailField(blank=True, max_length=254)),
+                ("first_response_at", models.DateTimeField(blank=True, null=True)),
+                ("resolved_at", models.DateTimeField(blank=True, null=True)),
+                ("closed_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "assigned_agent",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="The agent currently assigned to this ticket.",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="assigned_tickets",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "assigned_team",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="assigned_tickets",
+                        to="organizations.team",
+                    ),
+                ),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="tickets",
+                        to="organizations.organization",
+                    ),
+                ),
+                (
+                    "requester",
+                    models.ForeignKey(
+                        blank=True,
+                        help_text="The end-user who submitted this ticket.",
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="requested_tickets",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "sla_policy",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to="tickets.slapolicy",
+                    ),
+                ),
+                (
+                    "tags",
+                    models.ManyToManyField(
+                        blank=True, related_name="tickets", to="tickets.tag"
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-created_at'],
+                "ordering": ["-created_at"],
             },
         ),
         migrations.CreateModel(
-            name='TicketMessage',
+            name="TicketMessage",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('body', models.TextField()),
-                ('message_type', models.CharField(choices=[('reply', 'Reply'), ('internal_note', 'Internal Note')], default='reply', max_length=20)),
-                ('author', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='ticket_messages', to=settings.AUTH_USER_MODEL)),
-                ('ticket', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='messages', to='tickets.ticket')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("body", models.TextField()),
+                (
+                    "message_type",
+                    models.CharField(
+                        choices=[
+                            ("reply", "Reply"),
+                            ("internal_note", "Internal Note"),
+                        ],
+                        default="reply",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "author",
+                    models.ForeignKey(
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="ticket_messages",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "ticket",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="messages",
+                        to="tickets.ticket",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['created_at'],
+                "ordering": ["created_at"],
             },
         ),
         migrations.CreateModel(
-            name='TicketAttachment',
+            name="TicketAttachment",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('file', models.FileField(upload_to='attachments/%Y/%m/%d/')),
-                ('filename', models.CharField(max_length=255)),
-                ('content_type', models.CharField(max_length=100)),
-                ('file_size', models.PositiveBigIntegerField(help_text='File size in bytes.')),
-                ('ticket', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='attachments', to='tickets.ticket')),
-                ('uploaded_by', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
-                ('message', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='attachments', to='tickets.ticketmessage')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("file", models.FileField(upload_to="attachments/%Y/%m/%d/")),
+                ("filename", models.CharField(max_length=255)),
+                ("content_type", models.CharField(max_length=100)),
+                (
+                    "file_size",
+                    models.PositiveBigIntegerField(help_text="File size in bytes."),
+                ),
+                (
+                    "ticket",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="attachments",
+                        to="tickets.ticket",
+                    ),
+                ),
+                (
+                    "uploaded_by",
+                    models.ForeignKey(
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "message",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="attachments",
+                        to="tickets.ticketmessage",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-created_at'],
+                "ordering": ["-created_at"],
             },
         ),
         migrations.AddIndex(
-            model_name='ticket',
-            index=models.Index(fields=['organization', 'status'], name='tickets_tic_organiz_e2fa4d_idx'),
+            model_name="ticket",
+            index=models.Index(
+                fields=["organization", "status"], name="tickets_tic_organiz_e2fa4d_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='ticket',
-            index=models.Index(fields=['organization', 'priority'], name='tickets_tic_organiz_5276a3_idx'),
+            model_name="ticket",
+            index=models.Index(
+                fields=["organization", "priority"],
+                name="tickets_tic_organiz_5276a3_idx",
+            ),
         ),
         migrations.AddIndex(
-            model_name='ticket',
-            index=models.Index(fields=['assigned_agent', 'status'], name='tickets_tic_assigne_cdbb4f_idx'),
+            model_name="ticket",
+            index=models.Index(
+                fields=["assigned_agent", "status"],
+                name="tickets_tic_assigne_cdbb4f_idx",
+            ),
         ),
     ]

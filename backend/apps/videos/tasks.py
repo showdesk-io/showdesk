@@ -78,17 +78,23 @@ def process_video(self, video_id: str) -> dict:  # noqa: ANN001
         # Mark as ready
         video.status = VideoRecording.Status.READY
         video.processing_completed_at = timezone.now()
-        video.save(update_fields=[
-            "status",
-            "processing_completed_at",
-            "duration_seconds",
-            "width",
-            "height",
-            "file_size",
-        ])
+        video.save(
+            update_fields=[
+                "status",
+                "processing_completed_at",
+                "duration_seconds",
+                "width",
+                "height",
+                "file_size",
+            ]
+        )
 
         # Trigger transcription if AI is enabled
-        if settings.AI_ENABLED and settings.FEATURE_AI_TRANSCRIPTION and video.has_audio:
+        if (
+            settings.AI_ENABLED
+            and settings.FEATURE_AI_TRANSCRIPTION
+            and video.has_audio
+        ):
             transcribe_video.delay(str(video.id))
 
         logger.info("Video %s processed successfully.", video_id)
@@ -98,7 +104,9 @@ def process_video(self, video_id: str) -> dict:  # noqa: ANN001
         video.status = VideoRecording.Status.FAILED
         video.processing_error = str(exc)
         video.processing_completed_at = timezone.now()
-        video.save(update_fields=["status", "processing_error", "processing_completed_at"])
+        video.save(
+            update_fields=["status", "processing_error", "processing_completed_at"]
+        )
         logger.exception("Failed to process video %s.", video_id)
         raise self.retry(exc=exc, countdown=60)
 
@@ -117,8 +125,10 @@ def _extract_metadata(video, local_path: str) -> None:  # noqa: ANN001
         result = subprocess.run(
             [
                 "ffprobe",
-                "-v", "quiet",
-                "-print_format", "json",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
                 "-show_format",
                 "-show_streams",
                 local_path,
@@ -129,6 +139,7 @@ def _extract_metadata(video, local_path: str) -> None:  # noqa: ANN001
             timeout=30,
         )
         import json
+
         probe_data = json.loads(result.stdout)
 
         # Extract duration
@@ -159,10 +170,14 @@ def _generate_thumbnail(video, local_path: str) -> None:  # noqa: ANN001
         subprocess.run(
             [
                 "ffmpeg",
-                "-i", local_path,
-                "-ss", "00:00:01",
-                "-vframes", "1",
-                "-vf", f"scale={settings.VIDEO_THUMBNAIL_WIDTH}:{settings.VIDEO_THUMBNAIL_HEIGHT}",
+                "-i",
+                local_path,
+                "-ss",
+                "00:00:01",
+                "-vframes",
+                "1",
+                "-vf",
+                f"scale={settings.VIDEO_THUMBNAIL_WIDTH}:{settings.VIDEO_THUMBNAIL_HEIGHT}",
                 "-y",
                 thumbnail_path,
             ],
@@ -173,6 +188,7 @@ def _generate_thumbnail(video, local_path: str) -> None:  # noqa: ANN001
 
         # Save thumbnail to storage
         from django.core.files import File
+
         with open(thumbnail_path, "rb") as f:
             video.thumbnail.save(
                 f"thumb_{video.id}.jpg",

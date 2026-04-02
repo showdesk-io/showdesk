@@ -6,31 +6,61 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('organizations', '0001_initial'),
+        ("organizations", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='UsageRecord',
+            name="UsageRecord",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('usage_type', models.CharField(choices=[('active_agents', 'Active Agents'), ('video_storage_mb', 'Video Storage (MB)'), ('recording_minutes', 'Recording Minutes'), ('transcription_minutes', 'Transcription Minutes')], max_length=30)),
-                ('quantity', models.DecimalField(decimal_places=2, max_digits=12)),
-                ('recorded_at', models.DateTimeField(auto_now_add=True)),
-                ('period_start', models.DateTimeField()),
-                ('period_end', models.DateTimeField()),
-                ('metadata', models.JSONField(blank=True, default=dict)),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='usage_records', to='organizations.organization')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "usage_type",
+                    models.CharField(
+                        choices=[
+                            ("active_agents", "Active Agents"),
+                            ("video_storage_mb", "Video Storage (MB)"),
+                            ("recording_minutes", "Recording Minutes"),
+                            ("transcription_minutes", "Transcription Minutes"),
+                        ],
+                        max_length=30,
+                    ),
+                ),
+                ("quantity", models.DecimalField(decimal_places=2, max_digits=12)),
+                ("recorded_at", models.DateTimeField(auto_now_add=True)),
+                ("period_start", models.DateTimeField()),
+                ("period_end", models.DateTimeField()),
+                ("metadata", models.JSONField(blank=True, default=dict)),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="usage_records",
+                        to="organizations.organization",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-recorded_at'],
-                'indexes': [models.Index(fields=['organization', 'usage_type', 'recorded_at'], name='core_usager_organiz_50fd9a_idx')],
+                "ordering": ["-recorded_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["organization", "usage_type", "recorded_at"],
+                        name="core_usager_organiz_50fd9a_idx",
+                    )
+                ],
             },
         ),
     ]

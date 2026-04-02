@@ -53,7 +53,13 @@ class PriorityLevel(TimestampedModel):
         """Create the four default priority levels for an organization."""
         defaults = [
             {"name": "Low", "slug": "low", "color": "#6B7280", "position": 0},
-            {"name": "Medium", "slug": "medium", "color": "#3B82F6", "position": 1, "is_default": True},
+            {
+                "name": "Medium",
+                "slug": "medium",
+                "color": "#3B82F6",
+                "position": 1,
+                "is_default": True,
+            },
             {"name": "High", "slug": "high", "color": "#F97316", "position": 2},
             {"name": "Urgent", "slug": "urgent", "color": "#EF4444", "position": 3},
         ]

@@ -7,57 +7,126 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('organizations', '0001_initial'),
+        ("organizations", "0001_initial"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='Category',
+            name="Category",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('name', models.CharField(max_length=255)),
-                ('slug', models.SlugField(max_length=255)),
-                ('description', models.TextField(blank=True)),
-                ('icon', models.CharField(blank=True, help_text='Icon identifier for the category.', max_length=50)),
-                ('sort_order', models.PositiveIntegerField(default=0)),
-                ('is_published', models.BooleanField(default=False)),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='kb_categories', to='organizations.organization')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("name", models.CharField(max_length=255)),
+                ("slug", models.SlugField(max_length=255)),
+                ("description", models.TextField(blank=True)),
+                (
+                    "icon",
+                    models.CharField(
+                        blank=True,
+                        help_text="Icon identifier for the category.",
+                        max_length=50,
+                    ),
+                ),
+                ("sort_order", models.PositiveIntegerField(default=0)),
+                ("is_published", models.BooleanField(default=False)),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="kb_categories",
+                        to="organizations.organization",
+                    ),
+                ),
             ],
             options={
-                'verbose_name_plural': 'Categories',
-                'ordering': ['sort_order', 'name'],
-                'unique_together': {('organization', 'slug')},
+                "verbose_name_plural": "Categories",
+                "ordering": ["sort_order", "name"],
+                "unique_together": {("organization", "slug")},
             },
         ),
         migrations.CreateModel(
-            name='Article',
+            name="Article",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('title', models.CharField(max_length=500)),
-                ('slug', models.SlugField(max_length=500)),
-                ('body', models.TextField()),
-                ('status', models.CharField(choices=[('draft', 'Draft'), ('published', 'Published'), ('archived', 'Archived')], default='draft', max_length=20)),
-                ('view_count', models.PositiveIntegerField(default=0)),
-                ('helpful_count', models.PositiveIntegerField(default=0)),
-                ('not_helpful_count', models.PositiveIntegerField(default=0)),
-                ('published_at', models.DateTimeField(blank=True, null=True)),
-                ('author', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='kb_articles', to=settings.AUTH_USER_MODEL)),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='kb_articles', to='organizations.organization')),
-                ('category', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='articles', to='knowledge_base.category')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("title", models.CharField(max_length=500)),
+                ("slug", models.SlugField(max_length=500)),
+                ("body", models.TextField()),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("draft", "Draft"),
+                            ("published", "Published"),
+                            ("archived", "Archived"),
+                        ],
+                        default="draft",
+                        max_length=20,
+                    ),
+                ),
+                ("view_count", models.PositiveIntegerField(default=0)),
+                ("helpful_count", models.PositiveIntegerField(default=0)),
+                ("not_helpful_count", models.PositiveIntegerField(default=0)),
+                ("published_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "author",
+                    models.ForeignKey(
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="kb_articles",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="kb_articles",
+                        to="organizations.organization",
+                    ),
+                ),
+                (
+                    "category",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="articles",
+                        to="knowledge_base.category",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-updated_at'],
-                'indexes': [models.Index(fields=['organization', 'status'], name='knowledge_b_organiz_c45060_idx')],
-                'unique_together': {('organization', 'slug')},
+                "ordering": ["-updated_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["organization", "status"],
+                        name="knowledge_b_organiz_c45060_idx",
+                    )
+                ],
+                "unique_together": {("organization", "slug")},
             },
         ),
     ]

@@ -21,22 +21,46 @@ class OrganizationAdmin(admin.ModelAdmin):
 class UserAdmin(BaseUserAdmin):
     """Admin for custom user model."""
 
-    list_display = ["email", "first_name", "last_name", "role", "organization", "is_active"]
+    list_display = [
+        "email",
+        "first_name",
+        "last_name",
+        "role",
+        "organization",
+        "is_active",
+    ]
     list_filter = ["role", "is_active", "organization"]
     search_fields = ["email", "first_name", "last_name"]
     ordering = ["email"]
     fieldsets = (
         (None, {"fields": ("email", "password")}),
         ("Personal info", {"fields": ("first_name", "last_name", "avatar", "phone")}),
-        ("Organization", {"fields": ("organization", "role", "timezone", "is_available")}),
-        ("Permissions", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
+        (
+            "Organization",
+            {"fields": ("organization", "role", "timezone", "is_available")},
+        ),
+        (
+            "Permissions",
+            {
+                "fields": (
+                    "is_active",
+                    "is_staff",
+                    "is_superuser",
+                    "groups",
+                    "user_permissions",
+                )
+            },
+        ),
         ("Important dates", {"fields": ("last_login", "date_joined")}),
     )
     add_fieldsets = (
-        (None, {
-            "classes": ("wide",),
-            "fields": ("email", "password1", "password2", "role", "organization"),
-        }),
+        (
+            None,
+            {
+                "classes": ("wide",),
+                "fields": ("email", "password1", "password2", "role", "organization"),
+            },
+        ),
     )
 
 

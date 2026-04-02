@@ -49,7 +49,9 @@ class TestSavedViewAPI:
         assert response.data["count"] == 1
         assert response.data["results"][0]["name"] == "My View"
 
-    def test_list_includes_shared_views(self, authenticated_client, organization, agent) -> None:
+    def test_list_includes_shared_views(
+        self, authenticated_client, organization, agent
+    ) -> None:
         """Agents see shared views from other agents in the same org."""
         other_agent = UserFactory(organization=organization)
         SavedViewFactory(

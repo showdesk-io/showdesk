@@ -4,12 +4,19 @@ Uses factory_boy to create model instances with sensible defaults.
 All factories are self-contained and can be used independently.
 """
 
-
 import factory
 from django.utils import timezone
 
 from apps.organizations.models import Organization, Team, User
-from apps.tickets.models import PriorityLevel, SavedView, SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
+from apps.tickets.models import (
+    PriorityLevel,
+    SavedView,
+    SLAPolicy,
+    Tag,
+    Ticket,
+    TicketAttachment,
+    TicketMessage,
+)
 from apps.videos.models import VideoRecording
 
 
@@ -137,7 +144,9 @@ class TicketFactory(factory.django.DjangoModelFactory):
     priority = Ticket.Priority.MEDIUM
     source = Ticket.Source.WIDGET
     requester = factory.SubFactory(EndUserFactory)
-    requester_email = factory.LazyAttribute(lambda o: o.requester.email if o.requester else "test@example.com")
+    requester_email = factory.LazyAttribute(
+        lambda o: o.requester.email if o.requester else "test@example.com"
+    )
     context_url = "https://app.example.com/page"
     context_browser = "Chrome"
     context_os = "macOS"
@@ -185,4 +194,6 @@ class VideoRecordingFactory(factory.django.DjangoModelFactory):
     mime_type = "video/webm"
     has_audio = True
     has_camera = False
-    expires_at = factory.LazyFunction(lambda: timezone.now() + timezone.timedelta(days=90))
+    expires_at = factory.LazyFunction(
+        lambda: timezone.now() + timezone.timedelta(days=90)
+    )

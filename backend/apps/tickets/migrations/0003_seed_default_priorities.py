@@ -4,10 +4,34 @@ from django.db import migrations
 
 
 DEFAULT_PRIORITIES = [
-    {"name": "Low", "slug": "low", "color": "#6B7280", "position": 0, "is_default": False},
-    {"name": "Medium", "slug": "medium", "color": "#3B82F6", "position": 1, "is_default": True},
-    {"name": "High", "slug": "high", "color": "#F97316", "position": 2, "is_default": False},
-    {"name": "Urgent", "slug": "urgent", "color": "#EF4444", "position": 3, "is_default": False},
+    {
+        "name": "Low",
+        "slug": "low",
+        "color": "#6B7280",
+        "position": 0,
+        "is_default": False,
+    },
+    {
+        "name": "Medium",
+        "slug": "medium",
+        "color": "#3B82F6",
+        "position": 1,
+        "is_default": True,
+    },
+    {
+        "name": "High",
+        "slug": "high",
+        "color": "#F97316",
+        "position": 2,
+        "is_default": False,
+    },
+    {
+        "name": "Urgent",
+        "slug": "urgent",
+        "color": "#EF4444",
+        "position": 3,
+        "is_default": False,
+    },
 ]
 
 
@@ -32,9 +56,8 @@ def reverse_seed(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('tickets', '0002_add_priority_level_model'),
+        ("tickets", "0002_add_priority_level_model"),
     ]
 
     operations = [

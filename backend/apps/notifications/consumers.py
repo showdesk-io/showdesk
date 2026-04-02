@@ -34,9 +34,7 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
     async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection."""
         if hasattr(self, "group_name"):
-            await self.channel_layer.group_discard(
-                self.group_name, self.channel_name
-            )
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive_json(self, content: dict) -> None:
         """Handle incoming WebSocket messages."""

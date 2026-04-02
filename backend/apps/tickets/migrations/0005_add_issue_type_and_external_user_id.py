@@ -4,20 +4,35 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('tickets', '0004_add_saved_view_model'),
+        ("tickets", "0004_add_saved_view_model"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='ticket',
-            name='external_user_id',
-            field=models.CharField(blank=True, db_index=True, default='', help_text='User ID from the host application, passed via widget init.', max_length=255),
+            model_name="ticket",
+            name="external_user_id",
+            field=models.CharField(
+                blank=True,
+                db_index=True,
+                default="",
+                help_text="User ID from the host application, passed via widget init.",
+                max_length=255,
+            ),
         ),
         migrations.AddField(
-            model_name='ticket',
-            name='issue_type',
-            field=models.CharField(blank=True, choices=[('bug', 'Bug'), ('question', 'Question'), ('suggestion', 'Suggestion'), ('other', 'Other')], default='other', max_length=20),
+            model_name="ticket",
+            name="issue_type",
+            field=models.CharField(
+                blank=True,
+                choices=[
+                    ("bug", "Bug"),
+                    ("question", "Question"),
+                    ("suggestion", "Suggestion"),
+                    ("other", "Other"),
+                ],
+                default="other",
+                max_length=20,
+            ),
         ),
     ]

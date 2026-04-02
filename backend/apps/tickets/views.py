@@ -10,10 +10,21 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from apps.core.throttling import WidgetSubmitThrottle
-from apps.notifications.signals import notify_new_message, notify_new_ticket, notify_ticket_update
+from apps.notifications.signals import (
+    notify_new_message,
+    notify_new_ticket,
+    notify_ticket_update,
+)
 from apps.organizations.models import Organization
 
-from .models import PriorityLevel, SavedView, Tag, Ticket, TicketAttachment, TicketMessage
+from .models import (
+    PriorityLevel,
+    SavedView,
+    Tag,
+    Ticket,
+    TicketAttachment,
+    TicketMessage,
+)
 from .serializers import (
     PriorityLevelSerializer,
     SavedViewSerializer,
@@ -42,8 +53,19 @@ class TicketViewSet(viewsets.ModelViewSet):
     """
 
     permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["status", "priority", "assigned_agent", "assigned_team", "source", "tags"]
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    filterset_fields = [
+        "status",
+        "priority",
+        "assigned_agent",
+        "assigned_team",
+        "source",
+        "tags",
+    ]
     search_fields = ["title", "description", "reference", "requester_email"]
     ordering_fields = ["created_at", "updated_at", "priority", "status"]
 
@@ -116,7 +138,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         agent_workload = [
             {
                 "agent_id": str(row["assigned_agent"]),
-                "name": f'{row["assigned_agent__first_name"]} {row["assigned_agent__last_name"]}'.strip()
+                "name": f"{row['assigned_agent__first_name']} {row['assigned_agent__last_name']}".strip()
                 or row["assigned_agent__email"],
                 "count": row["count"],
             }
@@ -128,9 +150,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         from django.db.models import Avg
         from django.db.models.functions import Now
 
-        avg_age = qs.aggregate(
-            avg_age=Avg(Now() - models.F("created_at"))
-        )["avg_age"]
+        avg_age = qs.aggregate(avg_age=Avg(Now() - models.F("created_at")))["avg_age"]
         avg_age_hours = round(avg_age.total_seconds() / 3600, 1) if avg_age else 0
 
         return Response(
@@ -299,9 +319,7 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         if user.is_superuser:
             return TicketMessage.objects.all()
         if user.organization:
-            return TicketMessage.objects.filter(
-                ticket__organization=user.organization
-            )
+            return TicketMessage.objects.filter(ticket__organization=user.organization)
         return TicketMessage.objects.none()
 
     def perform_create(self, serializer) -> None:  # noqa: ANN001
@@ -414,6 +432,7 @@ class SavedViewViewSet(viewsets.ModelViewSet):
         """Only the creator can update a saved view."""
         if serializer.instance.created_by != self.request.user:
             from rest_framework.exceptions import PermissionDenied
+
             raise PermissionDenied("You can only edit your own saved views.")
         serializer.save()
 
@@ -421,5 +440,6 @@ class SavedViewViewSet(viewsets.ModelViewSet):
         """Only the creator can delete a saved view."""
         if instance.created_by != self.request.user:
             from rest_framework.exceptions import PermissionDenied
+
             raise PermissionDenied("You can only delete your own saved views.")
         instance.delete()

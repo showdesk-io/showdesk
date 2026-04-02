@@ -31,9 +31,7 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
         if user.is_superuser:
             return VideoRecording.objects.all()
         if user.organization:
-            return VideoRecording.objects.filter(
-                ticket__organization=user.organization
-            )
+            return VideoRecording.objects.filter(ticket__organization=user.organization)
         return VideoRecording.objects.none()
 
     @action(

@@ -34,9 +34,9 @@ def send_ticket_created_email(self, ticket_id: str) -> None:  # noqa: ANN001
     from apps.tickets.models import Ticket
 
     try:
-        ticket = Ticket.objects.select_related(
-            "organization", "assigned_agent"
-        ).get(id=ticket_id)
+        ticket = Ticket.objects.select_related("organization", "assigned_agent").get(
+            id=ticket_id
+        )
     except Ticket.DoesNotExist:
         logger.warning("Ticket %s not found, skipping email.", ticket_id)
         return
@@ -180,9 +180,9 @@ def send_ticket_assigned_email(self, ticket_id: str) -> None:  # noqa: ANN001
     from apps.tickets.models import Ticket
 
     try:
-        ticket = Ticket.objects.select_related(
-            "assigned_agent", "organization"
-        ).get(id=ticket_id)
+        ticket = Ticket.objects.select_related("assigned_agent", "organization").get(
+            id=ticket_id
+        )
     except Ticket.DoesNotExist:
         return
 
@@ -208,7 +208,9 @@ def send_ticket_assigned_email(self, ticket_id: str) -> None:  # noqa: ANN001
             fail_silently=False,
         )
     except Exception as exc:
-        logger.error("Failed to send assignment email for %s: %s", ticket.reference, exc)
+        logger.error(
+            "Failed to send assignment email for %s: %s", ticket.reference, exc
+        )
         raise self.retry(exc=exc)
 
 

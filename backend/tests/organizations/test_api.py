@@ -11,7 +11,9 @@ from tests.factories import UserFactory
 class TestOrganizationAPI:
     """Tests for the /api/v1/organizations/ endpoint."""
 
-    def test_list_organizations_authenticated(self, authenticated_client, organization) -> None:
+    def test_list_organizations_authenticated(
+        self, authenticated_client, organization
+    ) -> None:
         """Authenticated agents can list their organization."""
         response = authenticated_client.get("/api/v1/organizations/")
         assert response.status_code == status.HTTP_200_OK
@@ -28,7 +30,9 @@ class TestOrganizationAPI:
         assert response.status_code == status.HTTP_200_OK
         assert response.data["name"] == organization.name
 
-    def test_retrieve_organization_has_api_token(self, authenticated_client, organization) -> None:
+    def test_retrieve_organization_has_api_token(
+        self, authenticated_client, organization
+    ) -> None:
         """Organization response includes api_token."""
         response = authenticated_client.get(f"/api/v1/organizations/{organization.id}/")
         assert response.status_code == status.HTTP_200_OK
@@ -43,7 +47,9 @@ class TestOrganizationAPI:
         assert response.status_code == status.HTTP_200_OK
         assert response.data["api_token"] != old_token
 
-    def test_regenerate_token_as_agent_forbidden(self, authenticated_client, organization) -> None:
+    def test_regenerate_token_as_agent_forbidden(
+        self, authenticated_client, organization
+    ) -> None:
         """Non-admin agents cannot regenerate the API token."""
         response = authenticated_client.post(
             f"/api/v1/organizations/{organization.id}/regenerate_token/"
@@ -78,12 +84,15 @@ class TestUserAPI:
 
     def test_invite_agent_as_admin(self, admin_client, organization) -> None:
         """Admins can invite new agents via the invite endpoint."""
-        response = admin_client.post("/api/v1/users/invite/", {
-            "email": "newagent@test.example",
-            "first_name": "New",
-            "last_name": "Agent",
-            "role": "agent",
-        })
+        response = admin_client.post(
+            "/api/v1/users/invite/",
+            {
+                "email": "newagent@test.example",
+                "first_name": "New",
+                "last_name": "Agent",
+                "role": "agent",
+            },
+        )
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data["email"] == "newagent@test.example"
         # Verify user has unusable password (OTP auth)
@@ -92,25 +101,35 @@ class TestUserAPI:
 
     def test_invite_agent_as_agent_forbidden(self, authenticated_client) -> None:
         """Non-admin agents cannot invite users."""
-        response = authenticated_client.post("/api/v1/users/invite/", {
-            "email": "blocked@test.example",
-            "first_name": "Blocked",
-            "last_name": "User",
-        })
+        response = authenticated_client.post(
+            "/api/v1/users/invite/",
+            {
+                "email": "blocked@test.example",
+                "first_name": "Blocked",
+                "last_name": "User",
+            },
+        )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_invite_duplicate_email_rejected(self, admin_client, agent) -> None:
         """Inviting an existing email is rejected."""
-        response = admin_client.post("/api/v1/users/invite/", {
-            "email": agent.email,
-            "first_name": "Dup",
-            "last_name": "Agent",
-        })
+        response = admin_client.post(
+            "/api/v1/users/invite/",
+            {
+                "email": agent.email,
+                "first_name": "Dup",
+                "last_name": "Agent",
+            },
+        )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_toggle_active_as_admin(self, admin_client, organization, admin_user) -> None:
+    def test_toggle_active_as_admin(
+        self, admin_client, organization, admin_user
+    ) -> None:
         """Admins can deactivate another user."""
-        target = UserFactory(organization=organization, role=User.Role.AGENT, is_active=True)
+        target = UserFactory(
+            organization=organization, role=User.Role.AGENT, is_active=True
+        )
         response = admin_client.post(f"/api/v1/users/{target.id}/toggle_active/")
         assert response.status_code == status.HTTP_200_OK
         assert response.data["is_active"] is False
@@ -123,8 +142,12 @@ class TestUserAPI:
         response = admin_client.post(f"/api/v1/users/{admin_user.id}/toggle_active/")
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_toggle_active_as_agent_forbidden(self, authenticated_client, organization) -> None:
+    def test_toggle_active_as_agent_forbidden(
+        self, authenticated_client, organization
+    ) -> None:
         """Non-admin agents cannot toggle user status."""
         target = UserFactory(organization=organization, role=User.Role.AGENT)
-        response = authenticated_client.post(f"/api/v1/users/{target.id}/toggle_active/")
+        response = authenticated_client.post(
+            f"/api/v1/users/{target.id}/toggle_active/"
+        )
         assert response.status_code == status.HTTP_403_FORBIDDEN

@@ -110,9 +110,7 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
-    "DEFAULT_PERMISSION_CLASSES": (
-        "rest_framework.permissions.IsAuthenticated",
-    ),
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
@@ -120,9 +118,7 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
-    "DEFAULT_RENDERER_CLASSES": (
-        "rest_framework.renderers.JSONRenderer",
-    ),
+    "DEFAULT_RENDERER_CLASSES": ("rest_framework.renderers.JSONRenderer",),
 }
 
 # =============================================================================
@@ -165,7 +161,9 @@ CHANNEL_LAYERS = {
 # Celery
 # =============================================================================
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/1")
-CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/2")
+CELERY_RESULT_BACKEND = config(
+    "CELERY_RESULT_BACKEND", default="redis://localhost:6379/2"
+)
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
@@ -236,8 +234,12 @@ WHISPER_DEVICE = config("WHISPER_DEVICE", default="cpu")
 # =============================================================================
 FEATURE_AI_TRANSCRIPTION = config("FEATURE_AI_TRANSCRIPTION", default=False, cast=bool)
 FEATURE_AI_TRIAGE = config("FEATURE_AI_TRIAGE", default=False, cast=bool)
-FEATURE_AI_SMART_REDACTION = config("FEATURE_AI_SMART_REDACTION", default=False, cast=bool)
-FEATURE_AI_SENTIMENT_ANALYSIS = config("FEATURE_AI_SENTIMENT_ANALYSIS", default=False, cast=bool)
+FEATURE_AI_SMART_REDACTION = config(
+    "FEATURE_AI_SMART_REDACTION", default=False, cast=bool
+)
+FEATURE_AI_SENTIMENT_ANALYSIS = config(
+    "FEATURE_AI_SENTIMENT_ANALYSIS", default=False, cast=bool
+)
 
 # =============================================================================
 # Telemetry (opt-in only)

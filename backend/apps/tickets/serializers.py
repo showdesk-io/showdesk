@@ -4,7 +4,15 @@ from rest_framework import serializers
 
 from apps.organizations.serializers import UserSerializer
 
-from .models import PriorityLevel, SavedView, SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
+from .models import (
+    PriorityLevel,
+    SavedView,
+    SLAPolicy,
+    Tag,
+    Ticket,
+    TicketAttachment,
+    TicketMessage,
+)
 
 
 class PriorityLevelSerializer(serializers.ModelSerializer):
@@ -62,9 +70,24 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
 
     # Blocked extensions (executable, dangerous)
     BLOCKED_EXTENSIONS = {
-        ".exe", ".bat", ".cmd", ".com", ".msi", ".scr",
-        ".pif", ".vbs", ".vbe", ".js", ".jse", ".wsf",
-        ".wsh", ".ps1", ".sh", ".csh", ".dll", ".sys",
+        ".exe",
+        ".bat",
+        ".cmd",
+        ".com",
+        ".msi",
+        ".scr",
+        ".pif",
+        ".vbs",
+        ".vbe",
+        ".js",
+        ".jse",
+        ".wsf",
+        ".wsh",
+        ".ps1",
+        ".sh",
+        ".csh",
+        ".dll",
+        ".sys",
     }
 
     class Meta:
@@ -94,9 +117,7 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
 
         _, ext = os.path.splitext(value.name)
         if ext.lower() in self.BLOCKED_EXTENSIONS:
-            raise serializers.ValidationError(
-                f"File type '{ext}' is not allowed."
-            )
+            raise serializers.ValidationError(f"File type '{ext}' is not allowed.")
 
         return value
 
@@ -270,7 +291,13 @@ class SavedViewSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "organization", "created_by", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "organization",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ]
 
     def validate_name(self, value):  # noqa: ANN001, ANN201
         """Ensure the name is unique within the organization."""

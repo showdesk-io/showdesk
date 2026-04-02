@@ -7,47 +7,171 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('tickets', '0001_initial'),
+        ("tickets", "0001_initial"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='VideoRecording',
+            name="VideoRecording",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('original_file', models.FileField(help_text='Original uploaded video file.', upload_to='videos/originals/%Y/%m/%d/')),
-                ('processed_file', models.FileField(blank=True, help_text='Processed/compressed video file.', upload_to='videos/processed/%Y/%m/%d/')),
-                ('thumbnail', models.ImageField(blank=True, help_text='Auto-generated video thumbnail.', upload_to='videos/thumbnails/%Y/%m/%d/')),
-                ('status', models.CharField(choices=[('uploading', 'Uploading'), ('processing', 'Processing'), ('ready', 'Ready'), ('failed', 'Failed'), ('expired', 'Expired')], db_index=True, default='uploading', max_length=20)),
-                ('recording_type', models.CharField(choices=[('screen', 'Screen Only'), ('screen_camera', 'Screen + Camera'), ('camera', 'Camera Only')], default='screen', max_length=20)),
-                ('duration_seconds', models.FloatField(blank=True, help_text='Duration of the video in seconds.', null=True)),
-                ('file_size', models.PositiveBigIntegerField(blank=True, help_text='File size in bytes.', null=True)),
-                ('width', models.PositiveIntegerField(blank=True, null=True)),
-                ('height', models.PositiveIntegerField(blank=True, null=True)),
-                ('mime_type', models.CharField(default='video/webm', max_length=50)),
-                ('has_audio', models.BooleanField(default=False)),
-                ('has_camera', models.BooleanField(default=False)),
-                ('transcription', models.TextField(blank=True, help_text='Auto-generated transcription of the audio track.')),
-                ('transcription_status', models.CharField(choices=[('pending', 'Pending'), ('processing', 'Processing'), ('completed', 'Completed'), ('failed', 'Failed'), ('disabled', 'Disabled')], default='disabled', max_length=20)),
-                ('transcription_language', models.CharField(blank=True, max_length=10)),
-                ('expires_at', models.DateTimeField(blank=True, db_index=True, help_text='When this video will be automatically deleted.', null=True)),
-                ('is_redacted', models.BooleanField(default=False, help_text='Whether sensitive content has been redacted.')),
-                ('processing_started_at', models.DateTimeField(blank=True, null=True)),
-                ('processing_completed_at', models.DateTimeField(blank=True, null=True)),
-                ('processing_error', models.TextField(blank=True)),
-                ('recorded_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='recordings', to=settings.AUTH_USER_MODEL)),
-                ('ticket', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='videos', to='tickets.ticket')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "original_file",
+                    models.FileField(
+                        help_text="Original uploaded video file.",
+                        upload_to="videos/originals/%Y/%m/%d/",
+                    ),
+                ),
+                (
+                    "processed_file",
+                    models.FileField(
+                        blank=True,
+                        help_text="Processed/compressed video file.",
+                        upload_to="videos/processed/%Y/%m/%d/",
+                    ),
+                ),
+                (
+                    "thumbnail",
+                    models.ImageField(
+                        blank=True,
+                        help_text="Auto-generated video thumbnail.",
+                        upload_to="videos/thumbnails/%Y/%m/%d/",
+                    ),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("uploading", "Uploading"),
+                            ("processing", "Processing"),
+                            ("ready", "Ready"),
+                            ("failed", "Failed"),
+                            ("expired", "Expired"),
+                        ],
+                        db_index=True,
+                        default="uploading",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "recording_type",
+                    models.CharField(
+                        choices=[
+                            ("screen", "Screen Only"),
+                            ("screen_camera", "Screen + Camera"),
+                            ("camera", "Camera Only"),
+                        ],
+                        default="screen",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "duration_seconds",
+                    models.FloatField(
+                        blank=True,
+                        help_text="Duration of the video in seconds.",
+                        null=True,
+                    ),
+                ),
+                (
+                    "file_size",
+                    models.PositiveBigIntegerField(
+                        blank=True, help_text="File size in bytes.", null=True
+                    ),
+                ),
+                ("width", models.PositiveIntegerField(blank=True, null=True)),
+                ("height", models.PositiveIntegerField(blank=True, null=True)),
+                ("mime_type", models.CharField(default="video/webm", max_length=50)),
+                ("has_audio", models.BooleanField(default=False)),
+                ("has_camera", models.BooleanField(default=False)),
+                (
+                    "transcription",
+                    models.TextField(
+                        blank=True,
+                        help_text="Auto-generated transcription of the audio track.",
+                    ),
+                ),
+                (
+                    "transcription_status",
+                    models.CharField(
+                        choices=[
+                            ("pending", "Pending"),
+                            ("processing", "Processing"),
+                            ("completed", "Completed"),
+                            ("failed", "Failed"),
+                            ("disabled", "Disabled"),
+                        ],
+                        default="disabled",
+                        max_length=20,
+                    ),
+                ),
+                ("transcription_language", models.CharField(blank=True, max_length=10)),
+                (
+                    "expires_at",
+                    models.DateTimeField(
+                        blank=True,
+                        db_index=True,
+                        help_text="When this video will be automatically deleted.",
+                        null=True,
+                    ),
+                ),
+                (
+                    "is_redacted",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Whether sensitive content has been redacted.",
+                    ),
+                ),
+                ("processing_started_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "processing_completed_at",
+                    models.DateTimeField(blank=True, null=True),
+                ),
+                ("processing_error", models.TextField(blank=True)),
+                (
+                    "recorded_by",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="recordings",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "ticket",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="videos",
+                        to="tickets.ticket",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-created_at'],
-                'indexes': [models.Index(fields=['ticket', 'status'], name='videos_vide_ticket__008e50_idx'), models.Index(fields=['expires_at'], name='videos_vide_expires_5f96aa_idx')],
+                "ordering": ["-created_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["ticket", "status"],
+                        name="videos_vide_ticket__008e50_idx",
+                    ),
+                    models.Index(
+                        fields=["expires_at"], name="videos_vide_expires_5f96aa_idx"
+                    ),
+                ],
             },
         ),
     ]

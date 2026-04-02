@@ -18,7 +18,14 @@ class CategoryAdmin(admin.ModelAdmin):
 class ArticleAdmin(admin.ModelAdmin):
     """Admin for knowledge base articles."""
 
-    list_display = ["title", "category", "status", "author", "view_count", "published_at"]
+    list_display = [
+        "title",
+        "category",
+        "status",
+        "author",
+        "view_count",
+        "published_at",
+    ]
     list_filter = ["status", "category", "organization"]
     search_fields = ["title", "body"]
     prepopulated_fields = {"slug": ("title",)}

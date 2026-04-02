@@ -50,17 +50,19 @@ class Command(BaseCommand):
         self._create_messages(tickets, agents, end_users)
         self._create_knowledge_base(org, agents[0])
 
-        self.stdout.write(self.style.SUCCESS(
-            "\nSeed complete!\n"
-            f"  Organization: {org.name} (token: {org.api_token})\n"
-            f"  Agents: {', '.join(a.email for a in agents)}\n"
-            f"  End users: {', '.join(u.email for u in end_users)}\n"
-            f"  Team: {team.name}\n"
-            f"  Tags: {', '.join(t.name for t in tags)}\n"
-            f"  Tickets: {len(tickets)}\n"
-            f"\n  Login with: admin@showdesk.local (OTP via email)\n"
-            f"  Emails visible at: http://localhost/mailpit/\n"
-        ))
+        self.stdout.write(
+            self.style.SUCCESS(
+                "\nSeed complete!\n"
+                f"  Organization: {org.name} (token: {org.api_token})\n"
+                f"  Agents: {', '.join(a.email for a in agents)}\n"
+                f"  End users: {', '.join(u.email for u in end_users)}\n"
+                f"  Team: {team.name}\n"
+                f"  Tags: {', '.join(t.name for t in tags)}\n"
+                f"  Tickets: {len(tickets)}\n"
+                f"\n  Login with: admin@showdesk.local (OTP via email)\n"
+                f"  Emails visible at: http://localhost/mailpit/\n"
+            )
+        )
 
     def _flush(self) -> None:
         """Delete all seeded data."""
@@ -404,7 +406,9 @@ class Command(BaseCommand):
             )
             if created:
                 ticket.tags.set(tag_list)
-                self.stdout.write(f"  Created ticket: {ticket.reference} - {ticket.title}")
+                self.stdout.write(
+                    f"  Created ticket: {ticket.reference} - {ticket.title}"
+                )
             tickets.append(ticket)
 
         # Sync the org ticket_counter so next_ticket_reference() works

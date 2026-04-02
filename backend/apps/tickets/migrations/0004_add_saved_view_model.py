@@ -7,30 +7,68 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('organizations', '0002_otpcode'),
-        ('tickets', '0003_seed_default_priorities'),
+        ("organizations", "0002_otpcode"),
+        ("tickets", "0003_seed_default_priorities"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='SavedView',
+            name="SavedView",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('name', models.CharField(max_length=100)),
-                ('filters', models.JSONField(default=dict, help_text='Filter values: {status, priority, assigned_agent, assigned_team, tags, search}.')),
-                ('is_shared', models.BooleanField(default=False, help_text='If true, visible to all agents in the organization.')),
-                ('position', models.PositiveIntegerField(default=0, help_text='Sort order for display in the chips bar.')),
-                ('created_by', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='saved_views', to=settings.AUTH_USER_MODEL)),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='saved_views', to='organizations.organization')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("name", models.CharField(max_length=100)),
+                (
+                    "filters",
+                    models.JSONField(
+                        default=dict,
+                        help_text="Filter values: {status, priority, assigned_agent, assigned_team, tags, search}.",
+                    ),
+                ),
+                (
+                    "is_shared",
+                    models.BooleanField(
+                        default=False,
+                        help_text="If true, visible to all agents in the organization.",
+                    ),
+                ),
+                (
+                    "position",
+                    models.PositiveIntegerField(
+                        default=0, help_text="Sort order for display in the chips bar."
+                    ),
+                ),
+                (
+                    "created_by",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="saved_views",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="saved_views",
+                        to="organizations.organization",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['position', 'created_at'],
-                'unique_together': {('organization', 'name')},
+                "ordering": ["position", "created_at"],
+                "unique_together": {("organization", "name")},
             },
         ),
     ]

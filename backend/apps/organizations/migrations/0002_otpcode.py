@@ -5,24 +5,36 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('organizations', '0001_initial'),
+        ("organizations", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='OTPCode',
+            name="OTPCode",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('email', models.EmailField(db_index=True, max_length=254)),
-                ('code', models.CharField(max_length=8)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('used_at', models.DateTimeField(blank=True, null=True)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("email", models.EmailField(db_index=True, max_length=254)),
+                ("code", models.CharField(max_length=8)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("used_at", models.DateTimeField(blank=True, null=True)),
             ],
             options={
-                'ordering': ['-created_at'],
-                'indexes': [models.Index(fields=['email', 'code', 'created_at'], name='organizatio_email_4d69e7_idx')],
+                "ordering": ["-created_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["email", "code", "created_at"],
+                        name="organizatio_email_4d69e7_idx",
+                    )
+                ],
             },
         ),
     ]
