@@ -41,7 +41,6 @@ jobs:
     name: Publish to npmjs.com
     needs: build
     runs-on: ubuntu-latest
-    environment: npm
     permissions:
       id-token: write
     defaults:
@@ -62,8 +61,6 @@ jobs:
 
       - name: Publish to npmjs.com (OIDC provenance)
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-ghpr:
     name: Publish to GitHub Packages
