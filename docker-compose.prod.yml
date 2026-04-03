@@ -4,8 +4,8 @@
 # Deploy via Portainer as a stack.
 #
 # Profiles:
-#   - (default)  Application services + Redis. PostgreSQL and S3 are external.
-#   - local      Also include PostgreSQL and MinIO for all-in-one deploys.
+#   - (default)  Application services only. PostgreSQL, Redis, S3 are external.
+#   - local      Also include PostgreSQL, Redis, and MinIO containers.
 #
 # Usage:
 #   docker compose -f docker-compose.prod.yml up -d                  # managed DB
@@ -39,7 +39,7 @@ services:
   # ---------------------------------------------------------------------------
   migrate:
     image: ghcr.io/showdesk-io/showdesk-backend:latest
-    command: echo "Migrations complete"
+    command: migrate
     env_file:
       - .env
     environment:
@@ -48,6 +48,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+        required: false
       postgres:
         condition: service_healthy
         required: false
@@ -57,14 +58,7 @@ services:
   # ---------------------------------------------------------------------------
   backend:
     image: ghcr.io/showdesk-io/showdesk-backend:latest
-    command: >
-      gunicorn config.asgi:application
-      -k uvicorn.workers.UvicornWorker
-      --bind 0.0.0.0:8000
-      --workers ${GUNICORN_WORKERS:-4}
-      --timeout 120
-      --access-logfile -
-      --error-logfile -
+    command: server
     env_file:
       - .env
     environment:
@@ -86,12 +80,7 @@ services:
   # ---------------------------------------------------------------------------
   celery-worker:
     image: ghcr.io/showdesk-io/showdesk-backend:latest
-    command: >
-      celery -A config worker
-      -l warning
-      -Q default,video_processing
-      --concurrency ${CELERY_CONCURRENCY:-4}
-      --max-tasks-per-child 100
+    command: worker
     env_file:
       - .env
     environment:
@@ -107,7 +96,7 @@ services:
   # ---------------------------------------------------------------------------
   celery-beat:
     image: ghcr.io/showdesk-io/showdesk-backend:latest
-    command: celery -A config beat -l warning
+    command: beat
     env_file:
       - .env
     environment:
@@ -126,10 +115,12 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # Redis (always containerized — used for cache + Celery broker)
+  # Redis (profile: local)
+  # When using managed Redis, set REDIS_URL / CELERY_BROKER_URL in .env.
   # ---------------------------------------------------------------------------
   redis:
     image: redis:8-alpine
+    profiles: [local]
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -141,7 +132,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # PostgreSQL (profile: local)
-  # When using managed PostgreSQL, remove this and set DATABASE_URL in .env.
+  # When using managed PostgreSQL, set DATABASE_URL in .env.
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:17-alpine
@@ -161,7 +152,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # MinIO S3 (profile: local)
-  # When using managed S3, remove this and set S3_* vars in .env.
+  # When using managed S3, set S3_* vars in .env.
   # ---------------------------------------------------------------------------
   minio:
     image: minio/minio
