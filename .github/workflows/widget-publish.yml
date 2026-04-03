@@ -8,11 +8,42 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  packages: write
 
 jobs:
-  publish:
-    name: Build & Publish Widget
+  build:
+    name: Build Widget
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: widget
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: widget-dist
+          path: widget/dist
+
+  publish-npm:
+    name: Publish to npmjs.com
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
     defaults:
       run:
         working-directory: widget
@@ -24,13 +55,40 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Install dependencies
-        run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: widget-dist
+          path: widget/dist
 
-      - name: Build
-        run: npm run build
-
-      - name: Publish to npmjs.com
-        run: npm publish --access public
+      - name: Publish to npmjs.com (OIDC provenance)
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-ghpr:
+    name: Publish to GitHub Packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    defaults:
+      run:
+        working-directory: widget
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: "@showdesk"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: widget-dist
+          path: widget/dist
+
+      - name: Publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
