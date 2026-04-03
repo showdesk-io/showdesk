@@ -1,15 +1,20 @@
 # =============================================================================
 # Showdesk Production Docker Compose
 # =============================================================================
-# This file is designed for deployment with Portainer.
-# Databases (PostgreSQL, Redis) and S3 storage are expected to be managed
-# externally (e.g., Scaleway managed services) and configured via environment
-# variables. No critical data should reside on non-managed servers.
+# Deploy via Portainer as a stack.
+#
+# Profiles:
+#   - (default)  Application services + Redis. PostgreSQL and S3 are external.
+#   - local      Also include PostgreSQL and MinIO for all-in-one deploys.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d                  # managed DB
+#   docker compose -f docker-compose.prod.yml --profile local up -d  # all-in-one
 # =============================================================================
 
 services:
   # ---------------------------------------------------------------------------
-  # Caddy (reverse proxy — single entry point, automatic HTTPS)
+  # Caddy (reverse proxy — automatic HTTPS via Let's Encrypt)
   # ---------------------------------------------------------------------------
   caddy:
     image: caddy:2-alpine
@@ -30,17 +35,33 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # Database Migrations (one-shot, runs before app services)
+  # ---------------------------------------------------------------------------
+  migrate:
+    image: ghcr.io/showdesk-io/showdesk-backend:latest
+    command: echo "Migrations complete"
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - RUN_MIGRATIONS=${RUN_MIGRATIONS:-false}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+        required: false
+
+  # ---------------------------------------------------------------------------
   # Django Backend (Gunicorn + Uvicorn for WebSockets)
   # ---------------------------------------------------------------------------
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/showdesk-io/showdesk-backend:latest
     command: >
       gunicorn config.asgi:application
       -k uvicorn.workers.UvicornWorker
       --bind 0.0.0.0:8000
-      --workers 4
+      --workers ${GUNICORN_WORKERS:-4}
       --timeout 120
       --access-logfile -
       --error-logfile -
@@ -48,6 +69,10 @@ services:
       - .env
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.production
+      - RUN_MIGRATIONS=false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
@@ -60,64 +85,98 @@ services:
   # Celery Worker
   # ---------------------------------------------------------------------------
   celery-worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/showdesk-io/showdesk-backend:latest
     command: >
       celery -A config worker
       -l warning
       -Q default,video_processing
-      --concurrency 4
+      --concurrency ${CELERY_CONCURRENCY:-4}
       --max-tasks-per-child 100
     env_file:
       - .env
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.production
-    restart: unless-stopped
+      - RUN_MIGRATIONS=false
     depends_on:
-      backend:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
   # ---------------------------------------------------------------------------
   # Celery Beat (scheduler)
   # ---------------------------------------------------------------------------
   celery-beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/showdesk-io/showdesk-backend:latest
     command: celery -A config beat -l warning
     env_file:
       - .env
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.production
-    restart: unless-stopped
+      - RUN_MIGRATIONS=false
     depends_on:
-      backend:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
   # ---------------------------------------------------------------------------
   # React Frontend (Nginx serving static build)
   # ---------------------------------------------------------------------------
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.prod
+    image: ghcr.io/showdesk-io/showdesk-frontend:latest
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # LiveKit (optional, self-hosted)
+  # Redis (always containerized — used for cache + Celery broker)
   # ---------------------------------------------------------------------------
-  livekit:
-    image: livekit/livekit-server:latest
-    command: --config /etc/livekit.yaml
-    ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "7882:7882/udp"
+  redis:
+    image: redis:8-alpine
     volumes:
-      - ./docker/livekit.yaml:/etc/livekit.yaml
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL (profile: local)
+  # When using managed PostgreSQL, remove this and set DATABASE_URL in .env.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    profiles: [local]
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-showdesk}
+      - POSTGRES_USER=${POSTGRES_USER:-showdesk}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-showdesk}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-showdesk}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # MinIO S3 (profile: local)
+  # When using managed S3, remove this and set S3_* vars in .env.
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio
+    profiles: [local]
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY_ID:-showdesk}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_ACCESS_KEY:-showdesk-secret}
+    volumes:
+      - minio_data:/data
     restart: unless-stopped
 
 volumes:
   caddy_data:
   caddy_config:
+  redis_data:
+  postgres_data:
+  minio_data:
