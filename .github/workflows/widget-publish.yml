@@ -6,15 +6,14 @@ on:
       - "widget-v*"
   workflow_dispatch:
 
-permissions:
-  contents: read
-  id-token: write
-  packages: write
+permissions: {}
 
 jobs:
   build:
     name: Build Widget
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: widget
@@ -42,6 +41,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     defaults:
       run:
@@ -54,12 +54,15 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
       - uses: actions/download-artifact@v4
         with:
           name: widget-dist
           path: widget/dist
 
-      - name: Publish to npmjs.com (OIDC provenance)
+      - name: Publish to npmjs.com (OIDC, no token)
         run: npm publish --access public --provenance
 
   publish-ghpr:
@@ -67,6 +70,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: write
     defaults:
       run:
