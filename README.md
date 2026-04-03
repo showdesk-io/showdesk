@@ -142,11 +142,26 @@ showdesk/
 
 ### Widget Integration
 
-Add the widget to any website with a single script tag:
+Install via npm:
+
+```bash
+npm install @showdesk/widget
+```
+
+```javascript
+import { init, open } from "@showdesk/widget";
+
+init({
+  token: "your-organization-api-token",
+  user: { id: "usr_123", name: "Jane", email: "jane@example.com" },
+});
+```
+
+Or use the CDN with a single script tag (no build step required):
 
 ```html
 <script
-  src="https://your-showdesk-instance.com/widget.js"
+  src="https://unpkg.com/@showdesk/widget/dist/widget.js"
   data-token="your-organization-api-token"
   data-color="#6366F1"
   data-position="bottom-right">
@@ -229,15 +244,40 @@ make test-cov        # Backend tests with coverage
 
 ### Production Deployment
 
-```bash
-# Set your domain
-export SHOWDESK_DOMAIN=support.yourcompany.com
+The production stack uses pre-built images from `ghcr.io` and is designed for deployment via [Portainer](https://www.portainer.io/) or `docker compose`.
 
-# Deploy with production compose
+```bash
+# Copy and configure environment
+cp .env.example .env
+# Edit .env: set DJANGO_SECRET_KEY, DATABASE_URL, S3_*, SHOWDESK_DOMAIN, etc.
+
+# Deploy with external managed databases (PostgreSQL, Redis, S3)
 docker compose -f docker-compose.prod.yml up -d
+
+# Or deploy all-in-one with local databases
+docker compose -f docker-compose.prod.yml --profile local up -d
 ```
 
-Caddy handles TLS certificates automatically via Let's Encrypt. PostgreSQL and Redis are expected to be managed externally (e.g., Scaleway, AWS RDS).
+Services and images:
+
+| Service | Image | Role |
+|---|---|---|
+| `caddy` | `caddy:2-alpine` | Reverse proxy, automatic HTTPS via Let's Encrypt |
+| `migrate` | `ghcr.io/showdesk-io/showdesk-backend` | One-shot: runs migrations then exits |
+| `backend` | `ghcr.io/showdesk-io/showdesk-backend` | Django API + WebSocket (Gunicorn/Uvicorn) |
+| `celery-worker` | `ghcr.io/showdesk-io/showdesk-backend` | Async task processing |
+| `celery-beat` | `ghcr.io/showdesk-io/showdesk-backend` | Periodic task scheduler |
+| `frontend` | `ghcr.io/showdesk-io/showdesk-frontend` | React SPA (Nginx) |
+
+Optional services (profile `local`):
+
+| Service | Image | When to use |
+|---|---|---|
+| `postgres` | `postgres:17-alpine` | No managed PostgreSQL available |
+| `redis` | `redis:8-alpine` | No managed Redis available |
+| `minio` | `minio/minio` | No managed S3 available |
+
+The backend image uses a unified entrypoint (`entrypoint.sh`) that accepts a mode argument: `server`, `worker`, `beat`, or `migrate`. Set `RUN_MIGRATIONS=true` in `.env` to apply migrations automatically on deploy.
 
 ## Contributing
 
