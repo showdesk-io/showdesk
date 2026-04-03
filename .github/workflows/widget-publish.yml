@@ -6,7 +6,8 @@ on:
       - "widget-v*"
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -65,31 +66,3 @@ jobs:
       - name: Publish to npmjs.com (OIDC, no token)
         run: npm publish --access public --provenance
 
-  publish-ghpr:
-    name: Publish to GitHub Packages
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    defaults:
-      run:
-        working-directory: widget
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://npm.pkg.github.com
-          scope: "@showdesk"
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: widget-dist
-          path: widget/dist
-
-      - name: Publish to GitHub Packages
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
