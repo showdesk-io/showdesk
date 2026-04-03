@@ -1,6 +1,6 @@
 {
   "name": "@showdesk/widget",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Showdesk embeddable support widget — video-first bug reports",
   "type": "module",
   "main": "dist/widget.js",
