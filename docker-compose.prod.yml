@@ -12,6 +12,68 @@
 #   docker compose -f docker-compose.prod.yml --profile local up -d  # all-in-one
 # =============================================================================
 
+# -- Shared environment for all backend services -----------------------------
+x-backend-env: &backend-env
+  DJANGO_SETTINGS_MODULE: config.settings.production
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+  DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost}
+  SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-True}
+  DATABASE_URL: ${DATABASE_URL:-postgres://showdesk:showdesk@postgres:5432/showdesk}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  S3_PUBLIC_URL: ${S3_PUBLIC_URL:-}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  S3_BUCKET_NAME: ${S3_BUCKET_NAME:-showdesk-media}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://localhost}
+  SITE_URL: ${SITE_URL:-https://localhost}
+  EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.smtp.EmailBackend}
+  EMAIL_HOST: ${EMAIL_HOST:-smtp.example.com}
+  EMAIL_PORT: ${EMAIL_PORT:-587}
+  EMAIL_USE_TLS: ${EMAIL_USE_TLS:-True}
+  EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+  EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+  DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@showdesk.io}
+  LIVEKIT_URL: ${LIVEKIT_URL:-}
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+
+configs:
+  caddyfile:
+    content: |
+      ${SHOWDESK_DOMAIN:-localhost} {
+        header {
+          X-Content-Type-Options nosniff
+          X-Frame-Options DENY
+          Referrer-Policy strict-origin-when-cross-origin
+          Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+          -Server
+        }
+
+        handle /api/* {
+          reverse_proxy backend:8000
+        }
+
+        handle /admin/* {
+          reverse_proxy backend:8000
+        }
+
+        handle /static/* {
+          reverse_proxy backend:8000
+        }
+
+        handle /ws/* {
+          reverse_proxy backend:8000
+        }
+
+        handle {
+          reverse_proxy frontend:80
+        }
+      }
+
 services:
   # ---------------------------------------------------------------------------
   # Caddy (reverse proxy — automatic HTTPS via Let's Encrypt)
@@ -19,14 +81,14 @@ services:
   caddy:
     image: caddy:2-alpine
     ports:
-      - "80:80"
-      - "443:443"
+      - "${EXTERNAL_IP:-0.0.0.0}:80:80"
+      - "${EXTERNAL_IP:-0.0.0.0}:443:443"
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
     volumes:
-      - ./docker/Caddyfile.prod:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
-    environment:
-      - SHOWDESK_DOMAIN=${SHOWDESK_DOMAIN:-localhost}
     depends_on:
       backend:
         condition: service_healthy
@@ -40,11 +102,9 @@ services:
   migrate:
     image: ghcr.io/showdesk-io/showdesk-backend:latest
     command: migrate
-    env_file:
-      - .env
     environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.production
-      - RUN_MIGRATIONS=${RUN_MIGRATIONS:-false}
+      <<: *backend-env
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-false}
     depends_on:
       redis:
         condition: service_healthy
@@ -59,11 +119,10 @@ services:
   backend:
     image: ghcr.io/showdesk-io/showdesk-backend:latest
     command: server
-    env_file:
-      - .env
     environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.production
-      - RUN_MIGRATIONS=false
+      <<: *backend-env
+      RUN_MIGRATIONS: "false"
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -81,11 +140,10 @@ services:
   celery-worker:
     image: ghcr.io/showdesk-io/showdesk-backend:latest
     command: worker
-    env_file:
-      - .env
     environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.production
-      - RUN_MIGRATIONS=false
+      <<: *backend-env
+      RUN_MIGRATIONS: "false"
+      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -97,11 +155,9 @@ services:
   celery-beat:
     image: ghcr.io/showdesk-io/showdesk-backend:latest
     command: beat
-    env_file:
-      - .env
     environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.production
-      - RUN_MIGRATIONS=false
+      <<: *backend-env
+      RUN_MIGRATIONS: "false"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -116,7 +172,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # Redis (profile: local)
-  # When using managed Redis, set REDIS_URL / CELERY_BROKER_URL in .env.
+  # When using managed Redis, set REDIS_URL / CELERY_BROKER_URL.
   # ---------------------------------------------------------------------------
   redis:
     image: redis:8-alpine
@@ -132,15 +188,15 @@ services:
 
   # ---------------------------------------------------------------------------
   # PostgreSQL (profile: local)
-  # When using managed PostgreSQL, set DATABASE_URL in .env.
+  # When using managed PostgreSQL, set DATABASE_URL.
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:17-alpine
     profiles: [local]
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-showdesk}
-      - POSTGRES_USER=${POSTGRES_USER:-showdesk}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-showdesk}
+      POSTGRES_DB: ${POSTGRES_DB:-showdesk}
+      POSTGRES_USER: ${POSTGRES_USER:-showdesk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-showdesk}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -152,15 +208,15 @@ services:
 
   # ---------------------------------------------------------------------------
   # MinIO S3 (profile: local)
-  # When using managed S3, set S3_* vars in .env.
+  # When using managed S3, set S3_* vars.
   # ---------------------------------------------------------------------------
   minio:
     image: minio/minio
     profiles: [local]
     command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=${S3_ACCESS_KEY_ID:-showdesk}
-      - MINIO_ROOT_PASSWORD=${S3_SECRET_ACCESS_KEY:-showdesk-secret}
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-showdesk}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-showdesk-secret}
     volumes:
       - minio_data:/data
     restart: unless-stopped
