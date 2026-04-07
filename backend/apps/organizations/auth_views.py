@@ -132,6 +132,11 @@ class VerifyOTPView(APIView):
         # Mark OTP as used
         otp.mark_used()
 
+        # Mark user as verified on first successful OTP
+        if not user.is_verified:
+            user.is_verified = True
+            user.save(update_fields=["is_verified"])
+
         # Issue JWT tokens
         refresh = RefreshToken.for_user(user)
 

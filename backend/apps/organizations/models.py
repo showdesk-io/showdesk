@@ -160,6 +160,10 @@ class User(AbstractUser):
         default=True,
         help_text="Whether this agent is currently available for ticket assignment.",
     )
+    is_verified = models.BooleanField(
+        default=False,
+        help_text="Whether this user has verified their email via OTP at least once.",
+    )
 
     objects = UserManager()
 

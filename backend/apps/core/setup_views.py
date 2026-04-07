@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 def is_instance_initialized() -> bool:
-    """Check if the instance has any users."""
-    return User.objects.exists()
+    """Check if the instance has a verified staff user."""
+    return User.objects.filter(is_staff=True, is_verified=True).exists()
 
 
 class SetupStatusView(APIView):
@@ -70,6 +70,9 @@ class SetupInitializeView(APIView):
 
         try:
             with transaction.atomic():
+                # Clean up any previous unverified staff users (failed setup attempts)
+                User.objects.filter(is_staff=True, is_verified=False).delete()
+
                 # Create the platform admin
                 user = User.objects.create_superuser(
                     email=email,
