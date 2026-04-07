@@ -8,6 +8,7 @@ import logging
 
 from django.conf import settings
 from django.core.mail import send_mail
+from django.db import transaction
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
@@ -67,18 +68,28 @@ class SetupInitializeView(APIView):
         first_name = serializer.validated_data["first_name"]
         last_name = serializer.validated_data["last_name"]
 
-        # Create the platform admin
-        user = User.objects.create_superuser(
-            email=email,
-            first_name=first_name,
-            last_name=last_name,
-        )
-        logger.info("Platform admin created: %s", user.email)
+        try:
+            with transaction.atomic():
+                # Create the platform admin
+                user = User.objects.create_superuser(
+                    email=email,
+                    first_name=first_name,
+                    last_name=last_name,
+                )
 
-        # Generate and send OTP
-        otp = OTPCode.generate(email)
-        self._send_otp_email(email, otp.code)
-        logger.info("OTP sent to new platform admin: %s", email)
+                # Generate and send OTP — if email fails, rollback user creation
+                otp = OTPCode.generate(email)
+                self._send_otp_email(email, otp.code)
+
+            logger.info("Platform admin created and OTP sent: %s", user.email)
+        except Exception:
+            logger.exception("Setup failed for %s", email)
+            return Response(
+                {
+                    "detail": "Failed to send verification email. Please check your email configuration and try again."
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         return Response(
             {"detail": "Admin account created. Check your email for the login code."},
