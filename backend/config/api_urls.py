@@ -21,6 +21,7 @@ from apps.tickets.views import (
 from apps.videos.views import VideoRecordingViewSet
 from apps.knowledge_base.views import ArticleViewSet, CategoryViewSet
 from apps.core.views import HealthCheckView
+from apps.core.setup_views import SetupStatusView, SetupInitializeView
 
 router = DefaultRouter()
 
@@ -52,4 +53,7 @@ urlpatterns = [
     # JWT refresh (still needed for token rotation)
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("health/", HealthCheckView.as_view(), name="health-check"),
+    # Instance setup (first-time initialization)
+    path("setup/status/", SetupStatusView.as_view(), name="setup-status"),
+    path("setup/initialize/", SetupInitializeView.as_view(), name="setup-initialize"),
 ]

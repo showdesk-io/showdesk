@@ -1,61 +1,51 @@
 /**
- * Login page with OTP authentication.
+ * Instance setup wizard — shown when no users exist.
  *
  * Two-step flow:
- * 1. Enter email -> receive OTP code via email
- * 2. Enter OTP code -> receive JWT tokens
+ * 1. Enter admin name + email -> creates platform admin + sends OTP
+ * 2. Enter OTP code -> verifies and logs in
  */
 
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import { requestOTP, verifyOTP } from "@/api/auth";
-import { fetchSetupStatus } from "@/api/setup";
+import { initializeInstance } from "@/api/setup";
+import { verifyOTP } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";
 
-type Step = "email" | "otp";
+type Step = "admin" | "otp";
 
-export function LoginPage() {
-  const [step, setStep] = useState<Step>("email");
+export function SetupPage() {
+  const [step, setStep] = useState<Step>("admin");
   const [email, setEmail] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [code, setCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [checkingSetup, setCheckingSetup] = useState(true);
   const navigate = useNavigate();
   const setTokens = useAuthStore((s) => s.setTokens);
   const codeInputRef = useRef<HTMLInputElement>(null);
 
-  // Redirect to setup wizard if instance is not initialized
-  useEffect(() => {
-    fetchSetupStatus()
-      .then((data) => {
-        if (!data.initialized) {
-          navigate("/setup", { replace: true });
-        }
-      })
-      .catch(() => {
-        // If the endpoint fails, assume initialized
-      })
-      .finally(() => setCheckingSetup(false));
-  }, [navigate]);
-
-  // Auto-focus code input when step changes
   useEffect(() => {
     if (step === "otp") {
       codeInputRef.current?.focus();
     }
   }, [step]);
 
-  const handleRequestOTP = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleCreateAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
     setIsLoading(true);
 
     try {
-      await requestOTP(email);
+      await initializeInstance({
+        email,
+        first_name: firstName,
+        last_name: lastName,
+      });
       setStep("otp");
-      toast.success("Code sent! Check your email.");
+      toast.success("Admin account created! Check your email for the login code.");
     } catch {
-      toast.error("Something went wrong. Please try again.");
+      toast.error("Setup failed. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -77,34 +67,56 @@ export function LoginPage() {
     }
   };
 
-  const handleBack = () => {
-    setStep("email");
-    setCode("");
-  };
-
-  if (checkingSetup) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-400">Loading...</div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50">
       <div className="w-full max-w-md rounded-xl bg-white p-8 shadow-lg">
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-primary-500" />
-          <h1 className="text-2xl font-bold text-gray-900">Showdesk</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Welcome to Showdesk</h1>
           <p className="mt-1 text-sm text-gray-500">
-            {step === "email"
-              ? "Sign in to your agent dashboard"
+            {step === "admin"
+              ? "Create the platform administrator account"
               : "Enter the code sent to your email"}
           </p>
         </div>
 
-        {step === "email" ? (
-          <form onSubmit={handleRequestOTP} className="space-y-4">
+        {step === "admin" ? (
+          <form onSubmit={handleCreateAdmin} className="space-y-4">
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label
+                  htmlFor="firstName"
+                  className="mb-1 block text-sm font-medium text-gray-700"
+                >
+                  First name
+                </label>
+                <input
+                  id="firstName"
+                  type="text"
+                  required
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  autoFocus
+                />
+              </div>
+              <div className="flex-1">
+                <label
+                  htmlFor="lastName"
+                  className="mb-1 block text-sm font-medium text-gray-700"
+                >
+                  Last name
+                </label>
+                <input
+                  id="lastName"
+                  type="text"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
+              </div>
+            </div>
+
             <div>
               <label
                 htmlFor="email"
@@ -119,8 +131,7 @@ export function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                placeholder="agent@company.com"
-                autoFocus
+                placeholder="admin@showdesk.io"
               />
             </div>
 
@@ -129,7 +140,7 @@ export function LoginPage() {
               disabled={isLoading}
               className="w-full rounded-lg bg-primary-500 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:opacity-50"
             >
-              {isLoading ? "Sending code..." : "Send login code"}
+              {isLoading ? "Creating account..." : "Create admin account"}
             </button>
           </form>
         ) : (
@@ -167,26 +178,8 @@ export function LoginPage() {
               disabled={isLoading || code.length < 6}
               className="w-full rounded-lg bg-primary-500 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:opacity-50"
             >
-              {isLoading ? "Verifying..." : "Sign in"}
+              {isLoading ? "Verifying..." : "Complete setup"}
             </button>
-
-            <div className="flex items-center justify-between text-sm">
-              <button
-                type="button"
-                onClick={handleBack}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                Use a different email
-              </button>
-              <button
-                type="button"
-                onClick={() => handleRequestOTP()}
-                disabled={isLoading}
-                className="text-primary-500 hover:text-primary-600 disabled:opacity-50"
-              >
-                Resend code
-              </button>
-            </div>
           </form>
         )}
       </div>

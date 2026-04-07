@@ -55,9 +55,9 @@ class RequestOTPView(APIView):
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data["email"].lower()
 
-        # Only send OTP if the user exists and is an agent/admin
+        # Only send OTP if the user exists and has dashboard access
         user = User.objects.filter(email=email, is_active=True).first()
-        if user and user.is_agent:
+        if user and (user.is_agent or user.is_staff):
             otp = OTPCode.generate(email)
             self._send_otp_email(email, otp.code)
             logger.info("OTP sent to %s", email)
@@ -123,7 +123,7 @@ class VerifyOTPView(APIView):
 
         # Find the user
         user = User.objects.filter(email=email, is_active=True).first()
-        if not user or not user.is_agent:
+        if not user or not (user.is_agent or user.is_staff):
             return Response(
                 {"detail": "Invalid or expired code."},
                 status=status.HTTP_401_UNAUTHORIZED,
