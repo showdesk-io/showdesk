@@ -10,7 +10,6 @@ import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { requestOTP, verifyOTP } from "@/api/auth";
-import { fetchSetupStatus } from "@/api/setup";
 import { useAuthStore } from "@/store/authStore";
 
 type Step = "email" | "otp";
@@ -20,24 +19,9 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [checkingSetup, setCheckingSetup] = useState(true);
   const navigate = useNavigate();
   const setTokens = useAuthStore((s) => s.setTokens);
   const codeInputRef = useRef<HTMLInputElement>(null);
-
-  // Redirect to setup wizard if instance is not initialized
-  useEffect(() => {
-    fetchSetupStatus()
-      .then((data) => {
-        if (!data.initialized) {
-          navigate("/setup", { replace: true });
-        }
-      })
-      .catch(() => {
-        // If the endpoint fails, assume initialized
-      })
-      .finally(() => setCheckingSetup(false));
-  }, [navigate]);
 
   // Auto-focus code input when step changes
   useEffect(() => {
@@ -81,14 +65,6 @@ export function LoginPage() {
     setStep("email");
     setCode("");
   };
-
-  if (checkingSetup) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-400">Loading...</div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50">
