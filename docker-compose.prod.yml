@@ -171,6 +171,65 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # Auto-update: check for new images and trigger Portainer redeploy
+  # Set PORTAINER_WEBHOOK_URL to enable. Checks every CHECK_INTERVAL seconds.
+  # ---------------------------------------------------------------------------
+  auto-update:
+    image: alpine/curl:latest
+    environment:
+      PORTAINER_WEBHOOK_URL: ${PORTAINER_WEBHOOK_URL:-}
+      WATCHED_IMAGES: ${WATCHED_IMAGES:-ghcr.io/showdesk-io/showdesk-backend:latest ghcr.io/showdesk-io/showdesk-frontend:latest}
+      CHECK_INTERVAL: ${CHECK_INTERVAL:-300}
+    volumes:
+      - auto_update_state:/state
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        check() {
+          if [ -z "$$PORTAINER_WEBHOOK_URL" ]; then
+            echo "[auto-update] PORTAINER_WEBHOOK_URL not set, skipping."
+            return
+          fi
+          mkdir -p /state
+          update_needed=false
+          for image in $$WATCHED_IMAGES; do
+            registry=$$(echo "$$image" | cut -d/ -f1)
+            path=$$(echo "$$image" | cut -d/ -f2- | cut -d: -f1)
+            tag=$$(echo "$$image" | grep -o ':[^:]*$$' | cut -c2-)
+            tag=$${tag:-latest}
+            state_file="/state/$$(echo "$$image" | tr '/:' '_')"
+            remote_digest=$$(curl -sf \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
+              "https://$${registry}/v2/$${path}/manifests/$${tag}" \
+              | grep -i '"digest"' | head -1 | tr -d ' ",' | cut -d: -f2-3) || true
+            if [ -z "$$remote_digest" ]; then
+              echo "[auto-update] Could not fetch digest for $$image"
+              continue
+            fi
+            stored_digest=""
+            [ -f "$$state_file" ] && stored_digest=$$(cat "$$state_file")
+            if [ "$$remote_digest" != "$$stored_digest" ]; then
+              echo "[auto-update] New image: $$image ($$remote_digest)"
+              echo "$$remote_digest" > "$$state_file"
+              update_needed=true
+            else
+              echo "[auto-update] Up to date: $$image"
+            fi
+          done
+          if [ "$$update_needed" = true ]; then
+            echo "[auto-update] Triggering Portainer redeploy..."
+            code=$$(curl -sf -X POST "$$PORTAINER_WEBHOOK_URL" -w "%{http_code}" -o /dev/null) || true
+            echo "[auto-update] Webhook response: $$code"
+          else
+            echo "[auto-update] All images up to date."
+          fi
+        }
+        echo "[auto-update] Starting (interval: $${CHECK_INTERVAL}s)"
+        while true; do check; sleep $$CHECK_INTERVAL; done
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # Redis (profile: local)
   # When using managed Redis, set REDIS_URL / CELERY_BROKER_URL.
   # ---------------------------------------------------------------------------
@@ -224,6 +283,7 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  auto_update_state:
   redis_data:
   postgres_data:
   minio_data:
