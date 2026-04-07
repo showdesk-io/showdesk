@@ -48,16 +48,41 @@ def parse_image(image: str) -> tuple[str, str, str]:
     return registry, path, tag
 
 
+def get_registry_token(registry: str, path: str) -> str | None:
+    """Get an anonymous bearer token for a public registry."""
+    token_url = f"https://{registry}/token?scope=repository:{path}:pull"
+    try:
+        resp = requests.get(token_url, timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("token")
+    except Exception:
+        log.warning("Failed to get registry token for %s/%s", registry, path)
+        return None
+
+
 def fetch_remote_digest(registry: str, path: str, tag: str) -> str | None:
     """Fetch the manifest digest from the container registry."""
+    token = get_registry_token(registry, path)
+    if not token:
+        return None
+
     url = f"https://{registry}/v2/{path}/manifests/{tag}"
+    headers = {
+        "Accept": ACCEPT_HEADERS,
+        "Authorization": f"Bearer {token}",
+    }
     try:
-        resp = requests.get(url, headers={"Accept": ACCEPT_HEADERS}, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
+        # Use Docker-Content-Digest header if present (most reliable)
+        digest = resp.headers.get("Docker-Content-Digest")
+        if digest:
+            return digest
+        # Fallback: look in manifest list
         data = resp.json()
         if "manifests" in data:
             return data["manifests"][0].get("digest")
-        return resp.headers.get("Docker-Content-Digest")
+        return None
     except Exception:
         log.warning("Failed to fetch digest for %s/%s:%s", registry, path, tag)
         return None
