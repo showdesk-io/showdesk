@@ -17,7 +17,7 @@ x-backend-env: &backend-env
   DJANGO_SETTINGS_MODULE: config.settings.production
   DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
   DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost}
-  SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
+  SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-True}
   DATABASE_URL: ${DATABASE_URL:-postgres://showdesk:showdesk@postgres:5432/showdesk}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
   CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
@@ -128,7 +128,7 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
+      test: ["CMD", "curl", "-f", "-H", "X-Forwarded-Proto: https", "http://localhost:8000/api/v1/health/"]
       interval: 30s
       timeout: 10s
       retries: 3
