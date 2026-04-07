@@ -15,12 +15,17 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 STATE_DIR = Path(os.environ.get("STATE_DIR", "/state"))
-WEBHOOK_URL = os.environ.get("PORTAINER_WEBHOOK_URL", "")
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
 WATCHED_IMAGES = os.environ.get(
     "WATCHED_IMAGES",
     "ghcr.io/showdesk-io/showdesk-backend:latest ghcr.io/showdesk-io/showdesk-frontend:latest",
 ).split()
+
+# Portainer API configuration
+PORTAINER_URL = os.environ.get("PORTAINER_URL", "").rstrip("/")
+PORTAINER_API_KEY = os.environ.get("PORTAINER_API_KEY", "")
+PORTAINER_STACK_ID = os.environ.get("PORTAINER_STACK_ID", "")
+PORTAINER_ENDPOINT_ID = os.environ.get("PORTAINER_ENDPOINT_ID", "1")
 
 ACCEPT_HEADERS = ", ".join(
     [
@@ -50,10 +55,8 @@ def fetch_remote_digest(registry: str, path: str, tag: str) -> str | None:
         resp = requests.get(url, headers={"Accept": ACCEPT_HEADERS}, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        # Look for digest in manifest list or image index
         if "manifests" in data:
             return data["manifests"][0].get("digest")
-        # Single manifest — use Docker-Content-Digest header
         return resp.headers.get("Docker-Content-Digest")
     except Exception:
         log.warning("Failed to fetch digest for %s/%s:%s", registry, path, tag)
@@ -104,18 +107,70 @@ def check_for_updates() -> bool:
     return update_needed
 
 
-def trigger_redeploy() -> None:
-    """Call the Portainer stack webhook to redeploy."""
+def portainer_redeploy() -> None:
+    """Redeploy the stack via the Portainer API.
+
+    1. Fetch the current stack compose file
+    2. PUT it back with pullImage=true to trigger a redeploy
+    """
+    headers = {
+        "X-API-Key": PORTAINER_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    # Fetch current stack file
+    file_url = f"{PORTAINER_URL}/api/stacks/{PORTAINER_STACK_ID}/file"
     try:
-        resp = requests.post(WEBHOOK_URL, timeout=30)
-        log.info("Portainer webhook response: %s", resp.status_code)
+        resp = requests.get(file_url, headers=headers, timeout=15, verify=False)
+        resp.raise_for_status()
+        stack_file = resp.json()["StackFileContent"]
     except Exception:
-        log.exception("Failed to call Portainer webhook")
+        log.exception("Failed to fetch stack file from Portainer")
+        return
+
+    # Fetch current stack env vars
+    stack_url = f"{PORTAINER_URL}/api/stacks/{PORTAINER_STACK_ID}"
+    try:
+        resp = requests.get(stack_url, headers=headers, timeout=15, verify=False)
+        resp.raise_for_status()
+        stack_env = resp.json().get("Env", [])
+    except Exception:
+        log.exception("Failed to fetch stack details from Portainer")
+        return
+
+    # Redeploy with pullImage=true
+    update_url = (
+        f"{PORTAINER_URL}/api/stacks/{PORTAINER_STACK_ID}"
+        f"?endpointId={PORTAINER_ENDPOINT_ID}"
+    )
+    body = {
+        "stackFileContent": stack_file,
+        "env": stack_env,
+        "prune": True,
+        "pullImage": True,
+    }
+
+    try:
+        resp = requests.put(
+            update_url, headers=headers, json=body, timeout=60, verify=False
+        )
+        resp.raise_for_status()
+        log.info("Stack redeployed successfully (HTTP %s)", resp.status_code)
+    except Exception:
+        log.exception("Failed to redeploy stack via Portainer API")
+
+
+def is_configured() -> bool:
+    """Check if Portainer API is configured."""
+    return bool(PORTAINER_URL and PORTAINER_API_KEY and PORTAINER_STACK_ID)
 
 
 def main() -> None:
-    if not WEBHOOK_URL:
-        log.warning("PORTAINER_WEBHOOK_URL is not set, running in dry-run mode.")
+    if not is_configured():
+        log.warning(
+            "Portainer API not configured. Set PORTAINER_URL, PORTAINER_API_KEY, "
+            "and PORTAINER_STACK_ID. Running in dry-run mode."
+        )
 
     log.info(
         "Starting (interval=%ds, images=%s)",
@@ -126,10 +181,10 @@ def main() -> None:
     while True:
         try:
             if check_for_updates():
-                if WEBHOOK_URL:
-                    trigger_redeploy()
+                if is_configured():
+                    portainer_redeploy()
                 else:
-                    log.info("Update detected but no webhook configured (dry-run).")
+                    log.info("Update detected but Portainer not configured (dry-run).")
             else:
                 log.info("All images up to date.")
         except Exception:
