@@ -6,6 +6,9 @@ import time
 from pathlib import Path
 
 import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -177,10 +180,15 @@ def portainer_redeploy() -> None:
 
     try:
         resp = requests.put(
-            update_url, headers=headers, json=body, timeout=60, verify=False
+            update_url, headers=headers, json=body, timeout=300, verify=False
         )
         resp.raise_for_status()
         log.info("Stack redeployed successfully (HTTP %s)", resp.status_code)
+    except requests.exceptions.ReadTimeout:
+        log.info(
+            "Portainer redeploy request timed out — this is expected. "
+            "The redeploy continues in the background."
+        )
     except Exception:
         log.exception("Failed to redeploy stack via Portainer API")
 
