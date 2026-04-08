@@ -1,3 +1,5 @@
+name: showdesk-dev
+
 services:
   # ---------------------------------------------------------------------------
   # PostgreSQL
@@ -39,8 +41,8 @@ services:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-showdesk}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-showdesk-secret}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "49000:9000"
+      - "49001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -66,9 +68,9 @@ services:
     image: livekit/livekit-server:latest
     command: --config /etc/livekit.yaml
     ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "7882:7882/udp"
+      - "47880:7880"
+      - "47881:7881"
+      - "47882:7882/udp"
     volumes:
       - ./docker/livekit.yaml:/etc/livekit.yaml
 
@@ -78,8 +80,8 @@ services:
   caddy:
     image: caddy:2-alpine
     ports:
-      - "80:80"
-      - "443:443"
+      - "40080:80"
+      - "40443:443"
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile
       - ./docker/widget-demo.html:/srv/widget-demo.html:ro
@@ -98,6 +100,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    entrypoint: []
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - ./backend:/app
@@ -107,6 +110,7 @@ services:
       - DATABASE_URL=postgres://${POSTGRES_USER:-showdesk}:${POSTGRES_PASSWORD:-showdesk}@postgres:5432/${POSTGRES_DB:-showdesk}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -122,6 +126,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    entrypoint: []
     command: celery -A config worker -l info -Q celery,default,video_processing
     volumes:
       - ./backend:/app
@@ -131,6 +136,7 @@ services:
       - DATABASE_URL=postgres://${POSTGRES_USER:-showdesk}:${POSTGRES_PASSWORD:-showdesk}@postgres:5432/${POSTGRES_DB:-showdesk}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,6 +152,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    entrypoint: []
     command: celery -A config beat -l info
     volumes:
       - ./backend:/app
@@ -154,6 +161,7 @@ services:
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-showdesk}:${POSTGRES_PASSWORD:-showdesk}@postgres:5432/${POSTGRES_DB:-showdesk}
       - CELERY_BROKER_URL=redis://redis:6379/1
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -173,8 +181,8 @@ services:
       - /app/node_modules
     environment:
       - VITE_API_BASE_URL=/api/v1
-      - VITE_WS_BASE_URL=ws://localhost/ws
-      - VITE_LIVEKIT_URL=ws://localhost:7880
+      - VITE_WS_BASE_URL=ws://localhost:40080/ws
+      - VITE_LIVEKIT_URL=ws://localhost:47880
 
 volumes:
   postgres_data:

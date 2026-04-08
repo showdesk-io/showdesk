@@ -5,6 +5,8 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.core.permissions import get_active_org
+
 from .models import Article, Category
 from .serializers import ArticleSerializer, CategorySerializer
 
@@ -16,12 +18,10 @@ class CategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):  # noqa: ANN201
-        """Filter categories by user's organization."""
-        user = self.request.user
-        if user.is_superuser:
-            return Category.objects.all()
-        if user.organization:
-            return Category.objects.filter(organization=user.organization)
+        """Filter categories by the active organization."""
+        org = get_active_org(self.request)
+        if org:
+            return Category.objects.filter(organization=org)
         return Category.objects.none()
 
 
@@ -34,12 +34,10 @@ class ArticleViewSet(viewsets.ModelViewSet):
     search_fields = ["title", "body"]
 
     def get_queryset(self):  # noqa: ANN201
-        """Filter articles by user's organization."""
-        user = self.request.user
-        if user.is_superuser:
-            return Article.objects.all()
-        if user.organization:
-            return Article.objects.filter(organization=user.organization)
+        """Filter articles by the active organization."""
+        org = get_active_org(self.request)
+        if org:
+            return Article.objects.filter(organization=org)
         return Article.objects.none()
 
     @action(detail=True, methods=["post"], permission_classes=[AllowAny])

@@ -1,5 +1,6 @@
 """Organizations admin configuration."""
 
+from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
@@ -17,9 +18,26 @@ class OrganizationAdmin(admin.ModelAdmin):
     readonly_fields = ["id", "api_token", "created_at", "updated_at"]
 
 
+class UserCreationForm(forms.ModelForm):
+    """User creation form without password fields. Users authenticate via OTP."""
+
+    class Meta:
+        model = User
+        fields = ("email", "first_name", "last_name", "role", "organization")
+
+    def save(self, commit=True):  # noqa: ANN001, ANN201, FBT002
+        user = super().save(commit=False)
+        user.set_unusable_password()
+        if commit:
+            user.save()
+        return user
+
+
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     """Admin for custom user model."""
+
+    add_form = UserCreationForm
 
     list_display = [
         "email",
@@ -33,7 +51,7 @@ class UserAdmin(BaseUserAdmin):
     search_fields = ["email", "first_name", "last_name"]
     ordering = ["email"]
     fieldsets = (
-        (None, {"fields": ("email", "password")}),
+        (None, {"fields": ("email",)}),
         ("Personal info", {"fields": ("first_name", "last_name", "avatar", "phone")}),
         (
             "Organization",
@@ -58,7 +76,7 @@ class UserAdmin(BaseUserAdmin):
             None,
             {
                 "classes": ("wide",),
-                "fields": ("email", "password1", "password2", "role", "organization"),
+                "fields": ("email", "first_name", "last_name", "role", "organization"),
             },
         ),
     )

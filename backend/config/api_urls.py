@@ -7,6 +7,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from apps.organizations.auth_views import RequestOTPView, VerifyOTPView
 from apps.organizations.views import (
     OrganizationViewSet,
+    PlatformOrganizationViewSet,
     TeamViewSet,
     UserViewSet,
 )
@@ -44,6 +45,9 @@ router.register(r"videos", VideoRecordingViewSet, basename="video")
 # Knowledge Base
 router.register(r"kb/categories", CategoryViewSet, basename="kb-category")
 router.register(r"kb/articles", ArticleViewSet, basename="kb-article")
+
+# Platform Admin
+router.register(r"platform/organizations", PlatformOrganizationViewSet, basename="platform-organization")
 
 urlpatterns = [
     path("", include(router.urls)),

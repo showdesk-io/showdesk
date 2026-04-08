@@ -261,11 +261,11 @@ def print_banner() -> None:
   Showdesk is running!
 {'=' * 60}{RESET}
 
-  {BOLD}App{RESET}          http://localhost
-  {BOLD}Widget Demo{RESET}  http://localhost/widget-demo/
-  {BOLD}Mailpit{RESET}      http://localhost/mailpit/
-  {BOLD}MinIO{RESET}        http://localhost:9001
-  {BOLD}LiveKit{RESET}      ws://localhost:7880
+  {BOLD}App{RESET}          http://localhost:40080
+  {BOLD}Widget Demo{RESET}  http://localhost:40080/widget-demo/
+  {BOLD}Mailpit{RESET}      http://localhost:40080/mailpit/
+  {BOLD}MinIO{RESET}        http://localhost:49001
+  {BOLD}LiveKit{RESET}      ws://localhost:47880
 
   {BOLD}Login{RESET}        admin@showdesk.local (OTP via email)
   {BOLD}Emails{RESET}       Check Mailpit for OTP codes
@@ -469,7 +469,7 @@ def cmd_tunnel() -> None:
         f"\n"
         f"ingress:\n"
         f"  - hostname: {hostname}\n"
-        f"    service: http://localhost:80\n"
+        f"    service: http://localhost:40080\n"
         f"  - service: http_status:404\n"
     )
     log(f"Tunnel config written to {tunnel_config}")

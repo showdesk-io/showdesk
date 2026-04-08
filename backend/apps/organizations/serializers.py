@@ -68,9 +68,10 @@ class UserSerializer(serializers.ModelSerializer):
             "timezone",
             "is_available",
             "is_active",
+            "is_superuser",
             "date_joined",
         ]
-        read_only_fields = ["id", "date_joined"]
+        read_only_fields = ["id", "is_superuser", "date_joined"]
 
 
 class InviteAgentSerializer(serializers.Serializer):
@@ -88,6 +89,81 @@ class InviteAgentSerializer(serializers.Serializer):
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("A user with this email already exists.")
         return value
+
+
+class PlatformOrganizationListSerializer(serializers.ModelSerializer):
+    """Serializer for listing organizations in the platform admin console."""
+
+    agent_count = serializers.SerializerMethodField()
+    ticket_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Organization
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "domain",
+            "is_active",
+            "agent_count",
+            "ticket_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def get_agent_count(self, obj: Organization) -> int:
+        return obj.users.filter(role__in=["admin", "agent"], is_active=True).count()
+
+    def get_ticket_count(self, obj: Organization) -> int:
+        return obj.tickets.count()
+
+
+class PlatformOrganizationDetailSerializer(serializers.ModelSerializer):
+    """Detailed serializer for a single organization in the platform admin."""
+
+    agent_count = serializers.SerializerMethodField()
+    ticket_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Organization
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "domain",
+            "logo",
+            "api_token",
+            "is_active",
+            "widget_color",
+            "widget_position",
+            "widget_greeting",
+            "video_expiration_days",
+            "video_max_duration_seconds",
+            "agent_count",
+            "ticket_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "api_token", "created_at", "updated_at"]
+
+    def get_agent_count(self, obj: Organization) -> int:
+        return obj.users.filter(role__in=["admin", "agent"], is_active=True).count()
+
+    def get_ticket_count(self, obj: Organization) -> int:
+        return obj.tickets.count()
+
+
+class PlatformOrganizationCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating an organization via platform admin."""
+
+    class Meta:
+        model = Organization
+        fields = [
+            "name",
+            "slug",
+            "domain",
+        ]
 
 
 class TeamSerializer(serializers.ModelSerializer):

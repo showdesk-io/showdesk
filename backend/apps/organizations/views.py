@@ -4,33 +4,37 @@ import uuid
 
 from django.conf import settings
 from django.core.mail import send_mail
+from django.db.models import Count, Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.core.permissions import IsPlatformAdmin, get_active_org
+
 from .models import Organization, Team, User
 from .serializers import (
     InviteAgentSerializer,
     OrganizationSerializer,
+    PlatformOrganizationCreateSerializer,
+    PlatformOrganizationDetailSerializer,
+    PlatformOrganizationListSerializer,
     TeamSerializer,
     UserSerializer,
 )
 
 
 class OrganizationViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing organizations."""
+    """ViewSet for managing organizations (tenant-scoped)."""
 
     serializer_class = OrganizationSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):  # noqa: ANN201
-        """Filter organizations by the current user's organization."""
-        user = self.request.user
-        if user.is_superuser:
-            return Organization.objects.all()
-        if user.organization:
-            return Organization.objects.filter(id=user.organization_id)
+        """Filter organizations by the active organization."""
+        org = get_active_org(self.request)
+        if org:
+            return Organization.objects.filter(id=org.id)
         return Organization.objects.none()
 
     @action(detail=True, methods=["post"])
@@ -56,13 +60,13 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_queryset(self):  # noqa: ANN201
         """Filter users by the current user's organization.
 
+        Superusers with an org see their org's users.
+        Superusers without an org see no users (use platform admin endpoints).
         Supports ?role=agent|admin|end_user filtering.
         """
-        user = self.request.user
-        if user.is_superuser:
-            qs = User.objects.all()
-        elif user.organization:
-            qs = User.objects.filter(organization=user.organization)
+        org = get_active_org(self.request)
+        if org:
+            qs = User.objects.filter(organization=org)
         else:
             qs = User.objects.none()
 
@@ -95,7 +99,12 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer = InviteAgentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        org = request.user.organization
+        org = get_active_org(request)
+        if not org:
+            return Response(
+                {"error": "No active organization."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         user = User.objects.create(
             email=serializer.validated_data["email"],
             first_name=serializer.validated_data.get("first_name", ""),
@@ -153,14 +162,91 @@ class TeamViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):  # noqa: ANN201
-        """Filter teams by the current user's organization."""
-        user = self.request.user
-        if user.is_superuser:
-            return Team.objects.all()
-        if user.organization:
-            return Team.objects.filter(organization=user.organization)
+        """Filter teams by the active organization."""
+        org = get_active_org(self.request)
+        if org:
+            return Team.objects.filter(organization=org)
         return Team.objects.none()
 
     def perform_create(self, serializer) -> None:  # noqa: ANN001
         """Set organization on creation."""
-        serializer.save(organization=self.request.user.organization)
+        serializer.save(organization=get_active_org(self.request))
+
+
+class PlatformOrganizationViewSet(viewsets.ModelViewSet):
+    """ViewSet for platform admins to manage all organizations."""
+
+    permission_classes = [IsAuthenticated, IsPlatformAdmin]
+    queryset = Organization.objects.all()
+
+    def get_serializer_class(self):  # noqa: ANN201
+        if self.action == "list":
+            return PlatformOrganizationListSerializer
+        if self.action == "create":
+            return PlatformOrganizationCreateSerializer
+        return PlatformOrganizationDetailSerializer
+
+    def get_queryset(self):  # noqa: ANN201
+        qs = Organization.objects.annotate(
+            _agent_count=Count(
+                "users",
+                filter=Q(users__role__in=["admin", "agent"], users__is_active=True),
+            ),
+            _ticket_count=Count("tickets"),
+        )
+        search = self.request.query_params.get("search")
+        if search:
+            qs = qs.filter(
+                Q(name__icontains=search) | Q(slug__icontains=search) | Q(domain__icontains=search)
+            )
+        return qs.order_by("-created_at")
+
+    @action(detail=True, methods=["post"])
+    def suspend(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Toggle the active status of an organization."""
+        org = self.get_object()
+        org.is_active = not org.is_active
+        org.save(update_fields=["is_active"])
+        return Response(PlatformOrganizationDetailSerializer(org).data)
+
+    @action(detail=True, methods=["get"])
+    def stats(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Return usage statistics for an organization."""
+        org = self.get_object()
+        tickets = org.tickets.all()
+        agents = org.users.filter(role__in=["admin", "agent"])
+
+        ticket_stats = {
+            "total": tickets.count(),
+            "open": tickets.filter(status="open").count(),
+            "in_progress": tickets.filter(status="in_progress").count(),
+            "waiting": tickets.filter(status="waiting").count(),
+            "resolved": tickets.filter(status="resolved").count(),
+            "closed": tickets.filter(status="closed").count(),
+        }
+
+        agent_stats = {
+            "total": agents.count(),
+            "active": agents.filter(is_active=True).count(),
+            "inactive": agents.filter(is_active=False).count(),
+        }
+
+        video_count = 0
+        try:
+            from apps.videos.models import VideoRecording
+
+            video_count = VideoRecording.objects.filter(
+                ticket__organization=org
+            ).count()
+        except ImportError:
+            pass
+
+        return Response(
+            {
+                "tickets": ticket_stats,
+                "agents": agent_stats,
+                "videos": {"total": video_count},
+                "teams": org.teams.count(),
+                "tags": org.tags.count(),
+            }
+        )

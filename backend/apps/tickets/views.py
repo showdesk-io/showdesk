@@ -9,6 +9,7 @@ from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from apps.core.permissions import get_active_org
 from apps.core.throttling import WidgetSubmitThrottle
 from apps.notifications.signals import (
     notify_new_message,
@@ -76,17 +77,15 @@ class TicketViewSet(viewsets.ModelViewSet):
         return TicketSerializer
 
     def get_queryset(self):  # noqa: ANN201
-        """Filter tickets by the current user's organization."""
-        user = self.request.user
-        if user.is_superuser:
-            return Ticket.objects.all()
-        if user.organization:
-            return Ticket.objects.filter(organization=user.organization)
+        """Filter tickets by the active organization."""
+        org = get_active_org(self.request)
+        if org:
+            return Ticket.objects.filter(organization=org)
         return Ticket.objects.none()
 
     def perform_create(self, serializer) -> None:  # noqa: ANN001
         """Set organization and reference on creation."""
-        org = self.request.user.organization
+        org = get_active_org(self.request)
         ticket = serializer.save(
             organization=org,
             reference=org.next_ticket_reference(),
@@ -314,12 +313,10 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):  # noqa: ANN201
-        """Filter messages by user's organization tickets."""
-        user = self.request.user
-        if user.is_superuser:
-            return TicketMessage.objects.all()
-        if user.organization:
-            return TicketMessage.objects.filter(ticket__organization=user.organization)
+        """Filter messages by the active organization's tickets."""
+        org = get_active_org(self.request)
+        if org:
+            return TicketMessage.objects.filter(ticket__organization=org)
         return TicketMessage.objects.none()
 
     def perform_create(self, serializer) -> None:  # noqa: ANN001
@@ -343,14 +340,10 @@ class TicketAttachmentViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):  # noqa: ANN201
-        """Filter attachments by user's organization tickets."""
-        user = self.request.user
-        if user.is_superuser:
-            return TicketAttachment.objects.all()
-        if user.organization:
-            return TicketAttachment.objects.filter(
-                ticket__organization=user.organization
-            )
+        """Filter attachments by the active organization's tickets."""
+        org = get_active_org(self.request)
+        if org:
+            return TicketAttachment.objects.filter(ticket__organization=org)
         return TicketAttachment.objects.none()
 
     def perform_create(self, serializer) -> None:  # noqa: ANN001
@@ -365,17 +358,15 @@ class TagViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):  # noqa: ANN201
-        """Filter tags by user's organization."""
-        user = self.request.user
-        if user.is_superuser:
-            return Tag.objects.all()
-        if user.organization:
-            return Tag.objects.filter(organization=user.organization)
+        """Filter tags by the active organization."""
+        org = get_active_org(self.request)
+        if org:
+            return Tag.objects.filter(organization=org)
         return Tag.objects.none()
 
     def perform_create(self, serializer) -> None:  # noqa: ANN001
-        """Set organization from the current user."""
-        serializer.save(organization=self.request.user.organization)
+        """Set organization from the active org."""
+        serializer.save(organization=get_active_org(self.request))
 
 
 class PriorityLevelViewSet(viewsets.ModelViewSet):
@@ -385,17 +376,15 @@ class PriorityLevelViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):  # noqa: ANN201
-        """Filter priority levels by user's organization."""
-        user = self.request.user
-        if user.is_superuser:
-            return PriorityLevel.objects.all()
-        if user.organization:
-            return PriorityLevel.objects.filter(organization=user.organization)
+        """Filter priority levels by the active organization."""
+        org = get_active_org(self.request)
+        if org:
+            return PriorityLevel.objects.filter(organization=org)
         return PriorityLevel.objects.none()
 
     def perform_create(self, serializer) -> None:  # noqa: ANN001
-        """Set organization from the current user."""
-        serializer.save(organization=self.request.user.organization)
+        """Set organization from the active org."""
+        serializer.save(organization=get_active_org(self.request))
 
 
 class SavedViewViewSet(viewsets.ModelViewSet):
@@ -409,22 +398,21 @@ class SavedViewViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):  # noqa: ANN201
-        """Return personal views + shared views from the same org."""
+        """Return personal views + shared views from the active org."""
         user = self.request.user
-        if user.is_superuser:
-            return SavedView.objects.all()
-        if user.organization:
+        org = get_active_org(self.request)
+        if org:
             return SavedView.objects.filter(
-                organization=user.organization,
+                organization=org,
             ).filter(
                 models.Q(created_by=user) | models.Q(is_shared=True),
             )
         return SavedView.objects.none()
 
     def perform_create(self, serializer) -> None:  # noqa: ANN001
-        """Set organization and creator from the current user."""
+        """Set organization and creator."""
         serializer.save(
-            organization=self.request.user.organization,
+            organization=get_active_org(self.request),
             created_by=self.request.user,
         )
 

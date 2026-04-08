@@ -84,6 +84,13 @@ Everything needed before writing real feature code. **All done.**
 
 ---
 
+## Known Bugs
+
+- [x] **Auth: stale user after re-login** — logging out then logging in with a different email shows the previous user's data (cached in Zustand/localStorage). Eventually switches to the correct user. The auth store should be fully cleared on logout and refreshed on login.
+- [x] **Team page: cross-org user visibility** — non-superuser agents can see users from other organizations and superusers with no organization. The team list API should filter out users without an organization and scope to the current user's org only.
+
+---
+
 ## Phase 1 -- MVP (make it work end-to-end)
 
 ### Backend
@@ -137,6 +144,7 @@ Everything needed before writing real feature code. **All done.**
 - [ ] SLA policy editor
 - [ ] Keyboard shortcuts
 - [ ] Bulk actions on ticket list
+- [ ] WebSocket URL derived from window.location (no hardcoded env var)
 - [ ] Responsive layout
 - [ ] Dark mode (optional)
 
@@ -277,13 +285,14 @@ Lightweight replay of user interactions leading up to the bug report.
 
 ### Platform Admin (SaaS operator panel)
 
-- [ ] P0: Organization list (create, suspend, delete)
-- [ ] P0: Organization detail (usage stats)
+- [x] P0: Organization list (create, suspend, delete)
+- [x] P0: Organization detail (usage stats)
 - [ ] P1: Usage & quotas dashboard
 - [ ] P1: Billing / Plans management
 - [ ] P1: Feature flags per tenant
 - [ ] P2: Global monitoring dashboard
-- [ ] P2: Impersonation ("login as")
+- [x] P1: Impersonation — org switcher in sidebar, X-Showdesk-Org header, middleware + get_active_org helper
+- [x] P1: Conditional sidebar — superusers without an organization only see Admin; superusers attached to an org (or impersonating) see both Admin and the standard nav
 - [ ] P3: Platform-wide announcements
 - [ ] P3: Tenant data migration tools
 
@@ -328,7 +337,7 @@ Lightweight replay of user interactions leading up to the bug report.
 | Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright, including wizard flow + identity + context tests) | Video API tests, more frontend tests |
 | Widget UX (Phase 2) | **~55%** | P1: wizard flow (100%), auto context (100%), user identity (~60%), camera PiP (~60%) | P1 remaining: camera-only mode, camera preview, data-user-* attrs, fetch tickets endpoint. P2-P3: ticket history, screenshot+annotation, multi-attach, session replay, video markers |
 | Admin (org) | **~55%** | Agent/team CRUD, widget config, tags, custom priorities | Branding, canned responses, SLA, audit log |
-| Admin (platform) | **0%** | -- | Everything |
+| Admin (platform) | **~40%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar | Usage/quotas dashboard, billing, feature flags, monitoring |
 | Post-MVP | **0%** | -- | Everything |
 | AI | **0%** | Models/flags ready | All implementation |
 
@@ -336,10 +345,10 @@ Lightweight replay of user interactions leading up to the bug report.
 
 1. **Phase 2 P1 finitions** : camera-only mode, camera preview, `data-user-*` attrs, endpoint fetch tickets by external_user_id
 2. **Phase 2 P2** : ticket history in widget, screenshot + annotation
-3. Platform admin console (P0: org list + details)
+3. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
 4. Canned responses / macros
 5. Keyboard shortcuts + bulk actions
 
 ---
 
-*This roadmap is a living document. Last updated: 2026-03-31.*
+*This roadmap is a living document. Last updated: 2026-04-08.*

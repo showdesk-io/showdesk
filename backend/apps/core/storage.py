@@ -7,7 +7,7 @@ URLs work from the browser.
 
 Configure via environment variables:
     S3_ENDPOINT_URL   = http://minio:9000        (internal, for backend operations)
-    S3_PUBLIC_URL     = http://localhost:9000     (external, for browser access)
+    S3_PUBLIC_URL     = http://localhost:49000    (external, for browser access in dev)
 
 When S3_PUBLIC_URL is not set, URLs are returned unchanged (e.g. production
 where the endpoint is already publicly reachable).

@@ -27,11 +27,11 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):  # noqa: ANN201
         """Filter videos by user's organization tickets."""
-        user = self.request.user
-        if user.is_superuser:
-            return VideoRecording.objects.all()
-        if user.organization:
-            return VideoRecording.objects.filter(ticket__organization=user.organization)
+        from apps.core.permissions import get_active_org
+
+        org = get_active_org(self.request)
+        if org:
+            return VideoRecording.objects.filter(ticket__organization=org)
         return VideoRecording.objects.none()
 
     @action(

@@ -4,6 +4,7 @@
 
 import axios from "axios";
 import { useAuthStore } from "@/store/authStore";
+import { useOrgStore } from "@/store/orgStore";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 
@@ -14,11 +15,15 @@ export const apiClient = axios.create({
   },
 });
 
-// Request interceptor: attach JWT token
+// Request interceptor: attach JWT token + org impersonation header
 apiClient.interceptors.request.use((config) => {
   const token = useAuthStore.getState().accessToken;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  const activeOrgId = useOrgStore.getState().activeOrgId;
+  if (activeOrgId) {
+    config.headers["X-Showdesk-Org"] = activeOrgId;
   }
   return config;
 });

@@ -42,7 +42,55 @@ export interface User {
   timezone: string;
   is_available: boolean;
   is_active: boolean;
+  is_superuser: boolean;
   date_joined: string;
+}
+
+// ---------------------------------------------------------------------------
+// Platform Admin
+// ---------------------------------------------------------------------------
+
+export interface PlatformOrganization {
+  id: string;
+  name: string;
+  slug: string;
+  domain: string;
+  is_active: boolean;
+  agent_count: number;
+  ticket_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformOrganizationDetail extends PlatformOrganization {
+  logo: string | null;
+  api_token: string;
+  widget_color: string;
+  widget_position: "bottom-right" | "bottom-left";
+  widget_greeting: string;
+  video_expiration_days: number;
+  video_max_duration_seconds: number;
+}
+
+export interface OrganizationStats {
+  tickets: {
+    total: number;
+    open: number;
+    in_progress: number;
+    waiting: number;
+    resolved: number;
+    closed: number;
+  };
+  agents: {
+    total: number;
+    active: number;
+    inactive: number;
+  };
+  videos: {
+    total: number;
+  };
+  teams: number;
+  tags: number;
 }
 
 // ---------------------------------------------------------------------------
