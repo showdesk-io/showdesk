@@ -89,6 +89,8 @@ Everything needed before writing real feature code. **All done.**
 - [x] **Auth: stale user after re-login** -- logging out then logging in with a different email shows the previous user's data (cached in Zustand/localStorage). Eventually switches to the correct user. The auth store should be fully cleared on logout and refreshed on login.
 - [x] **Team page: cross-org user visibility** -- non-superuser agents can see users from other organizations and superusers with no organization. The team list API should filter out users without an organization and scope to the current user's org only.
 - [ ] **WebSocket fails on dev.showdesk.io** -- WSS connection to `/ws/tickets/` fails when accessed via Cloudflare proxy. Likely Cloudflare or Caddy reverse proxy WebSocket forwarding issue. Works on localhost:40080.
+- [ ] **Widget: screen capture fails** -- clicking the screen record button does not start capture. Likely a permissions or getDisplayMedia issue to investigate.
+- [ ] **Widget: modal overlay blocks recording** -- when recording the current tab, the widget modal stays visible in the middle of the page, preventing the user from interacting with the site/app to demonstrate the issue. Clicking outside the modal ends the capture. Fix: once recording starts, collapse the widget to a small red recording indicator on the FAB button. Clicking the FAB again opens a minimal panel to stop/finalize or continue (re-collapse) the recording.
 
 ---
 
@@ -158,6 +160,7 @@ Everything needed before writing real feature code. **All done.**
 - [ ] Screenshot capture button
 - [ ] Retry on upload failure
 - [ ] Configurable max recording duration
+- [ ] Custom trigger button -- allow the host app to use its own help button instead of the auto-created FAB. `Showdesk.init({ hideButton: true })` already exists; add `Showdesk.open()` / `Showdesk.startRecording()` / `Showdesk.close()` so the host app can drive the full flow programmatically.
 - [ ] i18n support
 - [ ] Accessibility (ARIA, keyboard nav, focus trap)
 
