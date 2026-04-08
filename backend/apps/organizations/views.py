@@ -51,16 +51,21 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         return Response(OrganizationSerializer(org).data)
 
     @action(detail=True, methods=["post"])
-    def regenerate_secret(self, request, pk=None):  # noqa: ANN001, ANN201
-        """Generate or regenerate the widget secret for HMAC identity verification."""
+    def revoke_credentials(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Revoke and regenerate both API token and widget secret.
+
+        This is an irreversible action: the old token and secret stop
+        working immediately. The client must update their integration code.
+        """
         org = self.get_object()
         if request.user.role != User.Role.ADMIN and not request.user.is_superuser:
             return Response(
-                {"error": "Only admins can manage the widget secret."},
+                {"error": "Only admins can revoke credentials."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        org.api_token = uuid.uuid4()
         org.widget_secret = Organization.generate_widget_secret()
-        org.save(update_fields=["widget_secret"])
+        org.save(update_fields=["api_token", "widget_secret"])
         return Response(OrganizationSerializer(org).data)
 
 

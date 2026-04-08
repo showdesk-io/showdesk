@@ -286,6 +286,7 @@ Lightweight replay of user interactions leading up to the bug report.
 - [x] P0: Agent management (invite, deactivate, roles)
 - [x] P0: Team management (CRUD, assign agents)
 - [x] P0: Widget configuration (colors, position, embed snippet, token regen)
+- [ ] P1: Widget integration code examples & generator in Settings > Widget (embed snippets for React/Angular/Vue/vanilla JS + backend HMAC generation examples for Node/Python/PHP/Ruby)
 - [ ] P1: Organization branding (logo, primary color, white-label)
 - [ ] P1: Custom domain for widget/portal
 - [x] P1: Tags & categories management

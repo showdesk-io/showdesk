@@ -10,8 +10,7 @@ import {
   fetchAgents,
   fetchOrganization,
   inviteAgent,
-  regenerateApiToken,
-  regenerateWidgetSecret,
+  revokeCredentials,
   toggleUserActive,
   updateOrganization,
   updateUser,
@@ -835,22 +834,13 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
     onError: () => toast.error("Failed to save settings."),
   });
 
-  const regenMutation = useMutation({
-    mutationFn: () => regenerateApiToken(org!.id),
+  const revokeMutation = useMutation({
+    mutationFn: () => revokeCredentials(org!.id),
     onSuccess: () => {
-      toast.success("API token regenerated.");
+      toast.success("Credentials revoked and regenerated.");
       void queryClient.invalidateQueries({ queryKey: ["organization"] });
     },
-    onError: () => toast.error("Failed to regenerate token."),
-  });
-
-  const secretMutation = useMutation({
-    mutationFn: () => regenerateWidgetSecret(org!.id),
-    onSuccess: () => {
-      toast.success("Widget secret generated.");
-      void queryClient.invalidateQueries({ queryKey: ["organization"] });
-    },
-    onError: () => toast.error("Failed to generate secret."),
+    onError: () => toast.error("Failed to revoke credentials."),
   });
 
   if (isLoading || !org) {
@@ -977,94 +967,103 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
         </button>
       </div>
 
-      {/* API Token */}
+      {/* Widget Credentials */}
       <div className="rounded-xl border border-gray-200 bg-white p-6">
-        <h2 className="mb-2 text-lg font-semibold text-gray-900">API Token</h2>
-        <p className="mb-3 text-sm text-gray-500">
-          Used by the widget and API to authenticate requests. This token is
-          public (embedded in the script tag on your website).
+        <h2 className="mb-2 text-lg font-semibold text-gray-900">
+          Widget Credentials
+        </h2>
+        <p className="mb-4 text-sm text-gray-500">
+          These credentials are generated automatically when the organization is
+          created. Revoking them is irreversible — the old values stop working
+          immediately.
         </p>
-        <div className="flex items-center gap-3">
-          <code className="flex-1 rounded-lg bg-gray-100 px-4 py-2 text-sm font-mono text-gray-700">
-            {org.api_token}
-          </code>
-          {isAdmin && (
+
+        {/* API Token (public) */}
+        <div className="mb-4">
+          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+            API Token{" "}
+            <span className="font-normal normal-case text-gray-400">
+              (public — embedded in the script tag)
+            </span>
+          </label>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded-lg bg-gray-100 px-4 py-2 text-sm font-mono text-gray-700">
+              {org.api_token}
+            </code>
             <button
               onClick={() => {
-                if (window.confirm("Regenerate token? The old one will stop working.")) {
-                  regenMutation.mutate();
-                }
+                void navigator.clipboard.writeText(org.api_token);
+                toast.success("API token copied!");
               }}
-              disabled={regenMutation.isPending}
-              className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
             >
-              Regenerate
+              Copy
             </button>
-          )}
+          </div>
         </div>
-      </div>
 
-      {/* Identity Verification */}
-      <div className="rounded-xl border border-amber-200 bg-amber-50 p-6">
-        <h2 className="mb-2 text-lg font-semibold text-gray-900">
-          Identity Verification
-        </h2>
-        <p className="mb-3 text-sm text-gray-600">
-          Secret key for HMAC-SHA256 identity verification. Required to enable
-          ticket history in the widget. Your backend computes{" "}
-          <code className="rounded bg-amber-100 px-1 text-xs">
-            HMAC-SHA256(secret, user_id)
-          </code>{" "}
-          and passes the hash to the widget.{" "}
-          <strong>Never expose this secret client-side.</strong>
-        </p>
-        {org.widget_secret ? (
-          <div className="flex items-center gap-3">
-            <code className="flex-1 rounded-lg bg-white px-4 py-2 text-sm font-mono text-gray-700 border border-amber-200">
+        {/* Widget Secret (private) */}
+        <div className="mb-5">
+          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+            Widget Secret{" "}
+            <span className="font-normal normal-case text-red-500">
+              (private — never expose client-side)
+            </span>
+          </label>
+          <p className="mb-2 text-xs text-gray-400">
+            Used server-side to compute{" "}
+            <code className="rounded bg-gray-100 px-1">
+              HMAC-SHA256(secret, user_id)
+            </code>{" "}
+            for identity verification in the widget.
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded-lg bg-gray-100 px-4 py-2 text-sm font-mono text-gray-700">
               {org.widget_secret}
             </code>
             <button
               onClick={() => {
                 void navigator.clipboard.writeText(org.widget_secret);
-                toast.success("Secret copied!");
+                toast.success("Widget secret copied!");
               }}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-white"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
             >
               Copy
             </button>
-            {isAdmin && (
-              <button
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Regenerate secret? Existing user_hash values will stop working.",
-                    )
-                  ) {
-                    secretMutation.mutate();
-                  }
-                }}
-                disabled={secretMutation.isPending}
-                className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
-              >
-                Regenerate
-              </button>
-            )}
           </div>
-        ) : (
-          <div>
-            <p className="mb-2 text-sm text-amber-700">
-              No secret configured. Without it, the widget cannot show ticket
-              history (only a &quot;check your email&quot; notification).
+        </div>
+
+        {/* Revoke & Regenerate */}
+        {isAdmin && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+            <p className="mb-3 text-sm text-red-700">
+              <strong>Danger zone:</strong> revoking credentials regenerates both
+              the API token and the widget secret. All existing integrations will
+              stop working until you update the embed snippet and HMAC secret in
+              your backend.
             </p>
-            {isAdmin && (
-              <button
-                onClick={() => secretMutation.mutate()}
-                disabled={secretMutation.isPending}
-                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-              >
-                Generate Secret
-              </button>
-            )}
+            <button
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "Revoke and regenerate all widget credentials?\n\n" +
+                      "This is irreversible. The current API token and widget secret " +
+                      "will stop working immediately. You will need to update:\n" +
+                      "• The embed snippet on your website\n" +
+                      "• The HMAC secret in your backend\n\n" +
+                      "Continue?",
+                  )
+                ) {
+                  revokeMutation.mutate();
+                }
+              }}
+              disabled={revokeMutation.isPending}
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {revokeMutation.isPending
+                ? "Revoking..."
+                : "Revoke & Regenerate All Credentials"}
+            </button>
           </div>
         )}
       </div>

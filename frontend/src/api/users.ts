@@ -102,16 +102,9 @@ export async function updateOrganization(
   return response.data;
 }
 
-export async function regenerateApiToken(orgId: string): Promise<Organization> {
+export async function revokeCredentials(orgId: string): Promise<Organization> {
   const response = await apiClient.post<Organization>(
-    `/organizations/${orgId}/regenerate_token/`,
-  );
-  return response.data;
-}
-
-export async function regenerateWidgetSecret(orgId: string): Promise<Organization> {
-  const response = await apiClient.post<Organization>(
-    `/organizations/${orgId}/regenerate_secret/`,
+    `/organizations/${orgId}/revoke_credentials/`,
   );
   return response.data;
 }

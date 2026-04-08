@@ -38,8 +38,7 @@ class Organization(TimestampedModel):
     )
     widget_secret = models.CharField(
         max_length=64,
-        default="",
-        blank=True,
+        default=secrets.token_hex,
         help_text="Secret key for HMAC identity verification. Never expose client-side.",
     )
     is_active = models.BooleanField(default=True)
