@@ -5,6 +5,10 @@
  * the user's screen, optionally with camera (picture-in-picture) and
  * microphone audio. It produces a single WebM blob ready for upload.
  *
+ * Supports two modes:
+ * - "screen": screen share + optional camera PiP (default)
+ * - "camera_only": camera only, no screen share prompt
+ *
  * When camera is enabled and canvas.captureStream is available, a
  * PipCompositor draws the screen + circular camera bubble on an
  * offscreen canvas, producing a single composited video stream.
@@ -20,6 +24,9 @@ import { PipCompositor } from "./pip-compositor";
 export interface RecorderOptions {
   audio: boolean;
   camera: boolean;
+  mode?: "screen" | "camera_only";
+  /** Pre-acquired camera stream to reuse (avoids re-prompting for permission). */
+  existingCameraStream?: MediaStream;
 }
 
 export class ScreenRecorder {
@@ -37,91 +44,25 @@ export class ScreenRecorder {
   }
 
   /**
-   * Start recording the screen.
+   * Start recording.
    *
-   * Prompts the user for screen sharing permission. If camera is
-   * enabled, creates a PipCompositor to composite the camera bubble
-   * onto the screen recording via an offscreen canvas. Falls back to
-   * adding the camera as a separate track if captureStream is not
-   * available.
+   * In "screen" mode (default): prompts the user for screen sharing permission.
+   * If camera is enabled, creates a PipCompositor to composite the camera bubble
+   * onto the screen recording via an offscreen canvas.
+   *
+   * In "camera_only" mode: uses only the camera as the video source.
+   * No screen share prompt is shown.
    */
   async start(options: RecorderOptions): Promise<void> {
     this.cleanup();
 
-    // Request screen capture
-    const displayStream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 30 },
-      },
-      audio: options.audio,
-    });
-
-    this.streams.push(displayStream);
-
+    const mode = options.mode ?? "screen";
     const tracks: MediaStreamTrack[] = [];
 
-    // Collect audio tracks from display stream (system audio)
-    tracks.push(...displayStream.getAudioTracks());
-
-    // Request microphone if audio enabled and not already captured
-    if (options.audio && !displayStream.getAudioTracks().length) {
-      try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-        });
-        this.streams.push(audioStream);
-        tracks.push(...audioStream.getAudioTracks());
-      } catch (err) {
-        console.warn("[Showdesk] Microphone access denied:", err);
-      }
-    }
-
-    // Request camera if enabled
-    let cameraStream: MediaStream | null = null;
-    if (options.camera) {
-      try {
-        cameraStream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 320 },
-            height: { ideal: 240 },
-            facingMode: "user",
-          },
-        });
-        this.streams.push(cameraStream);
-      } catch (err) {
-        console.warn("[Showdesk] Camera access denied:", err);
-      }
-    }
-
-    // Determine video tracks: use PiP compositor if possible, else fallback
-    const canComposite =
-      cameraStream && typeof HTMLCanvasElement.prototype.captureStream === "function";
-
-    if (canComposite && cameraStream) {
-      // Get screen video dimensions from the display track settings
-      const screenTrack = displayStream.getVideoTracks()[0];
-      const settings = screenTrack?.getSettings();
-      const width = settings?.width || 1920;
-      const height = settings?.height || 1080;
-
-      this._compositor = new PipCompositor(displayStream, cameraStream, width, height);
-      await this._compositor.start();
-
-      const compositedStream = this._compositor.stream;
-      tracks.push(...compositedStream.getVideoTracks());
+    if (mode === "camera_only") {
+      await this.startCameraOnly(options, tracks);
     } else {
-      // Fallback: add screen video track directly
-      tracks.push(...displayStream.getVideoTracks());
-
-      // If camera was obtained but captureStream not supported, add as separate track
-      if (cameraStream) {
-        tracks.push(...cameraStream.getVideoTracks());
-      }
+      await this.startScreen(options, tracks);
     }
 
     // Create combined stream
@@ -149,12 +90,137 @@ export class ScreenRecorder {
       this.onStop?.(blob);
     };
 
+    this.mediaRecorder.start(1000); // Collect data every second
+  }
+
+  /**
+   * Screen recording mode: screen share + optional camera PiP.
+   */
+  private async startScreen(
+    options: RecorderOptions,
+    tracks: MediaStreamTrack[],
+  ): Promise<void> {
+    // Request screen capture
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 },
+      },
+      audio: options.audio,
+    });
+
+    this.streams.push(displayStream);
+
+    // Collect audio tracks from display stream (system audio)
+    tracks.push(...displayStream.getAudioTracks());
+
+    // Request microphone if audio enabled and not already captured
+    if (options.audio && !displayStream.getAudioTracks().length) {
+      await this.addMicrophoneTrack(tracks);
+    }
+
+    // Request or reuse camera
+    let cameraStream: MediaStream | null = null;
+    if (options.camera) {
+      cameraStream = options.existingCameraStream ?? null;
+      if (!cameraStream) {
+        try {
+          cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 320 },
+              height: { ideal: 240 },
+              facingMode: "user",
+            },
+          });
+        } catch (err) {
+          console.warn("[Showdesk] Camera access denied:", err);
+        }
+      }
+      if (cameraStream) {
+        this.streams.push(cameraStream);
+      }
+    }
+
+    // Determine video tracks: use PiP compositor if possible, else fallback
+    const canComposite =
+      cameraStream && typeof HTMLCanvasElement.prototype.captureStream === "function";
+
+    if (canComposite && cameraStream) {
+      const screenTrack = displayStream.getVideoTracks()[0];
+      const settings = screenTrack?.getSettings();
+      const width = settings?.width || 1920;
+      const height = settings?.height || 1080;
+
+      this._compositor = new PipCompositor(displayStream, cameraStream, width, height);
+      await this._compositor.start();
+
+      const compositedStream = this._compositor.stream;
+      tracks.push(...compositedStream.getVideoTracks());
+    } else {
+      tracks.push(...displayStream.getVideoTracks());
+      if (cameraStream) {
+        tracks.push(...cameraStream.getVideoTracks());
+      }
+    }
+
     // Stop recording if user ends screen share
     displayStream.getVideoTracks().forEach((track) => {
       track.onended = () => this.stop();
     });
+  }
 
-    this.mediaRecorder.start(1000); // Collect data every second
+  /**
+   * Camera-only recording mode: no screen share, just webcam.
+   */
+  private async startCameraOnly(
+    options: RecorderOptions,
+    tracks: MediaStreamTrack[],
+  ): Promise<void> {
+    // Reuse existing camera stream or acquire a new one
+    let cameraStream = options.existingCameraStream ?? null;
+    if (!cameraStream) {
+      cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: "user",
+        },
+        audio: options.audio
+          ? { echoCancellation: true, noiseSuppression: true }
+          : false,
+      });
+    }
+    this.streams.push(cameraStream);
+
+    // Add video track
+    tracks.push(...cameraStream.getVideoTracks());
+
+    // Add audio: from camera stream or separate mic
+    const cameraAudioTracks = cameraStream.getAudioTracks();
+    if (cameraAudioTracks.length) {
+      tracks.push(...cameraAudioTracks);
+    } else if (options.audio) {
+      await this.addMicrophoneTrack(tracks);
+    }
+  }
+
+  /**
+   * Request microphone access and add the audio track.
+   */
+  private async addMicrophoneTrack(tracks: MediaStreamTrack[]): Promise<void> {
+    try {
+      const audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      this.streams.push(audioStream);
+      tracks.push(...audioStream.getAudioTracks());
+    } catch (err) {
+      console.warn("[Showdesk] Microphone access denied:", err);
+    }
   }
 
   /**

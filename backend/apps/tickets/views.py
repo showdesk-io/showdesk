@@ -66,6 +66,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         "assigned_team",
         "source",
         "tags",
+        "external_user_id",
     ]
     search_fields = ["title", "description", "reference", "requester_email"]
     ordering_fields = ["created_at", "updated_at", "priority", "status"]
@@ -209,6 +210,49 @@ class TicketViewSet(viewsets.ModelViewSet):
             TicketSerializer(ticket).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[AllowAny],
+    )
+    def widget_tickets(self, request):  # noqa: ANN001, ANN201
+        """Fetch tickets for a user from the widget.
+
+        Authenticates via X-Widget-Token header.
+        Requires ?external_user_id=xxx query parameter.
+        """
+        token = request.headers.get("X-Widget-Token")
+        if not token:
+            return Response(
+                {"error": "Missing X-Widget-Token header."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            organization = Organization.objects.get(api_token=token, is_active=True)
+        except Organization.DoesNotExist:
+            return Response(
+                {"error": "Invalid or inactive organization token."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        external_user_id = request.query_params.get("external_user_id")
+        if not external_user_id:
+            return Response(
+                {"error": "external_user_id query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        tickets = Ticket.objects.filter(
+            organization=organization,
+            external_user_id=external_user_id,
+        ).order_by("-created_at")[:20]
+
+        from .serializers import WidgetTicketListSerializer
+
+        serializer = WidgetTicketListSerializer(tickets, many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
     def assign(self, request, pk=None):  # noqa: ANN001, ANN201

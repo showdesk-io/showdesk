@@ -272,6 +272,36 @@ class TicketCreateFromWidgetSerializer(serializers.ModelSerializer):
         ]
 
 
+class WidgetTicketListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for listing tickets in the widget."""
+
+    last_agent_reply = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Ticket
+        fields = [
+            "id",
+            "reference",
+            "title",
+            "status",
+            "created_at",
+            "updated_at",
+            "last_agent_reply",
+        ]
+
+    def get_last_agent_reply(self, obj: Ticket) -> str | None:
+        last_reply = (
+            obj.messages.filter(
+                message_type="reply",
+                author__role__in=["admin", "agent"],
+            )
+            .order_by("-created_at")
+            .values_list("body", flat=True)
+            .first()
+        )
+        return last_reply
+
+
 class SavedViewSerializer(serializers.ModelSerializer):
     """Serializer for saved ticket filter views."""
 

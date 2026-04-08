@@ -209,7 +209,7 @@ function OrgSwitcher() {
       clearActiveOrg();
     }
     setOpen(false);
-    queryClient.clear();
+    void queryClient.resetQueries();
   };
 
   return (

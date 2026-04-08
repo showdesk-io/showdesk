@@ -10,6 +10,7 @@ import type { WizardState } from "./wizard-state";
 import { getCaptureOptions, getTextareaPlaceholder } from "./wizard-state";
 import type { ShowdeskConfig } from "../../types";
 import { ScreenRecorder } from "../../recorder/screen-recorder";
+import type { RecorderOptions } from "../../recorder/screen-recorder";
 import type { BubblePosition } from "../../recorder/pip-compositor";
 
 export function renderCaptureStep(
@@ -28,6 +29,8 @@ export function renderCaptureStep(
   let currentBlob: Blob | null = state.recordedBlob;
   let audioEnabled = state.hasAudio;
   let cameraEnabled = state.hasCamera;
+  let recordingMode: "screen" | "camera_only" = "screen";
+  let cameraPreviewStream: MediaStream | null = null;
   let recordingStartTime = 0;
   let timerInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -107,13 +110,17 @@ export function renderCaptureStep(
   const backBtn = document.createElement("button");
   backBtn.className = "sd-back-btn";
   backBtn.textContent = "\u25C0 Back";
-  backBtn.addEventListener("click", onBack);
+  backBtn.addEventListener("click", () => {
+    stopCameraPreview();
+    onBack();
+  });
 
   const continueBtn = document.createElement("button");
   continueBtn.className = "sd-submit-btn";
   continueBtn.textContent = "Continue";
   continueBtn.disabled = true;
   continueBtn.addEventListener("click", () => {
+    stopCameraPreview();
     onComplete({
       description: textarea.value.trim(),
       recordedBlob: currentBlob,
@@ -135,9 +142,94 @@ export function renderCaptureStep(
     continueBtn.disabled = textarea.value.trim().length === 0;
   }
 
+  function stopCameraPreview(): void {
+    if (cameraPreviewStream) {
+      cameraPreviewStream.getTracks().forEach((t) => t.stop());
+      cameraPreviewStream = null;
+    }
+  }
+
+  async function startCameraPreview(previewContainer: HTMLElement): Promise<void> {
+    stopCameraPreview();
+    try {
+      cameraPreviewStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 320 },
+          height: { ideal: 240 },
+          facingMode: "user",
+        },
+      });
+
+      previewContainer.innerHTML = "";
+      previewContainer.style.display = "flex";
+
+      const video = document.createElement("video");
+      video.autoplay = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = cameraPreviewStream;
+      video.style.cssText = `
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 2px solid #e5e7eb;
+      `;
+      previewContainer.appendChild(video);
+    } catch (err) {
+      console.warn("[Showdesk] Camera preview failed:", err);
+      previewContainer.style.display = "none";
+    }
+  }
+
   function showRecordingPanel(): void {
     recordingPanel.style.display = "block";
     recordingPanel.innerHTML = "";
+
+    // Recording mode selector (screen vs camera-only)
+    if (options.showCamera) {
+      const modeDiv = document.createElement("div");
+      modeDiv.style.cssText = `
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      `;
+
+      const screenModeBtn = document.createElement("button");
+      screenModeBtn.className = "sd-recorder-btn";
+      screenModeBtn.textContent = "\uD83D\uDDA5\uFE0F Screen";
+
+      const cameraModeBtn = document.createElement("button");
+      cameraModeBtn.className = "sd-recorder-btn";
+      cameraModeBtn.textContent = "\uD83D\uDCF9 Camera only";
+
+      function updateModeButtons(): void {
+        screenModeBtn.style.cssText += recordingMode === "screen"
+          ? "border-color: #6366F1; background: #EEF2FF;"
+          : "border-color: #e5e7eb; background: transparent;";
+        cameraModeBtn.style.cssText += recordingMode === "camera_only"
+          ? "border-color: #6366F1; background: #EEF2FF;"
+          : "border-color: #e5e7eb; background: transparent;";
+      }
+
+      screenModeBtn.addEventListener("click", () => {
+        recordingMode = "screen";
+        updateModeButtons();
+      });
+
+      cameraModeBtn.addEventListener("click", () => {
+        recordingMode = "camera_only";
+        cameraEnabled = true;
+        updateModeButtons();
+        // Start preview when switching to camera-only
+        void startCameraPreview(cameraPreview);
+      });
+
+      modeDiv.appendChild(screenModeBtn);
+      modeDiv.appendChild(cameraModeBtn);
+      recordingPanel.appendChild(modeDiv);
+      updateModeButtons();
+    }
 
     // Mic toggle
     if (options.showMic) {
@@ -147,13 +239,28 @@ export function renderCaptureStep(
       recordingPanel.appendChild(micToggle);
     }
 
-    // Camera toggle
+    // Camera toggle (only in screen mode — in camera_only mode, camera is always on)
     if (options.showCamera) {
       const camToggle = createToggle("\uD83D\uDCF9 Camera", cameraEnabled, (val) => {
         cameraEnabled = val;
+        if (val) {
+          void startCameraPreview(cameraPreview);
+        } else {
+          stopCameraPreview();
+          cameraPreview.style.display = "none";
+        }
       });
       recordingPanel.appendChild(camToggle);
     }
+
+    // Camera preview container
+    const cameraPreview = document.createElement("div");
+    cameraPreview.style.cssText = `
+      display: none;
+      justify-content: center;
+      padding: 8px 0;
+    `;
+    recordingPanel.appendChild(cameraPreview);
 
     // Start recording button
     const startBtn = document.createElement("button");
@@ -179,7 +286,19 @@ export function renderCaptureStep(
         updateContinueButton();
       };
 
-      await recorder.start({ audio: audioEnabled, camera: cameraEnabled });
+      const recorderOptions: RecorderOptions = {
+        audio: audioEnabled,
+        camera: cameraEnabled,
+        mode: recordingMode,
+        existingCameraStream: cameraPreviewStream ?? undefined,
+      };
+
+      // Clear preview ref so it doesn't get stopped — the recorder now owns the stream
+      if (cameraPreviewStream) {
+        cameraPreviewStream = null;
+      }
+
+      await recorder.start(recorderOptions);
       onRecorderChange?.(recorder);
       recordingStartTime = Date.now();
 
@@ -284,7 +403,6 @@ export function renderCaptureStep(
         `;
         btn.addEventListener("click", () => {
           compositor.position = pos;
-          // Update active state on all position buttons
           posButtons.forEach((b, i) => {
             const entry = positions[i];
             const active = entry ? entry.pos === pos : false;
