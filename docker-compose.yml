@@ -84,13 +84,12 @@ services:
       - "40443:443"
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile
-      - ./docker/widget-demo.html:/srv/widget-demo.html:ro
-      - ./widget/dist/widget.js:/srv/widget.js:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
       - backend
       - frontend
+      - widget
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -183,6 +182,18 @@ services:
       - VITE_API_BASE_URL=/api/v1
       - VITE_WS_BASE_URL=ws://localhost:40080/ws
       - VITE_LIVEKIT_URL=ws://localhost:47880
+
+  # ---------------------------------------------------------------------------
+  # Widget (embeddable JS — dev server with hot reload)
+  # ---------------------------------------------------------------------------
+  widget:
+    build:
+      context: ./widget
+      dockerfile: Dockerfile
+    command: sh -c "npm run build && (node serve-dev.mjs &) && exec rollup -c -w"
+    volumes:
+      - ./widget:/app
+      - /app/node_modules
 
 volumes:
   postgres_data:

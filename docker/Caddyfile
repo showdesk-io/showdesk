@@ -48,23 +48,16 @@
 	}
 
 	# -----------------------------------------------------------------------
-	# Widget demo page + built widget JS
+	# Widget (dev server with hot reload)
 	# -----------------------------------------------------------------------
+	handle /cdn/* {
+		uri strip_prefix /cdn
+		reverse_proxy widget:3001
+	}
+
 	handle /widget-demo* {
 		rewrite /widget-demo /widget-demo.html
-		root * /srv
-		file_server
-	}
-
-	handle /widget.js {
-		root * /srv
-		file_server
-	}
-
-	handle /cdn/widget.js {
-		rewrite /cdn/widget.js /widget.js
-		root * /srv
-		file_server
+		reverse_proxy widget:3001
 	}
 
 	# -----------------------------------------------------------------------

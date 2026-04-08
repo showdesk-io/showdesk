@@ -72,16 +72,14 @@ configs:
           reverse_proxy backend:8000
         }
 
-        handle /cdn/widget.js {
-          root * /srv
-          rewrite /cdn/widget.js /widget.js
-          file_server
+        handle /cdn/* {
+          uri strip_prefix /cdn
+          reverse_proxy widget:80
         }
 
         handle /widget-demo* {
           rewrite /widget-demo /widget-demo.html
-          root * /srv
-          file_server
+          reverse_proxy widget:80
         }
 
         handle {
@@ -104,11 +102,12 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
-      - widget_dist:/srv:ro
     depends_on:
       backend:
         condition: service_healthy
       frontend:
+        condition: service_started
+      widget:
         condition: service_started
     restart: unless-stopped
 
@@ -187,6 +186,13 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # Widget (Nginx serving built widget JS)
+  # ---------------------------------------------------------------------------
+  widget:
+    image: ghcr.io/showdesk-io/showdesk-widget:latest
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # Auto-update: check for new images and trigger Portainer redeploy
   # Set PORTAINER_WEBHOOK_URL to enable. Checks every CHECK_INTERVAL seconds.
   # ---------------------------------------------------------------------------
@@ -197,7 +203,7 @@ services:
       PORTAINER_API_KEY: ${PORTAINER_API_KEY:-}
       PORTAINER_STACK_ID: ${PORTAINER_STACK_ID:-}
       PORTAINER_ENDPOINT_ID: ${PORTAINER_ENDPOINT_ID:-1}
-      WATCHED_IMAGES: ${WATCHED_IMAGES:-ghcr.io/showdesk-io/showdesk-backend:latest ghcr.io/showdesk-io/showdesk-frontend:latest}
+      WATCHED_IMAGES: ${WATCHED_IMAGES:-ghcr.io/showdesk-io/showdesk-backend:latest ghcr.io/showdesk-io/showdesk-frontend:latest ghcr.io/showdesk-io/showdesk-widget:latest}
       CHECK_INTERVAL: ${CHECK_INTERVAL:-300}
     volumes:
       - auto_update_state:/state
@@ -257,7 +263,6 @@ services:
 volumes:
   caddy_data:
   caddy_config:
-  widget_dist:
   auto_update_state:
   redis_data:
   postgres_data:
