@@ -190,7 +190,7 @@ services:
     build:
       context: ./widget
       dockerfile: Dockerfile
-    command: sh -c "npm run build && (node serve-dev.mjs &) && exec rollup -c -w"
+    command: sh -c "npm run build && (node serve-dev.mjs &) && exec npm run dev"
     volumes:
       - ./widget:/app
       - /app/node_modules
