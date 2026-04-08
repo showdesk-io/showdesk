@@ -220,7 +220,9 @@ class TicketViewSet(viewsets.ModelViewSet):
         """Fetch tickets for a user from the widget.
 
         Authenticates via X-Widget-Token header.
-        Requires ?external_user_id=xxx query parameter.
+        Requires ?external_user_id=xxx and ?user_hash=xxx query parameters.
+        The user_hash is verified via HMAC-SHA256(widget_secret, external_user_id)
+        to prevent enumeration of other users' tickets.
         """
         token = request.headers.get("X-Widget-Token")
         if not token:
@@ -242,6 +244,26 @@ class TicketViewSet(viewsets.ModelViewSet):
             return Response(
                 {"error": "external_user_id query parameter is required."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # HMAC identity verification: require user_hash when widget_secret is set
+        user_hash = request.query_params.get("user_hash")
+        if not organization.widget_secret:
+            return Response(
+                {
+                    "error": "Identity verification not configured. Generate a widget secret in Settings."
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not user_hash:
+            return Response(
+                {"error": "user_hash query parameter is required for ticket history."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not organization.verify_user_hash(external_user_id, user_hash):
+            return Response(
+                {"error": "Invalid user_hash."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         tickets = Ticket.objects.filter(

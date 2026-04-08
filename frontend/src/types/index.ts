@@ -13,6 +13,7 @@ export interface Organization {
   domain: string;
   logo: string | null;
   api_token: string;
+  widget_secret: string;
   is_active: boolean;
   widget_color: string;
   widget_position: "bottom-right" | "bottom-left";
@@ -65,6 +66,7 @@ export interface PlatformOrganization {
 export interface PlatformOrganizationDetail extends PlatformOrganization {
   logo: string | null;
   api_token: string;
+  widget_secret: string;
   widget_color: string;
   widget_position: "bottom-right" | "bottom-left";
   widget_greeting: string;

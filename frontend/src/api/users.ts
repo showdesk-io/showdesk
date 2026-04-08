@@ -109,6 +109,13 @@ export async function regenerateApiToken(orgId: string): Promise<Organization> {
   return response.data;
 }
 
+export async function regenerateWidgetSecret(orgId: string): Promise<Organization> {
+  const response = await apiClient.post<Organization>(
+    `/organizations/${orgId}/regenerate_secret/`,
+  );
+  return response.data;
+}
+
 // ── Stats ──────────────────────────────────────────────────────────────
 
 export interface TicketStats {

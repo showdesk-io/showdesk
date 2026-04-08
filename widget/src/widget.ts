@@ -13,7 +13,8 @@
  *           data-color="#6366F1"
  *           data-user-id="user-123"
  *           data-user-name="John Doe"
- *           data-user-email="john@example.com">
+ *           data-user-email="john@example.com"
+ *           data-user-hash="hmac-sha256-hex">
  *   </script>
  *
  * Or programmatically:
@@ -71,8 +72,9 @@ function buildUserFromDataAttrs(
   const id = el.dataset["userId"];
   const name = el.dataset["userName"];
   const email = el.dataset["userEmail"];
+  const hash = el.dataset["userHash"];
   if (!id && !name && !email) return undefined;
-  return { id, name, email };
+  return { id, name, email, hash };
 }
 
 /**

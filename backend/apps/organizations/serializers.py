@@ -19,6 +19,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "domain",
             "logo",
             "api_token",
+            "widget_secret",
             "is_active",
             "widget_color",
             "widget_position",
@@ -29,7 +30,13 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "api_token", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "api_token",
+            "widget_secret",
+            "created_at",
+            "updated_at",
+        ]
 
     def get_agent_count(self, obj: Organization) -> int:
         return obj.users.filter(role__in=["admin", "agent"], is_active=True).count()
@@ -134,6 +141,7 @@ class PlatformOrganizationDetailSerializer(serializers.ModelSerializer):
             "domain",
             "logo",
             "api_token",
+            "widget_secret",
             "is_active",
             "widget_color",
             "widget_position",
@@ -145,7 +153,13 @@ class PlatformOrganizationDetailSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "api_token", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "api_token",
+            "widget_secret",
+            "created_at",
+            "updated_at",
+        ]
 
     def get_agent_count(self, obj: Organization) -> int:
         return obj.users.filter(role__in=["admin", "agent"], is_active=True).count()

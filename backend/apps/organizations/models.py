@@ -1,5 +1,7 @@
 """Organization, Team, User, and OTP models."""
 
+import hashlib
+import hmac
 import secrets
 import uuid
 from datetime import timedelta
@@ -32,7 +34,13 @@ class Organization(TimestampedModel):
         default=uuid.uuid4,
         unique=True,
         db_index=True,
-        help_text="Token used by the widget to authenticate requests.",
+        help_text="Public token used by the widget to authenticate requests.",
+    )
+    widget_secret = models.CharField(
+        max_length=64,
+        default="",
+        blank=True,
+        help_text="Secret key for HMAC identity verification. Never expose client-side.",
     )
     is_active = models.BooleanField(default=True)
 
@@ -76,6 +84,22 @@ class Organization(TimestampedModel):
 
     def __str__(self) -> str:
         return self.name
+
+    @staticmethod
+    def generate_widget_secret() -> str:
+        """Generate a 64-char hex secret for HMAC identity verification."""
+        return secrets.token_hex(32)
+
+    def verify_user_hash(self, external_user_id: str, user_hash: str) -> bool:
+        """Verify an HMAC-SHA256 user hash against the widget secret."""
+        if not self.widget_secret:
+            return False
+        expected = hmac.new(
+            self.widget_secret.encode(),
+            external_user_id.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(expected, user_hash)
 
     def next_ticket_reference(self) -> str:
         """Generate the next ticket reference atomically.

@@ -50,6 +50,19 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         org.save(update_fields=["api_token"])
         return Response(OrganizationSerializer(org).data)
 
+    @action(detail=True, methods=["post"])
+    def regenerate_secret(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Generate or regenerate the widget secret for HMAC identity verification."""
+        org = self.get_object()
+        if request.user.role != User.Role.ADMIN and not request.user.is_superuser:
+            return Response(
+                {"error": "Only admins can manage the widget secret."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        org.widget_secret = Organization.generate_widget_secret()
+        org.save(update_fields=["widget_secret"])
+        return Response(OrganizationSerializer(org).data)
+
 
 class UserViewSet(viewsets.ModelViewSet):
     """ViewSet for managing users."""

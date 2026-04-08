@@ -9,6 +9,8 @@ export interface ShowdeskUserIdentity {
   id?: string;
   name?: string;
   email?: string;
+  /** HMAC-SHA256(widget_secret, id) — computed server-side, enables ticket history. */
+  hash?: string;
 }
 
 export interface ShowdeskConfig {

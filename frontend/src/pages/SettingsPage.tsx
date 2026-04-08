@@ -11,6 +11,7 @@ import {
   fetchOrganization,
   inviteAgent,
   regenerateApiToken,
+  regenerateWidgetSecret,
   toggleUserActive,
   updateOrganization,
   updateUser,
@@ -843,6 +844,15 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
     onError: () => toast.error("Failed to regenerate token."),
   });
 
+  const secretMutation = useMutation({
+    mutationFn: () => regenerateWidgetSecret(org!.id),
+    onSuccess: () => {
+      toast.success("Widget secret generated.");
+      void queryClient.invalidateQueries({ queryKey: ["organization"] });
+    },
+    onError: () => toast.error("Failed to generate secret."),
+  });
+
   if (isLoading || !org) {
     return (
       <div className="flex justify-center py-12">
@@ -971,7 +981,8 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
       <div className="rounded-xl border border-gray-200 bg-white p-6">
         <h2 className="mb-2 text-lg font-semibold text-gray-900">API Token</h2>
         <p className="mb-3 text-sm text-gray-500">
-          Used by the widget and API to authenticate requests.
+          Used by the widget and API to authenticate requests. This token is
+          public (embedded in the script tag on your website).
         </p>
         <div className="flex items-center gap-3">
           <code className="flex-1 rounded-lg bg-gray-100 px-4 py-2 text-sm font-mono text-gray-700">
@@ -991,6 +1002,71 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
             </button>
           )}
         </div>
+      </div>
+
+      {/* Identity Verification */}
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-6">
+        <h2 className="mb-2 text-lg font-semibold text-gray-900">
+          Identity Verification
+        </h2>
+        <p className="mb-3 text-sm text-gray-600">
+          Secret key for HMAC-SHA256 identity verification. Required to enable
+          ticket history in the widget. Your backend computes{" "}
+          <code className="rounded bg-amber-100 px-1 text-xs">
+            HMAC-SHA256(secret, user_id)
+          </code>{" "}
+          and passes the hash to the widget.{" "}
+          <strong>Never expose this secret client-side.</strong>
+        </p>
+        {org.widget_secret ? (
+          <div className="flex items-center gap-3">
+            <code className="flex-1 rounded-lg bg-white px-4 py-2 text-sm font-mono text-gray-700 border border-amber-200">
+              {org.widget_secret}
+            </code>
+            <button
+              onClick={() => {
+                void navigator.clipboard.writeText(org.widget_secret);
+                toast.success("Secret copied!");
+              }}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-white"
+            >
+              Copy
+            </button>
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Regenerate secret? Existing user_hash values will stop working.",
+                    )
+                  ) {
+                    secretMutation.mutate();
+                  }
+                }}
+                disabled={secretMutation.isPending}
+                className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+              >
+                Regenerate
+              </button>
+            )}
+          </div>
+        ) : (
+          <div>
+            <p className="mb-2 text-sm text-amber-700">
+              No secret configured. Without it, the widget cannot show ticket
+              history (only a &quot;check your email&quot; notification).
+            </p>
+            {isAdmin && (
+              <button
+                onClick={() => secretMutation.mutate()}
+                disabled={secretMutation.isPending}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                Generate Secret
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
