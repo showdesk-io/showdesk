@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-03-31
+> Last updated: 2026-04-08
 
 ---
 
@@ -86,8 +86,9 @@ Everything needed before writing real feature code. **All done.**
 
 ## Known Bugs
 
-- [x] **Auth: stale user after re-login** — logging out then logging in with a different email shows the previous user's data (cached in Zustand/localStorage). Eventually switches to the correct user. The auth store should be fully cleared on logout and refreshed on login.
-- [x] **Team page: cross-org user visibility** — non-superuser agents can see users from other organizations and superusers with no organization. The team list API should filter out users without an organization and scope to the current user's org only.
+- [x] **Auth: stale user after re-login** -- logging out then logging in with a different email shows the previous user's data (cached in Zustand/localStorage). Eventually switches to the correct user. The auth store should be fully cleared on logout and refreshed on login.
+- [x] **Team page: cross-org user visibility** -- non-superuser agents can see users from other organizations and superusers with no organization. The team list API should filter out users without an organization and scope to the current user's org only.
+- [ ] **WebSocket fails on dev.showdesk.io** -- WSS connection to `/ws/tickets/` fails when accessed via Cloudflare proxy. Likely Cloudflare or Caddy reverse proxy WebSocket forwarding issue. Works on localhost:40080.
 
 ---
 
@@ -183,6 +184,17 @@ Everything needed before writing real feature code. **All done.**
 
 Transforming the widget from a simple form into a guided, context-rich support experience.
 
+### Widget: Distribution & API URL (Priority 0 -- prerequisite)
+
+The widget runs on external customer websites and must communicate with the correct Showdesk instance. Each instance (cloud, on-premise, dev) serves its own widget version.
+
+- [x] **Auto-detect API URL from script src**: `getApiUrl()` helper in `widget/src/widget.ts` — priority: `data-api-url` > origin from `src` > `/api/v1` (same-origin fallback).
+- [x] **Serve widget at `/cdn/widget.js`**: Route in `docker/Caddyfile` (dev) and inline Caddyfile in `docker-compose.prod.yml` (prod, via `widget_dist` volume).
+- [x] **Fix embed snippet in Settings**: `SettingsPage.tsx` now uses `window.location.origin` + `/cdn/widget.js` instead of hardcoded `cdn.showdesk.io`.
+- [x] **Add "Preview" button in Settings > Widget**: Opens `/widget-demo?token={api_token}` in a new tab.
+- [x] **Demo page auto-load via `?token=`**: Reads `?token=xxx` from URL, auto-fills and loads widget.
+- Note: npm publish (`@showdesk/widget`) for cloud SaaS distribution via unpkg/jsdelivr. `/cdn/widget.js` for on-premise and dev instances.
+
 ### Widget: Guided Wizard Flow (Priority 1)
 
 Adaptive wizard with branching logic based on issue type.
@@ -199,9 +211,9 @@ Loom-style webcam bubble composited on screen recording via Canvas API.
 
 - [x] Canvas compositing: draw screen + camera bubble in requestAnimationFrame loop
 - [~] Draggable/resizable camera bubble (circle, corner presets, 2 sizes -- no free-form drag)
-- [x] Single output stream from canvas → MediaRecorder → one WebM file
-- [ ] Camera-only recording mode (no screen share)
-- [ ] Camera preview before recording starts
+- [x] Single output stream from canvas -> MediaRecorder -> one WebM file
+- [x] Camera-only recording mode (no screen share)
+- [x] Camera preview before recording starts
 
 ### Widget: Automatic Technical Context (Priority 1)
 
@@ -218,10 +230,10 @@ Silent capture of debug data from script load (before widget opens).
 Allow host applications to pass authenticated user info at widget init.
 
 - [x] `Showdesk.init({ user: { id, name, email } })` programmatic API
-- [ ] `data-user-*` attributes on script tag (alternative)
+- [x] `data-user-*` attributes on script tag (alternative)
 - [x] Pre-fill contact fields from identity (skip contact step if complete)
 - [x] Backend: link tickets to known external user ID for tracking (`external_user_id` field)
-- [ ] Backend: endpoint to fetch previous tickets by external user ID
+- [x] Backend: endpoint to fetch previous tickets by external user ID (`widget_tickets` action + `external_user_id` filter)
 
 ### Widget: Ticket History in Widget (Priority 2)
 
@@ -291,8 +303,8 @@ Lightweight replay of user interactions leading up to the bug report.
 - [ ] P1: Billing / Plans management
 - [ ] P1: Feature flags per tenant
 - [ ] P2: Global monitoring dashboard
-- [x] P1: Impersonation — org switcher in sidebar, X-Showdesk-Org header, middleware + get_active_org helper
-- [x] P1: Conditional sidebar — superusers without an organization only see Admin; superusers attached to an org (or impersonating) see both Admin and the standard nav
+- [x] P1: Impersonation -- org switcher in sidebar, X-Showdesk-Org header, middleware + get_active_org helper
+- [x] P1: Conditional sidebar -- superusers without an organization only see Admin; superusers attached to an org (or impersonating) see both Admin and the standard nav
 - [ ] P3: Platform-wide announcements
 - [ ] P3: Tenant data migration tools
 
@@ -331,11 +343,11 @@ Lightweight replay of user interactions leading up to the bug report.
 | Area | Progress | What's done | What's left |
 |------|----------|-------------|-------------|
 | Scaffolding | **100%** | All infra, Docker, CI, docs | -- |
-| Backend API | **~98%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type | Video duration validation, endpoint fetch tickets by external_user_id |
-| Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation, technical context panel (console/network errors), issue type badge | Shortcuts, bulk actions, agent video reply, SLA editor |
-| Widget | **~95%** | Full form, recording, upload, e2e tests, guided wizard, camera PiP (canvas compositing), console/network collectors, user identity API, adaptive steps | Screenshot capture, retry on failure, i18n, accessibility |
+| Backend API | **~99%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type, widget_tickets endpoint, platform admin API, impersonation | Video duration validation |
+| Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation, technical context panel, issue type badge, platform admin page, org switcher, fixed embed snippet, widget preview button | Shortcuts, bulk actions, agent video reply, SLA editor |
+| Widget | **~97%** | Full form, recording, upload, e2e tests, guided wizard, camera PiP (compositing + camera-only + preview), console/network collectors, user identity (API + data-user-*), adaptive steps, API URL auto-detect, /cdn/widget.js distribution | Screenshot, retry, i18n, accessibility |
 | Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright, including wizard flow + identity + context tests) | Video API tests, more frontend tests |
-| Widget UX (Phase 2) | **~55%** | P1: wizard flow (100%), auto context (100%), user identity (~60%), camera PiP (~60%) | P1 remaining: camera-only mode, camera preview, data-user-* attrs, fetch tickets endpoint. P2-P3: ticket history, screenshot+annotation, multi-attach, session replay, video markers |
+| Widget UX (Phase 2) | **~75%** | P0: widget distribution/API URL (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). Code written for camera-only + preview + data-user-* + widget_tickets endpoint. | P2-P3: ticket history, screenshot+annotation, multi-attach, session replay, video markers |
 | Admin (org) | **~55%** | Agent/team CRUD, widget config, tags, custom priorities | Branding, canned responses, SLA, audit log |
 | Admin (platform) | **~40%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar | Usage/quotas dashboard, billing, feature flags, monitoring |
 | Post-MVP | **0%** | -- | Everything |
@@ -343,7 +355,7 @@ Lightweight replay of user interactions leading up to the bug report.
 
 ### Next priorities
 
-1. **Phase 2 P1 finitions** : camera-only mode, camera preview, `data-user-*` attrs, endpoint fetch tickets by external_user_id
+1. ~~Widget distribution & API URL~~ -- **Done**
 2. **Phase 2 P2** : ticket history in widget, screenshot + annotation
 3. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
 4. Canned responses / macros

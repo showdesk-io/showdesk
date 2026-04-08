@@ -150,7 +150,7 @@
     Acme Corp is a fictional company. This page is a Showdesk widget demo.
   </footer>
 
-  <script src="/widget.js"></script>
+  <script src="/cdn/widget.js"></script>
   <script>
     function loadWidget() {
       var token = document.getElementById('token-input').value.trim();
@@ -196,10 +196,12 @@
       }
     }
 
-    // Auto-load if token was saved from a previous session
+    // Auto-load from ?token= query param (e.g. Preview from Settings) or saved token
     document.addEventListener('DOMContentLoaded', function() {
       try {
-        var saved = localStorage.getItem('showdesk-demo-token');
+        var params = new URLSearchParams(window.location.search);
+        var qToken = params.get('token');
+        var saved = qToken || localStorage.getItem('showdesk-demo-token');
         if (saved) {
           document.getElementById('token-input').value = saved;
           loadWidget();

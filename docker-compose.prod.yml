@@ -72,6 +72,18 @@ configs:
           reverse_proxy backend:8000
         }
 
+        handle /cdn/widget.js {
+          root * /srv
+          rewrite /cdn/widget.js /widget.js
+          file_server
+        }
+
+        handle /widget-demo* {
+          rewrite /widget-demo /widget-demo.html
+          root * /srv
+          file_server
+        }
+
         handle {
           reverse_proxy frontend:80
         }
@@ -92,6 +104,7 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+      - widget_dist:/srv:ro
     depends_on:
       backend:
         condition: service_healthy
@@ -244,6 +257,7 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  widget_dist:
   auto_update_state:
   redis_data:
   postgres_data:

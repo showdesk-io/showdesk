@@ -61,6 +61,12 @@
 		file_server
 	}
 
+	handle /cdn/widget.js {
+		rewrite /cdn/widget.js /widget.js
+		root * /srv
+		file_server
+	}
+
 	# -----------------------------------------------------------------------
 	# Everything else → React frontend (Vite dev server)
 	# -----------------------------------------------------------------------

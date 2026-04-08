@@ -10,7 +10,10 @@
  *   <script src="https://showdesk.io/widget.js"
  *           data-token="org-api-token"
  *           data-position="bottom-right"
- *           data-color="#6366F1">
+ *           data-color="#6366F1"
+ *           data-user-id="user-123"
+ *           data-user-name="John Doe"
+ *           data-user-email="john@example.com">
  *   </script>
  *
  * Or programmatically:
@@ -35,6 +38,44 @@ let isInitialized = false;
 let config: ShowdeskConfig;
 
 /**
+ * Derive the API base URL from the widget script tag's `src` attribute.
+ * Priority: data-api-url > origin from src > /api/v1 (same-origin fallback).
+ */
+function getApiUrl(scriptTag: HTMLScriptElement | null): string {
+  // 1. Explicit data-api-url attribute
+  const explicit = scriptTag?.dataset["apiUrl"];
+  if (explicit) return explicit;
+
+  // 2. Derive origin from script src (e.g. src="https://help.example.com/cdn/widget.js")
+  if (scriptTag?.src) {
+    try {
+      const url = new URL(scriptTag.src);
+      return `${url.origin}/api/v1`;
+    } catch {
+      // malformed src — fall through
+    }
+  }
+
+  // 3. Same-origin fallback
+  return "/api/v1";
+}
+
+/**
+ * Build a ShowdeskUserIdentity from data-user-* attributes on the script tag.
+ * Returns undefined if no user attributes are found.
+ */
+function buildUserFromDataAttrs(
+  el: HTMLScriptElement | null,
+): ShowdeskUserIdentity | undefined {
+  if (!el) return undefined;
+  const id = el.dataset["userId"];
+  const name = el.dataset["userName"];
+  const email = el.dataset["userEmail"];
+  if (!id && !name && !email) return undefined;
+  return { id, name, email };
+}
+
+/**
  * Initialize the Showdesk widget.
  */
 function init(userConfig: Partial<ShowdeskConfig> = {}): void {
@@ -50,10 +91,7 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
 
   config = {
     token: userConfig.token ?? scriptTag?.dataset["token"] ?? "",
-    apiUrl:
-      userConfig.apiUrl ??
-      scriptTag?.dataset["apiUrl"] ??
-      "https://showdesk.io/api/v1",
+    apiUrl: userConfig.apiUrl ?? getApiUrl(scriptTag),
     position:
       userConfig.position ??
       (scriptTag?.dataset["position"] as "bottom-right" | "bottom-left") ??
@@ -65,7 +103,7 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
       scriptTag?.dataset["greeting"] ??
       "How can we help you?",
     hideButton: userConfig.hideButton ?? false,
-    user: userConfig.user,
+    user: userConfig.user ?? buildUserFromDataAttrs(scriptTag),
   };
 
   if (!config.token) {

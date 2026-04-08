@@ -851,7 +851,7 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
     );
   }
 
-  const snippet = `<script src="https://cdn.showdesk.io/widget.js" data-token="${org.api_token}"></script>`;
+  const snippet = `<script src="${window.location.origin}/cdn/widget.js" data-token="${org.api_token}"></script>`;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -954,6 +954,17 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
             Copy
           </button>
         </div>
+        <button
+          onClick={() =>
+            window.open(
+              `/widget-demo?token=${encodeURIComponent(org.api_token)}`,
+              "_blank",
+            )
+          }
+          className="mt-3 rounded-lg border border-primary-200 px-4 py-2 text-sm font-medium text-primary-600 hover:bg-primary-50"
+        >
+          Preview widget
+        </button>
       </div>
 
       {/* API Token */}
