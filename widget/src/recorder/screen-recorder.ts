@@ -108,7 +108,8 @@ export class ScreenRecorder {
         frameRate: { ideal: 30 },
       },
       audio: options.audio,
-      // Pre-select the current tab in the browser picker (Chrome 107+)
+      // Include the current tab in the picker (Chrome excludes it by default)
+      selfBrowserSurface: "include",
       preferCurrentTab: true,
     } as DisplayMediaStreamOptions);
 
