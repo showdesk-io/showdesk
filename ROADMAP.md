@@ -161,6 +161,7 @@ Everything needed before writing real feature code. **All done.**
 - [ ] Retry on upload failure
 - [ ] Configurable max recording duration
 - [ ] Custom trigger button -- allow the host app to use its own help button instead of the auto-created FAB. `Showdesk.init({ hideButton: true })` already exists; add `Showdesk.open()` / `Showdesk.startRecording()` / `Showdesk.close()` so the host app can drive the full flow programmatically.
+- [ ] Bookmarklet mode -- generate a bookmarklet URL (from Settings > Widget) that injects the widget script into any page. Allows clients to test the widget directly on their own site/app without deploying the embed snippet.
 - [ ] i18n support
 - [ ] Accessibility (ARIA, keyboard nav, focus trap)
 
