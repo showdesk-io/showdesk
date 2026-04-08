@@ -166,7 +166,8 @@
         try { Showdesk.destroy(); } catch(e) {}
       }
 
-      // Check for ?user=1 query param to pre-fill user identity (for E2E tests)
+      // Pre-fill demo user identity by default (skip contact step).
+      // Disable with ?user=0 in the URL.
       var params = new URLSearchParams(window.location.search);
       var initOptions = {
           token: token,
@@ -175,11 +176,11 @@
           color: '#6366f1',
           greeting: 'How can we help you today?'
       };
-      if (params.get('user') === '1') {
+      if (params.get('user') !== '0') {
         initOptions.user = {
-          id: 'e2e-user-123',
-          name: 'Pre-filled User',
-          email: 'prefilled@test.example'
+          id: 'demo-user-1',
+          name: 'Alice Martin',
+          email: 'alice@acme-demo.com'
         };
       }
 
