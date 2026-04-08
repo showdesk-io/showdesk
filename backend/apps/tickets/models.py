@@ -179,7 +179,6 @@ class Ticket(TimestampedModel):
     )
     reference = models.CharField(
         max_length=20,
-        unique=True,
         db_index=True,
         help_text="Human-readable ticket reference (e.g., SD-1234).",
     )
@@ -275,6 +274,7 @@ class Ticket(TimestampedModel):
 
     class Meta:
         ordering = ["-created_at"]
+        unique_together = [["organization", "reference"]]
         indexes = [
             models.Index(fields=["organization", "status"]),
             models.Index(fields=["organization", "priority"]),
