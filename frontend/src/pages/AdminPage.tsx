@@ -13,12 +13,6 @@ import {
   deletePlatformOrganization,
   fetchOrganizationStats,
 } from "@/api/admin";
-import type {
-  OrganizationStats,
-  PaginatedResponse,
-  PlatformOrganization,
-} from "@/types";
-
 export function AdminPage() {
   return (
     <div className="flex h-full flex-col">

@@ -30,7 +30,9 @@ def admin_otp_login(request: HttpRequest) -> HttpResponse:
             email = request.POST.get("email", "").strip().lower()
             context["email"] = email
 
-            user = User.objects.filter(email=email, is_active=True, is_staff=True).first()
+            user = User.objects.filter(
+                email=email, is_active=True, is_staff=True
+            ).first()
             if user:
                 otp = OTPCode.generate(email)
                 expiry_minutes = getattr(settings, "OTP_EXPIRY_SECONDS", 600) // 60
@@ -62,7 +64,9 @@ def admin_otp_login(request: HttpRequest) -> HttpResponse:
                 .first()
             )
 
-            user = User.objects.filter(email=email, is_active=True, is_staff=True).first()
+            user = User.objects.filter(
+                email=email, is_active=True, is_staff=True
+            ).first()
 
             if otp and otp.is_valid and user:
                 otp.mark_used()

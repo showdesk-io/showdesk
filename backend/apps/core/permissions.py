@@ -7,7 +7,9 @@ class IsPlatformAdmin(BasePermission):
     """Allow access only to platform administrators (superusers)."""
 
     def has_permission(self, request, view):  # noqa: ANN001, ANN201
-        return request.user and request.user.is_authenticated and request.user.is_superuser
+        return (
+            request.user and request.user.is_authenticated and request.user.is_superuser
+        )
 
 
 def get_active_org(request):  # noqa: ANN001, ANN201

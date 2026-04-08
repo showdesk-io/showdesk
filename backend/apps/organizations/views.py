@@ -197,7 +197,9 @@ class PlatformOrganizationViewSet(viewsets.ModelViewSet):
         search = self.request.query_params.get("search")
         if search:
             qs = qs.filter(
-                Q(name__icontains=search) | Q(slug__icontains=search) | Q(domain__icontains=search)
+                Q(name__icontains=search)
+                | Q(slug__icontains=search)
+                | Q(domain__icontains=search)
             )
         return qs.order_by("-created_at")
 

@@ -52,7 +52,6 @@ export function AppLayout() {
   const logout = useAuthStore((s) => s.logout);
   const clearActiveOrg = useOrgStore((s) => s.clearActiveOrg);
   const activeOrgId = useOrgStore((s) => s.activeOrgId);
-  const activeOrgName = useOrgStore((s) => s.activeOrgName);
   const { data: user } = useCurrentUser();
 
   // Maintain WebSocket connection for real-time updates

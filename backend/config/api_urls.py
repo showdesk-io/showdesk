@@ -47,7 +47,11 @@ router.register(r"kb/categories", CategoryViewSet, basename="kb-category")
 router.register(r"kb/articles", ArticleViewSet, basename="kb-article")
 
 # Platform Admin
-router.register(r"platform/organizations", PlatformOrganizationViewSet, basename="platform-organization")
+router.register(
+    r"platform/organizations",
+    PlatformOrganizationViewSet,
+    basename="platform-organization",
+)
 
 urlpatterns = [
     path("", include(router.urls)),
