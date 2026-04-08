@@ -108,7 +108,9 @@ export class ScreenRecorder {
         frameRate: { ideal: 30 },
       },
       audio: options.audio,
-    });
+      // Pre-select the current tab in the browser picker (Chrome 107+)
+      preferCurrentTab: true,
+    } as DisplayMediaStreamOptions);
 
     this.streams.push(displayStream);
 
