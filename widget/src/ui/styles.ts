@@ -670,6 +670,9 @@ export function injectStyles(primaryColor: string): void {
       font-size: 13px;
     }
 
+    .sd-msg-audio {
+      min-width: 220px;
+    }
     .sd-msg-audio audio {
       width: 100%;
       height: 36px;
@@ -1175,6 +1178,13 @@ export function injectStyles(primaryColor: string): void {
 
     .sd-mic-selector-item:hover {
       background: rgba(255, 255, 255, 0.1);
+    }
+    .sd-mic-selector-active {
+      background: rgba(255, 255, 255, 0.15);
+      font-weight: 600;
+    }
+    .sd-mic-selector-active::before {
+      content: "✓ ";
     }
 
     /* ---------------------------------------------------------------- */

@@ -49,6 +49,7 @@ export function showRecordingController(callbacks: {
   onStop: () => void;
   onToggleAudio: () => boolean;
   onSwitchMic: (deviceId: string) => Promise<void>;
+  getCurrentMicId?: () => string;
   audioEnabled: boolean;
 }): void {
   if (!buttonEl) return;
@@ -105,7 +106,7 @@ export function showRecordingController(callbacks: {
   // Mic selector
   micSelectBtn.onclick = (e) => {
     e.stopPropagation();
-    showMicSelector(buttonEl!, callbacks.onSwitchMic);
+    showMicSelector(buttonEl!, callbacks.onSwitchMic, callbacks.getCurrentMicId?.());
   };
 
   // Stop
@@ -121,6 +122,7 @@ export function showRecordingController(callbacks: {
 async function showMicSelector(
   anchor: HTMLElement,
   onSelect: (deviceId: string) => Promise<void>,
+  activeMicId?: string,
 ): Promise<void> {
   // Remove existing selector
   document.getElementById("sd-mic-selector")?.remove();
@@ -142,7 +144,8 @@ async function showMicSelector(
 
   for (const device of devices) {
     const btn = document.createElement("button");
-    btn.className = "sd-mic-selector-item";
+    const isActive = activeMicId ? device.deviceId === activeMicId : device.deviceId === "default";
+    btn.className = `sd-mic-selector-item${isActive ? " sd-mic-selector-active" : ""}`;
     btn.textContent = device.label || `Microphone ${device.deviceId.slice(0, 8)}`;
     btn.onclick = async (e) => {
       e.stopPropagation();

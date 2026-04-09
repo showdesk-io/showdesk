@@ -322,18 +322,29 @@ async function handleAudioCapture(
       audio: { echoCancellation: true, noiseSuppression: true },
     });
 
+    // Route mic through AudioContext so we can switch devices
+    // without modifying the MediaRecorder's stream (which would stop it).
+    const audioCtx = new AudioContext();
+    const audioDest = audioCtx.createMediaStreamDestination();
+    let micSource = audioCtx.createMediaStreamSource(micStream);
+    micSource.connect(audioDest);
+    let currentMicDeviceId = "";
+
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus"
       : "audio/webm";
 
     const chunks: Blob[] = [];
-    const recorder = new MediaRecorder(micStream, { mimeType });
+    // Record from the AudioContext destination, not the raw mic stream
+    const recorder = new MediaRecorder(audioDest.stream, { mimeType });
 
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data);
     };
 
     recorder.onstop = () => {
+      micSource.disconnect();
+      audioCtx.close().catch(() => {});
       micStream.getTracks().forEach((t) => t.stop());
       hideRecordingController(onOpenPanel);
       if (panel) panel.style.display = "";
@@ -349,16 +360,13 @@ async function handleAudioCapture(
     showRecordingController({
       onStop: () => recorder.stop(),
       onToggleAudio: () => {
-        const track = micStream.getAudioTracks()[0];
-        if (track) {
-          track.enabled = !track.enabled;
-          return track.enabled;
-        }
-        return false;
+        const tracks = audioDest.stream.getAudioTracks();
+        const newEnabled = !tracks.some((t) => t.enabled);
+        tracks.forEach((t) => { t.enabled = newEnabled; });
+        return newEnabled;
       },
       onSwitchMic: async (deviceId) => {
-        // For audio-only, we need to stop and restart with new device
-        // since there's no AudioContext routing here
+        currentMicDeviceId = deviceId;
         try {
           const newStream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -367,20 +375,17 @@ async function handleAudioCapture(
               noiseSuppression: true,
             },
           });
-          // Replace track in micStream
-          const oldTrack = micStream.getAudioTracks()[0];
-          if (oldTrack) {
-            micStream.removeTrack(oldTrack);
-            oldTrack.stop();
-          }
-          const newTrack = newStream.getAudioTracks()[0];
-          if (newTrack) {
-            micStream.addTrack(newTrack);
-          }
+          // Disconnect old source, connect new one to same destination.
+          // MediaRecorder's track (from audioDest) never changes.
+          micSource.disconnect();
+          micStream.getTracks().forEach((t) => t.stop());
+          micSource = audioCtx.createMediaStreamSource(newStream);
+          micSource.connect(audioDest);
         } catch (err) {
           console.warn("[Showdesk] Failed to switch mic:", err);
         }
       },
+      getCurrentMicId: () => currentMicDeviceId,
       audioEnabled: true,
     });
   } catch {
@@ -419,6 +424,7 @@ async function handleVideoCapture(
       onStop: () => recorder.stop(),
       onToggleAudio: () => recorder.toggleAudio(),
       onSwitchMic: (deviceId) => recorder.switchMicrophone(deviceId),
+      getCurrentMicId: () => recorder.micDeviceId ?? "",
       audioEnabled: recorder.isAudioEnabled,
     });
   } catch {

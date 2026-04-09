@@ -292,6 +292,13 @@ export class ScreenRecorder {
   }
 
   /**
+   * The current microphone device ID (if set).
+   */
+  get micDeviceId(): string | undefined {
+    return this._micDeviceId;
+  }
+
+  /**
    * Switch to a different microphone device mid-recording.
    * Replaces the current mic track in the MediaRecorder stream.
    */
