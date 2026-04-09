@@ -333,6 +333,7 @@ async function handleVideoCapture(
     showRecordingController({
       onStop: () => recorder.stop(),
       onToggleAudio: () => recorder.toggleAudio(),
+      onSwitchMic: (deviceId) => recorder.switchMicrophone(deviceId),
       audioEnabled: recorder.isAudioEnabled,
     });
   } catch {

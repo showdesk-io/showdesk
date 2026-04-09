@@ -27,6 +27,8 @@ export interface RecorderOptions {
   mode?: "screen" | "camera_only";
   /** Pre-acquired camera stream to reuse (avoids re-prompting for permission). */
   existingCameraStream?: MediaStream;
+  /** Specific microphone device ID (from enumerateDevices). */
+  micDeviceId?: string;
 }
 
 export class ScreenRecorder {
@@ -34,6 +36,7 @@ export class ScreenRecorder {
   private chunks: Blob[] = [];
   private streams: MediaStream[] = [];
   private _compositor: PipCompositor | null = null;
+  private _micDeviceId: string | undefined;
 
   /** Callback invoked when recording stops with the final blob. */
   public onStop: ((blob: Blob) => void) | null = null;
@@ -55,6 +58,7 @@ export class ScreenRecorder {
    */
   async start(options: RecorderOptions): Promise<void> {
     this.cleanup();
+    this._micDeviceId = options.micDeviceId;
 
     const mode = options.mode ?? "screen";
     const tracks: MediaStreamTrack[] = [];
@@ -129,8 +133,10 @@ export class ScreenRecorder {
     // Collect audio tracks from display stream (system audio)
     tracks.push(...displayStream.getAudioTracks());
 
-    // Request microphone if audio enabled and not already captured
-    if (options.audio && !displayStream.getAudioTracks().length) {
+    // Always request microphone when audio is enabled.
+    // System/tab audio and microphone are independent — the user
+    // needs the mic to narrate over the screen capture.
+    if (options.audio) {
       await this.addMicrophoneTrack(tracks);
     }
 
@@ -224,11 +230,15 @@ export class ScreenRecorder {
    */
   private async addMicrophoneTrack(tracks: MediaStreamTrack[]): Promise<void> {
     try {
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+      };
+      if (this._micDeviceId) {
+        audioConstraints.deviceId = { exact: this._micDeviceId };
+      }
       const audioStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
+        audio: audioConstraints,
       });
       this.streams.push(audioStream);
       tracks.push(...audioStream.getAudioTracks());
@@ -269,6 +279,42 @@ export class ScreenRecorder {
    */
   get isAudioEnabled(): boolean {
     return this.mediaRecorder?.stream.getAudioTracks().some((t) => t.enabled) ?? false;
+  }
+
+  /**
+   * Switch to a different microphone device mid-recording.
+   * Replaces the current mic track in the MediaRecorder stream.
+   */
+  async switchMicrophone(deviceId: string): Promise<void> {
+    if (!this.mediaRecorder || this.mediaRecorder.state === "inactive") return;
+    this._micDeviceId = deviceId;
+
+    try {
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: { exact: deviceId },
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      this.streams.push(newStream);
+
+      const newTrack = newStream.getAudioTracks()[0];
+      if (!newTrack) return;
+
+      // Find and replace existing mic track (not system audio)
+      const stream = this.mediaRecorder.stream;
+      const oldMicTracks = stream.getAudioTracks().filter(
+        (t) => t.label !== "System Audio" && !t.label.includes("tab"),
+      );
+      for (const old of oldMicTracks) {
+        stream.removeTrack(old);
+        old.stop();
+      }
+      stream.addTrack(newTrack);
+    } catch (err) {
+      console.warn("[Showdesk] Failed to switch microphone:", err);
+    }
   }
 
   /**

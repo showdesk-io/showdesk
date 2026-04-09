@@ -1087,37 +1087,94 @@ export function injectStyles(primaryColor: string): void {
       min-width: 36px;
     }
 
+    .sd-rec-mic-wrapper {
+      display: flex;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
     .sd-rec-mic,
+    .sd-rec-mic-select,
     .sd-rec-stop {
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
       border: none;
       cursor: pointer;
-      font-size: 16px;
       transition: background 0.15s;
       flex-shrink: 0;
     }
 
     .sd-rec-mic {
-      background: rgba(255, 255, 255, 0.15);
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: transparent;
       color: white;
+      font-size: 16px;
     }
 
     .sd-rec-mic:hover {
-      background: rgba(255, 255, 255, 0.25);
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .sd-rec-mic-select {
+      width: 20px;
+      height: 32px;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 10px;
+      padding: 0;
+      border-left: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .sd-rec-mic-select:hover {
+      color: white;
+      background: rgba(255, 255, 255, 0.15);
     }
 
     .sd-rec-stop {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
       background: #ef4444;
       color: white;
+      font-size: 16px;
     }
 
     .sd-rec-stop:hover {
       background: #dc2626;
+    }
+
+    /* Mic selector dropdown */
+    .sd-mic-selector {
+      background: #1f2937;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+      overflow: hidden;
+      z-index: 10;
+    }
+
+    .sd-mic-selector-item {
+      display: block;
+      width: 100%;
+      padding: 8px 12px;
+      border: none;
+      background: none;
+      color: white;
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sd-mic-selector-item:hover {
+      background: rgba(255, 255, 255, 0.1);
     }
 
     /* ---------------------------------------------------------------- */

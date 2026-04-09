@@ -3,7 +3,7 @@
  *
  * Also displays an unread badge when there are agent replies.
  * During screen recording, transforms into a mini controller
- * with stop button, audio toggle, and elapsed timer.
+ * with stop button, audio toggle, mic selector, and elapsed timer.
  */
 
 import type { ShowdeskConfig } from "../types";
@@ -43,11 +43,12 @@ export function createButton(
 
 /**
  * Transform the FAB into a recording controller.
- * Shows: [recording dot + timer] [mic toggle] [stop button]
+ * Shows: [recording dot + timer] [mic toggle + selector] [stop button]
  */
 export function showRecordingController(callbacks: {
   onStop: () => void;
   onToggleAudio: () => boolean;
+  onSwitchMic: (deviceId: string) => Promise<void>;
   audioEnabled: boolean;
 }): void {
   if (!buttonEl) return;
@@ -64,9 +65,14 @@ export function showRecordingController(callbacks: {
   buttonEl.innerHTML = `
     <span class="sd-rec-dot"></span>
     <span class="sd-rec-timer">0:00</span>
-    <button class="sd-rec-mic" title="Toggle microphone" aria-label="Toggle microphone">
-      ${audioOn ? "🎤" : "🔇"}
-    </button>
+    <span class="sd-rec-mic-wrapper">
+      <button class="sd-rec-mic" title="${audioOn ? "Mute microphone" : "Unmute microphone"}" aria-label="Toggle microphone">
+        ${audioOn ? "🎤" : "🔇"}
+      </button>
+      <button class="sd-rec-mic-select" title="Choose microphone" aria-label="Choose microphone">
+        ▾
+      </button>
+    </span>
     <button class="sd-rec-stop" title="Stop recording" aria-label="Stop recording">
       ⏹
     </button>
@@ -77,6 +83,7 @@ export function showRecordingController(callbacks: {
 
   const timerEl = buttonEl.querySelector(".sd-rec-timer") as HTMLElement;
   const micBtn = buttonEl.querySelector(".sd-rec-mic") as HTMLElement;
+  const micSelectBtn = buttonEl.querySelector(".sd-rec-mic-select") as HTMLElement;
   const stopBtn = buttonEl.querySelector(".sd-rec-stop") as HTMLElement;
 
   // Timer
@@ -95,11 +102,73 @@ export function showRecordingController(callbacks: {
     micBtn.title = audioOn ? "Mute microphone" : "Unmute microphone";
   };
 
+  // Mic selector
+  micSelectBtn.onclick = (e) => {
+    e.stopPropagation();
+    showMicSelector(buttonEl!, callbacks.onSwitchMic);
+  };
+
   // Stop
   stopBtn.onclick = (e) => {
     e.stopPropagation();
     callbacks.onStop();
   };
+}
+
+/**
+ * Show a small dropdown with available microphone devices.
+ */
+async function showMicSelector(
+  anchor: HTMLElement,
+  onSelect: (deviceId: string) => Promise<void>,
+): Promise<void> {
+  // Remove existing selector
+  document.getElementById("sd-mic-selector")?.remove();
+
+  let devices: MediaDeviceInfo[];
+  try {
+    devices = (await navigator.mediaDevices.enumerateDevices()).filter(
+      (d) => d.kind === "audioinput" && d.deviceId,
+    );
+  } catch {
+    return;
+  }
+
+  if (devices.length <= 1) return; // No alternative to show
+
+  const menu = document.createElement("div");
+  menu.id = "sd-mic-selector";
+  menu.className = "sd-mic-selector";
+
+  for (const device of devices) {
+    const btn = document.createElement("button");
+    btn.className = "sd-mic-selector-item";
+    btn.textContent = device.label || `Microphone ${device.deviceId.slice(0, 8)}`;
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      menu.remove();
+      await onSelect(device.deviceId);
+    };
+    menu.appendChild(btn);
+  }
+
+  // Position above the anchor
+  menu.style.position = "absolute";
+  menu.style.bottom = `${anchor.offsetHeight + 8}px`;
+  menu.style.left = "0";
+  menu.style.right = "0";
+
+  anchor.style.position = "relative";
+  anchor.appendChild(menu);
+
+  // Close on outside click
+  const closeHandler = (e: MouseEvent) => {
+    if (!menu.contains(e.target as Node)) {
+      menu.remove();
+      document.removeEventListener("click", closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener("click", closeHandler), 0);
 }
 
 /**
