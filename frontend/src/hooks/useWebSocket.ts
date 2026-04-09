@@ -86,9 +86,9 @@ export function useWebSocket() {
     (data: WebSocketEvent) => {
       switch (data.event) {
         case "ticket.created":
-          // Refresh ticket list and dashboard stats
-          void queryClient.invalidateQueries({ queryKey: ["tickets"] });
-          void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
+          // Refetch ticket list and dashboard stats immediately
+          void queryClient.refetchQueries({ queryKey: ["tickets"] });
+          void queryClient.refetchQueries({ queryKey: ["ticketStats"] });
           toast(`New ticket ${data.reference}: ${data.title}`, {
             icon: "\uD83C\uDFAB",
             duration: 5000,
@@ -96,19 +96,20 @@ export function useWebSocket() {
           break;
 
         case "ticket.updated":
-          // Refresh the specific ticket, ticket list, and stats
-          void queryClient.invalidateQueries({
+          // Refetch the specific ticket, ticket list, and stats
+          void queryClient.refetchQueries({
             queryKey: ["ticket", data.ticket_id],
           });
-          void queryClient.invalidateQueries({ queryKey: ["tickets"] });
-          void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
+          void queryClient.refetchQueries({ queryKey: ["tickets"] });
+          void queryClient.refetchQueries({ queryKey: ["ticketStats"] });
           break;
 
         case "message.created":
-          // Refresh the ticket detail (includes messages)
-          void queryClient.invalidateQueries({
+          // Refetch the ticket detail (includes messages) immediately
+          void queryClient.refetchQueries({
             queryKey: ["ticket", data.ticket_id],
           });
+          void queryClient.refetchQueries({ queryKey: ["tickets"] });
           // Only toast for non-internal messages
           if (data.message_type !== "internal_note") {
             toast(`New reply on ${data.reference}`, {
@@ -119,10 +120,11 @@ export function useWebSocket() {
           break;
 
         case "message.deleted":
-          // Refresh the ticket detail so the deleted message disappears
-          void queryClient.invalidateQueries({
+          // Refetch the ticket detail so the deleted message disappears
+          void queryClient.refetchQueries({
             queryKey: ["ticket", data.ticket_id],
           });
+          void queryClient.refetchQueries({ queryKey: ["tickets"] });
           break;
       }
     },
