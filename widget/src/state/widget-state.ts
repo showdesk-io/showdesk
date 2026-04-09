@@ -30,10 +30,6 @@ export interface WidgetState {
   contactNudgeDismissed: boolean;
   contactNudgeShown: boolean;
 
-  /** Auto-screenshot blob captured on FAB click. */
-  screenshotSuggestion: Blob | null;
-  screenshotSuggestionUrl: string | null;
-
   /** Unread badge count (agent replies while modal closed). */
   unreadCount: number;
 }
@@ -60,8 +56,6 @@ export function createWidgetStore(): WidgetStore {
     isLoading: false,
     contactNudgeDismissed: false,
     contactNudgeShown: false,
-    screenshotSuggestion: null,
-    screenshotSuggestionUrl: null,
     unreadCount: 0,
   };
 

@@ -1054,6 +1054,183 @@ export function injectStyles(primaryColor: string): void {
       justify-content: center;
       padding: 0 5px;
     }
+
+    /* ---------------------------------------------------------------- */
+    /* FAB — Recording controller mode                                   */
+    /* ---------------------------------------------------------------- */
+
+    .sd-button-recording {
+      background: #1f2937 !important;
+      gap: 10px;
+      padding: 10px 16px !important;
+      cursor: default !important;
+    }
+
+    .sd-button-recording:hover {
+      transform: none !important;
+    }
+
+    .sd-rec-dot {
+      width: 10px;
+      height: 10px;
+      background: #ef4444;
+      border-radius: 50%;
+      animation: sd-pulse 1s infinite;
+      flex-shrink: 0;
+    }
+
+    .sd-rec-timer {
+      font-size: 14px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: white;
+      min-width: 36px;
+    }
+
+    .sd-rec-mic,
+    .sd-rec-stop {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background 0.15s;
+      flex-shrink: 0;
+    }
+
+    .sd-rec-mic {
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+    }
+
+    .sd-rec-mic:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    .sd-rec-stop {
+      background: #ef4444;
+      color: white;
+    }
+
+    .sd-rec-stop:hover {
+      background: #dc2626;
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* Video expand button                                               */
+    /* ---------------------------------------------------------------- */
+
+    .sd-msg-video {
+      position: relative;
+    }
+
+    .sd-msg-video-expand {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 28px;
+      height: 28px;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .sd-msg-video:hover .sd-msg-video-expand {
+      opacity: 1;
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* Media lightbox                                                     */
+    /* ---------------------------------------------------------------- */
+
+    .sd-lightbox-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      z-index: 2147483647;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: sd-fadeIn 0.2s ease;
+    }
+
+    .sd-lightbox-container {
+      position: relative;
+      width: 90%;
+      max-width: 900px;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .sd-lightbox-close {
+      position: absolute;
+      top: -40px;
+      right: 0;
+      background: none;
+      border: none;
+      color: white;
+      font-size: 32px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 4px;
+      opacity: 0.8;
+      transition: opacity 0.15s;
+    }
+
+    .sd-lightbox-close:hover {
+      opacity: 1;
+    }
+
+    .sd-lightbox-media {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .sd-lightbox-media img {
+      max-width: 100%;
+      max-height: 85vh;
+      border-radius: 8px;
+      object-fit: contain;
+    }
+
+    .sd-lightbox-media video {
+      max-width: 100%;
+      max-height: 85vh;
+      border-radius: 8px;
+    }
+
+    .sd-lightbox-audio-wrapper {
+      background: #1f2937;
+      border-radius: 16px;
+      padding: 32px 48px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .sd-lightbox-audio-icon {
+      font-size: 48px;
+    }
+
+    .sd-lightbox-audio-wrapper audio {
+      width: 300px;
+    }
   `;
 
   document.head.appendChild(style);

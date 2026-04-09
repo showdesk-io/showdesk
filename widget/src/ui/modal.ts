@@ -202,7 +202,7 @@ function renderTab(
 ): void {
   content.innerHTML = "";
   if (s.state.activeTab === "chat") {
-    renderChatView(content, s, config);
+    renderChatView(content, s, config, () => createModal(config));
   } else {
     renderHistoryView(content, s, config);
   }

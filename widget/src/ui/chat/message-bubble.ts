@@ -2,9 +2,12 @@
  * Message Bubble — Renders a single message in the chat thread.
  *
  * Handles different body types: text, image/screenshot, audio, video.
+ * Media clicks open a lightbox instead of a new tab.
+ * Supports local blob URLs for immediate preview of optimistic messages.
  */
 
 import type { ChatMessage } from "../../types";
+import { openLightbox } from "../media-lightbox";
 
 export function renderMessageBubble(msg: ChatMessage): HTMLElement {
   const isUser = msg.senderType === "user";
@@ -65,6 +68,11 @@ export function renderMessageBubble(msg: ChatMessage): HTMLElement {
   return wrapper;
 }
 
+/** Get the best available URL: server attachment or local blob. */
+function getMediaUrl(msg: ChatMessage): string | null {
+  return msg.attachments[0]?.url || msg._localUrl || null;
+}
+
 function renderText(msg: ChatMessage): HTMLElement {
   const el = document.createElement("div");
   el.className = "sd-msg-text";
@@ -75,13 +83,19 @@ function renderText(msg: ChatMessage): HTMLElement {
 function renderAudio(msg: ChatMessage): HTMLElement {
   const el = document.createElement("div");
   el.className = "sd-msg-audio";
-  const url = msg.attachments[0]?.url;
+  const url = getMediaUrl(msg);
   if (url) {
     const audio = document.createElement("audio");
     audio.controls = true;
     audio.preload = "metadata";
     audio.src = url;
     el.appendChild(audio);
+    // Click on the container (not controls) opens lightbox
+    el.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).tagName !== "AUDIO") {
+        openLightbox(url, "audio");
+      }
+    });
   } else {
     el.textContent = "🎤 Audio message";
   }
@@ -91,13 +105,14 @@ function renderAudio(msg: ChatMessage): HTMLElement {
 function renderImage(msg: ChatMessage): HTMLElement {
   const el = document.createElement("div");
   el.className = "sd-msg-image";
-  const url = msg.attachments[0]?.url;
+  const url = getMediaUrl(msg);
   if (url) {
     const img = document.createElement("img");
     img.src = url;
     img.alt = msg.bodyType === "screenshot" ? "Screenshot" : "Image";
     img.loading = "lazy";
-    img.onclick = () => window.open(url, "_blank");
+    img.style.cursor = "pointer";
+    img.onclick = () => openLightbox(url, msg.bodyType as "image" | "screenshot", img.alt);
     el.appendChild(img);
   }
   if (msg.body) {
@@ -112,15 +127,26 @@ function renderImage(msg: ChatMessage): HTMLElement {
 function renderVideo(msg: ChatMessage): HTMLElement {
   const el = document.createElement("div");
   el.className = "sd-msg-video";
-  const url = msg.attachments[0]?.url;
+  const url = getMediaUrl(msg);
   if (url) {
     const video = document.createElement("video");
     video.controls = true;
     video.preload = "metadata";
     video.src = url;
+    // Click on the video poster/thumbnail area opens lightbox
+    const overlay = document.createElement("div");
+    overlay.className = "sd-msg-video-expand";
+    overlay.innerHTML = "⛶";
+    overlay.title = "Expand";
+    overlay.onclick = (e) => {
+      e.stopPropagation();
+      video.pause();
+      openLightbox(url, "video");
+    };
     el.appendChild(video);
+    el.appendChild(overlay);
   } else {
-    el.textContent = "🎬 Video recording";
+    el.textContent = "🎬 Screen capture";
   }
   return el;
 }

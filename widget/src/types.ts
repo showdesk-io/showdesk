@@ -112,6 +112,8 @@ export interface ChatMessage {
   createdAt: string;
   /** Client-only status for optimistic updates. */
   _status?: "sending" | "sent" | "failed";
+  /** Client-only blob URL for immediate preview before server upload. */
+  _localUrl?: string;
 }
 
 export interface ConversationSummary {

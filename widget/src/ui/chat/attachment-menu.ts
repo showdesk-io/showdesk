@@ -25,7 +25,7 @@ export function renderAttachmentMenu(
   const items: Array<{ icon: string; label: string; action: () => void }> = [
     { icon: "📷", label: "Screenshot", action: callbacks.onScreenshot },
     { icon: "📎", label: "File", action: callbacks.onFile },
-    { icon: "🎬", label: "Video", action: callbacks.onVideo },
+    { icon: "🎬", label: "Screen capture", action: callbacks.onVideo },
     { icon: "🎤", label: "Audio", action: callbacks.onAudio },
   ];
 

@@ -254,6 +254,24 @@ export class ScreenRecorder {
   }
 
   /**
+   * Toggle audio tracks on/off (mute/unmute in the recording).
+   * Returns the new enabled state (true = audio on).
+   */
+  toggleAudio(): boolean {
+    const audioTracks = this.mediaRecorder?.stream.getAudioTracks() ?? [];
+    const newEnabled = !audioTracks.some((t) => t.enabled);
+    audioTracks.forEach((t) => { t.enabled = newEnabled; });
+    return newEnabled;
+  }
+
+  /**
+   * Whether audio tracks are currently enabled.
+   */
+  get isAudioEnabled(): boolean {
+    return this.mediaRecorder?.stream.getAudioTracks().some((t) => t.enabled) ?? false;
+  }
+
+  /**
    * Clean up all media streams and resources.
    */
   private cleanup(): void {

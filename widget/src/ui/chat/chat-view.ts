@@ -13,6 +13,10 @@ import {
 import { captureContext } from "../../api/context";
 import type { WidgetStore } from "../../state/widget-state";
 import type { ChatMessage, ShowdeskConfig } from "../../types";
+import {
+  showRecordingController,
+  hideRecordingController,
+} from "../button";
 import { renderContactNudge } from "./contact-nudge";
 import { renderMessageBubble } from "./message-bubble";
 import { renderMessageInput } from "./message-input";
@@ -24,6 +28,7 @@ export function renderChatView(
   container: HTMLElement,
   store: WidgetStore,
   config: ShowdeskConfig,
+  onOpenPanel?: () => void,
 ): void {
   container.innerHTML = "";
 
@@ -60,7 +65,7 @@ export function renderChatView(
     onScreenshot: () => handleScreenshotCapture(store, config),
     onFile: (file) =>
       handleSendAttachment(file, "image", file.name, store, config),
-    onVideo: () => handleVideoCapture(store, config),
+    onVideo: () => handleVideoCapture(store, config, onOpenPanel ?? (() => {})),
   });
   container.appendChild(input);
 
@@ -209,8 +214,9 @@ async function handleSendAttachment(
   const session = store.state.session;
   if (!session) return;
 
-  // Optimistic message
+  // Optimistic message with local blob URL for immediate preview
   const tempId = `temp-${Date.now()}`;
+  const localUrl = URL.createObjectURL(blob);
   const optimisticMsg: ChatMessage = {
     id: tempId,
     ticketId: store.state.activeTicketId || "",
@@ -221,6 +227,7 @@ async function handleSendAttachment(
     attachments: [],
     createdAt: new Date().toISOString(),
     _status: "sending",
+    _localUrl: localUrl,
   };
 
   store.update({
@@ -301,6 +308,7 @@ async function handleScreenshotCapture(
 async function handleVideoCapture(
   store: WidgetStore,
   config: ShowdeskConfig,
+  onOpenPanel: () => void,
 ): Promise<void> {
   try {
     // Hide panel
@@ -309,6 +317,8 @@ async function handleVideoCapture(
 
     const recorder = new ScreenRecorder();
     recorder.onStop = (blob: Blob) => {
+      // Restore FAB and re-open panel
+      hideRecordingController(onOpenPanel);
       if (panel) panel.style.display = "";
       handleSendAttachment(blob, "video", "recording.webm", store, config);
     };
@@ -317,6 +327,13 @@ async function handleVideoCapture(
       mode: "screen",
       audio: true,
       camera: false,
+    });
+
+    // Transform FAB into recording controller
+    showRecordingController({
+      onStop: () => recorder.stop(),
+      onToggleAudio: () => recorder.toggleAudio(),
+      audioEnabled: recorder.isAudioEnabled,
     });
   } catch {
     const panel = document.getElementById("sd-panel");
