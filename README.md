@@ -164,7 +164,8 @@ Or use the CDN with a single script tag (no build step required):
   src="https://unpkg.com/@showdesk/widget/dist/widget.js"
   data-token="your-organization-api-token"
   data-color="#6366F1"
-  data-position="bottom-right">
+  data-position="bottom-right"
+  data-navigation-mode="spa">
 </script>
 ```
 
@@ -181,6 +182,35 @@ document.getElementById("my-help-btn").addEventListener("click", () => {
   Showdesk.open();
 });
 ```
+
+#### Configuration Options
+
+| Attribute / Option | Default | Description |
+|---|---|---|
+| `data-token` / `token` | *(required)* | Organization API token |
+| `data-color` / `color` | `#6366F1` | Primary theme color (hex) |
+| `data-position` / `position` | `bottom-right` | FAB position: `bottom-right` or `bottom-left` |
+| `data-label` / `label` | `Help` | Floating button label text |
+| `data-greeting` / `greeting` | `How can we help you?` | Panel header greeting |
+| `data-navigation-mode` / `navigationMode` | `spa` | `spa` for single-page apps (recording in-page), `mpa` for multi-page sites (recording in a popup that survives navigation) |
+| `data-user-id` / `user.id` | — | External user ID for ticket tracking |
+| `data-user-name` / `user.name` | — | Pre-fill contact name |
+| `data-user-email` / `user.email` | — | Pre-fill contact email |
+| `data-user-hash` / `user.hash` | — | HMAC-SHA256 for identity verification |
+
+#### Multi-Page Sites (MPA Mode)
+
+On traditional multi-page websites, navigating to a new page destroys the JavaScript context, which would interrupt an ongoing screen recording. Set `data-navigation-mode="mpa"` to enable popup-based recording:
+
+```html
+<script
+  src="https://your-showdesk-instance.com/cdn/widget.js"
+  data-token="your-token"
+  data-navigation-mode="mpa">
+</script>
+```
+
+In MPA mode, screen recordings run in a small popup window that survives page navigations. The popup communicates with the widget via `BroadcastChannel` and can upload the recording autonomously — even if the user navigates away from the client site entirely. If the browser blocks the popup, the widget falls back to in-page recording automatically.
 
 ## Business Model
 

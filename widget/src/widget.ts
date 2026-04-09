@@ -11,14 +11,18 @@
  *           data-token="org-api-token"
  *           data-position="bottom-right"
  *           data-color="#6366F1"
+ *           data-navigation-mode="spa"
  *           data-user-id="user-123"
  *           data-user-name="John Doe"
  *           data-user-email="john@example.com"
  *           data-user-hash="hmac-sha256-hex">
  *   </script>
  *
+ * For multi-page sites (non-SPA), add data-navigation-mode="mpa"
+ * to use popup-based recording that survives page navigation.
+ *
  * Or programmatically:
- *   Showdesk.init({ token: "org-api-token" });
+ *   Showdesk.init({ token: "org-api-token", navigationMode: "mpa" });
  *   Showdesk.open(); // Bind to your own button
  */
 
@@ -33,7 +37,7 @@ installNetworkCollector();
 import { createButton, updateBadge } from "./ui/button";
 import { createModal, destroyModal, getStore } from "./ui/modal";
 import { injectStyles } from "./ui/styles";
-import type { ShowdeskConfig, ShowdeskUserIdentity } from "./types";
+import type { NavigationMode, ShowdeskConfig, ShowdeskUserIdentity } from "./types";
 
 let isInitialized = false;
 let config: ShowdeskConfig;
@@ -106,6 +110,10 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
       "How can we help you?",
     hideButton: userConfig.hideButton ?? false,
     user: userConfig.user ?? buildUserFromDataAttrs(scriptTag),
+    navigationMode:
+      userConfig.navigationMode ??
+      (scriptTag?.dataset["navigationMode"] as NavigationMode) ??
+      "spa",
   };
 
   if (!config.token) {

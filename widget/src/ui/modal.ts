@@ -17,7 +17,7 @@ import {
 import { createWidgetStore } from "../state/widget-state";
 import type { WidgetStore } from "../state/widget-state";
 import type { ChatMessage, ShowdeskConfig, WidgetTab } from "../types";
-import { renderChatView } from "./chat/chat-view";
+import { renderChatView, reattachPopupIfNeeded } from "./chat/chat-view";
 import { renderHistoryView } from "./history/history-view";
 
 let currentPanel: HTMLElement | null = null;
@@ -179,6 +179,11 @@ export function createModal(config: ShowdeskConfig): void {
 
   // Initialize session (async, don't block render)
   initSession(config);
+
+  // MPA mode: check if a popup recorder is still alive from a previous page
+  if (config.navigationMode === "mpa") {
+    reattachPopupIfNeeded(s, config, () => createModal(config));
+  }
 }
 
 function createTabBtn(

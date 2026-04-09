@@ -177,6 +177,54 @@ async function showMicSelector(
 }
 
 /**
+ * Transform the FAB into a lightweight controller for popup-based recording.
+ * Shows: [recording dot + timer] [stop button]
+ * The actual recording runs in the popup — this is just a remote control.
+ */
+export function showPopupRecordingController(callbacks: {
+  onStop: () => void;
+  initialElapsed?: number;
+}): void {
+  if (!buttonEl) return;
+
+  const newButton = buttonEl.cloneNode(false) as HTMLButtonElement;
+  buttonEl.replaceWith(newButton);
+  buttonEl = newButton;
+
+  let elapsed = callbacks.initialElapsed ?? 0;
+
+  buttonEl.className = buttonEl.className.replace("sd-button", "sd-button sd-button-recording");
+  buttonEl.innerHTML = `
+    <span class="sd-rec-dot"></span>
+    <span class="sd-rec-timer">${formatElapsed(elapsed)}</span>
+    <button class="sd-rec-stop" title="Stop recording" aria-label="Stop recording">
+      ⏹
+    </button>
+  `;
+
+  buttonEl.onclick = (e) => e.preventDefault();
+
+  const timerEl = buttonEl.querySelector(".sd-rec-timer") as HTMLElement;
+  const stopBtn = buttonEl.querySelector(".sd-rec-stop") as HTMLElement;
+
+  timerInterval = setInterval(() => {
+    elapsed++;
+    timerEl.textContent = formatElapsed(elapsed);
+  }, 1000);
+
+  stopBtn.onclick = (e) => {
+    e.stopPropagation();
+    callbacks.onStop();
+  };
+}
+
+function formatElapsed(seconds: number): string {
+  const min = Math.floor(seconds / 60);
+  const sec = seconds % 60;
+  return `${min}:${sec.toString().padStart(2, "0")}`;
+}
+
+/**
  * Restore the FAB to its normal state after recording ends.
  */
 export function hideRecordingController(onClick: () => void): void {

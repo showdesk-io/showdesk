@@ -70,6 +70,25 @@
     }
     .token-bar .help a { color: #4338ca; font-weight: 600; }
 
+    .mode-toggle {
+      display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem;
+    }
+    .mode-toggle span { font-size: 0.8rem; color: #4338ca; font-weight: 500; }
+    .mode-toggle .toggle-track {
+      position: relative; width: 44px; height: 24px; background: #c7d2fe;
+      border-radius: 12px; cursor: pointer; transition: background 0.2s;
+    }
+    .mode-toggle .toggle-track.active { background: #6366f1; }
+    .mode-toggle .toggle-track .toggle-thumb {
+      position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+      background: white; border-radius: 50%; transition: left 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .mode-toggle .toggle-track.active .toggle-thumb { left: 22px; }
+    .mode-toggle .mode-label {
+      font-size: 0.75rem; color: #64748b; font-family: monospace;
+      background: #f1f5f9; padding: 2px 8px; border-radius: 4px;
+    }
+
     .info-banner {
       max-width: 900px; margin: 1.5rem auto; padding: 1rem 2rem;
       background: white; border: 1px solid #e2e8f0; border-radius: 0.75rem;
@@ -121,6 +140,16 @@
       in the Django <a href="/admin/" target="_blank">admin</a>,
       or in the <code>python dev.py seed</code> output.
     </p>
+    <div class="mode-toggle">
+      <span>Navigation mode:</span>
+      <span class="mode-label" id="mode-label">spa</span>
+      <div class="toggle-track" id="mode-toggle" onclick="toggleMode()" title="Toggle SPA / MPA mode">
+        <div class="toggle-thumb"></div>
+      </div>
+      <span style="font-size:0.75rem;color:#64748b">
+        <strong>SPA</strong> = in-page recording &nbsp;|&nbsp; <strong>MPA</strong> = popup (survives navigation)
+      </span>
+    </div>
   </div>
   <div id="widget-status"></div>
 
@@ -152,6 +181,25 @@
 
   <script src="/cdn/widget.js"></script>
   <script>
+    var currentMode = 'spa';
+
+    function toggleMode() {
+      currentMode = currentMode === 'spa' ? 'mpa' : 'spa';
+      var track = document.getElementById('mode-toggle');
+      var label = document.getElementById('mode-label');
+      track.classList.toggle('active', currentMode === 'mpa');
+      label.textContent = currentMode;
+
+      // Save preference
+      try { localStorage.setItem('showdesk-demo-mode', currentMode); } catch(e) {}
+
+      // Reload widget with new mode if token is present
+      var token = document.getElementById('token-input').value.trim();
+      if (token && typeof Showdesk !== 'undefined') {
+        loadWidget();
+      }
+    }
+
     function loadWidget() {
       var token = document.getElementById('token-input').value.trim();
       var status = document.getElementById('widget-status');
@@ -174,7 +222,8 @@
           apiUrl: '/api/v1',
           position: 'bottom-right',
           color: '#6366f1',
-          greeting: 'How can we help you today?'
+          greeting: 'How can we help you today?',
+          navigationMode: currentMode
       };
       if (params.get('user') !== '0') {
         initOptions.user = {
@@ -186,7 +235,10 @@
 
       try {
         Showdesk.init(initOptions);
-        status.textContent = 'Widget loaded! Look for the Help button in the bottom-right corner.';
+        var modeHint = currentMode === 'mpa'
+          ? ' (MPA mode — recordings open in a popup)'
+          : ' (SPA mode — recordings are in-page)';
+        status.textContent = 'Widget loaded!' + modeHint;
         status.className = 'ok';
 
         // Save token for next reload
@@ -200,7 +252,23 @@
     // Auto-load from ?token= query param (e.g. Preview from Settings) or saved token
     document.addEventListener('DOMContentLoaded', function() {
       try {
+        // Restore mode preference
+        var savedMode = localStorage.getItem('showdesk-demo-mode');
+        if (savedMode === 'mpa') {
+          currentMode = 'mpa';
+          document.getElementById('mode-toggle').classList.add('active');
+          document.getElementById('mode-label').textContent = 'mpa';
+        }
+
+        // Also support ?mode=mpa in URL
         var params = new URLSearchParams(window.location.search);
+        var qMode = params.get('mode');
+        if (qMode === 'mpa' || qMode === 'spa') {
+          currentMode = qMode;
+          document.getElementById('mode-toggle').classList.toggle('active', currentMode === 'mpa');
+          document.getElementById('mode-label').textContent = currentMode;
+        }
+
         var qToken = params.get('token');
         var saved = qToken || localStorage.getItem('showdesk-demo-token');
         if (saved) {

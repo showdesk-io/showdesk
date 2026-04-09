@@ -159,6 +159,7 @@ Everything needed before writing real feature code. **All done.**
 - [x] E2E browser tests (Playwright, 19 tests)
 - [x] Screenshot capture button (getDisplayMedia single-frame capture, hides overlay during capture, thumbnail previews with remove, uploaded as ticket attachment)
 - [ ] Retry on upload failure
+- [x] Multi-page site support (`data-navigation-mode="mpa"`, popup-based recording)
 - [ ] Configurable max recording duration
 - [ ] Custom trigger button -- allow the host app to use its own help button instead of the auto-created FAB. `Showdesk.init({ hideButton: true })` already exists; add `Showdesk.open()` / `Showdesk.startRecording()` / `Showdesk.close()` so the host app can drive the full flow programmatically.
 - [ ] Video review before submit -- after recording, allow the user to play back the video and decide to keep it, re-record, or discard before submitting the ticket.
@@ -239,6 +240,21 @@ Allow host applications to pass authenticated user info at widget init.
 - [x] Pre-fill contact fields from identity (skip contact step if complete)
 - [x] Backend: link tickets to known external user ID for tracking (`external_user_id` field)
 - [x] Backend: endpoint to fetch previous tickets by external user ID (`widget_tickets` action + `external_user_id` filter)
+
+### Widget: MPA Recording Persistence (Priority 2)
+
+On traditional multi-page sites, page navigation destroys the JS context and any ongoing recording. Popup-based recording solves this.
+
+- [x] `data-navigation-mode` config attribute (`spa` default, `mpa` for multi-page)
+- [x] Popup-based recording: `window.open()` with blob URL (same-origin for BroadcastChannel)
+- [x] BroadcastChannel protocol for popup ↔ widget communication
+- [x] Re-attachment on navigation: widget probes for existing popup on each page load
+- [x] Self-upload: popup uploads recording autonomously via XHR (works even off-site)
+- [x] Duration guard: popup notifies user every 5 minutes of ongoing recording
+- [x] Popup FAB controller: lightweight stop + timer on the main page FAB
+- [x] Graceful fallback: if popup is blocked, falls back to in-page recording (SPA mode)
+- [x] Stop from main widget closes popup and triggers upload
+- [ ] Audio recording MPA mode (mic-only popup variant)
 
 ### Widget: Ticket History in Widget (Priority 2)
 
@@ -404,9 +420,9 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 | Scaffolding | **100%** | All infra, Docker, CI, docs | -- |
 | Backend API | **~99%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type, widget_tickets endpoint, platform admin API, impersonation | Video duration validation |
 | Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation, technical context panel, issue type badge, platform admin page, org switcher, fixed embed snippet, widget preview button | Shortcuts, bulk actions, agent video reply, SLA editor |
-| Widget | **~98%** | Full form, recording, upload, e2e tests, guided wizard, camera PiP (compositing + camera-only + preview), console/network collectors, user identity (API + data-user-*), adaptive steps, API URL auto-detect, /cdn/widget.js distribution, screenshot capture, recording overlay fix | Retry, i18n, accessibility |
+| Widget | **~98%** | Full form, recording, upload, e2e tests, guided wizard, camera PiP (compositing + camera-only + preview), console/network collectors, user identity (API + data-user-*), adaptive steps, API URL auto-detect, /cdn/widget.js distribution, screenshot capture, recording overlay fix, MPA popup recording | Retry, i18n, accessibility |
 | Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright, including wizard flow + identity + context tests) | Video API tests, more frontend tests |
-| Widget UX (Phase 2) | **~80%** | P0: widget distribution/API URL (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). Screenshot capture (basic, no annotation). Bug fixes: recording overlay, captureStream caching. | P2-P3: ticket history, screenshot annotation, multi-attach, session replay, video markers |
+| Widget UX (Phase 2) | **~85%** | P0: widget distribution/API URL (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). P2: MPA recording persistence (100%). Screenshot capture (basic, no annotation). Bug fixes: recording overlay, captureStream caching. | P2-P3: ticket history, screenshot annotation, multi-attach, session replay, video markers |
 | Admin (org) | **~55%** | Agent/team CRUD, widget config, tags, custom priorities | Branding, canned responses, SLA, audit log |
 | Admin (platform) | **~40%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar | Usage/quotas dashboard, billing, feature flags, monitoring |
 | Post-MVP | **0%** | -- | Everything |

@@ -13,6 +13,9 @@ export interface ShowdeskUserIdentity {
   hash?: string;
 }
 
+/** Navigation mode: 'spa' keeps recording in-page, 'mpa' uses a popup that survives navigation. */
+export type NavigationMode = "spa" | "mpa";
+
 export interface ShowdeskConfig {
   /** Organization API token for authentication. */
   token: string;
@@ -30,6 +33,8 @@ export interface ShowdeskConfig {
   hideButton: boolean;
   /** Optional user identity for pre-filling contact fields and tracking. */
   user?: ShowdeskUserIdentity;
+  /** Navigation mode: 'spa' (default) for single-page apps, 'mpa' for multi-page sites. */
+  navigationMode: NavigationMode;
 }
 
 export interface TechnicalContext {

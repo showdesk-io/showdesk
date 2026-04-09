@@ -15,12 +15,19 @@ import type { WidgetStore } from "../../state/widget-state";
 import type { ChatMessage, ShowdeskConfig } from "../../types";
 import {
   showRecordingController,
+  showPopupRecordingController,
   hideRecordingController,
 } from "../button";
 import { renderContactNudge } from "./contact-nudge";
 import { renderMessageBubble } from "./message-bubble";
 import { renderMessageInput } from "./message-input";
 import { ScreenRecorder } from "../../recorder/screen-recorder";
+import type { RecordingMessage } from "../../recorder/broadcast-protocol";
+import {
+  launchRecorderPopup,
+  probeExistingPopup,
+  type PopupHandle,
+} from "../../recorder/popup-launcher";
 
 let messageListEl: HTMLElement | null = null;
 
@@ -402,6 +409,18 @@ async function handleVideoCapture(
   config: ShowdeskConfig,
   onOpenPanel: () => void,
 ): Promise<void> {
+  if (config.navigationMode === "mpa") {
+    return handleVideoCaptureMPA(store, config, onOpenPanel);
+  }
+  return handleVideoCaptureSPA(store, config, onOpenPanel);
+}
+
+/** SPA mode — in-page recording (original behaviour). */
+async function handleVideoCaptureSPA(
+  store: WidgetStore,
+  config: ShowdeskConfig,
+  onOpenPanel: () => void,
+): Promise<void> {
   try {
     // Hide panel
     const panel = document.getElementById("sd-panel");
@@ -432,5 +451,120 @@ async function handleVideoCapture(
   } catch {
     const panel = document.getElementById("sd-panel");
     if (panel) panel.style.display = "";
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* MPA popup state — kept at module level so re-attachment works.       */
+/* ------------------------------------------------------------------ */
+let activePopupHandle: PopupHandle | null = null;
+
+/** MPA mode — open recording in a popup window. */
+function handleVideoCaptureMPA(
+  store: WidgetStore,
+  config: ShowdeskConfig,
+  onOpenPanel: () => void,
+): void {
+  const session = store.state.session;
+  if (!session) return;
+
+  const handle = launchRecorderPopup(
+    {
+      token: config.token,
+      apiUrl: config.apiUrl,
+      sessionId: session.sessionId,
+      ticketId: store.state.activeTicketId,
+      color: config.color,
+    },
+    (msg) => handlePopupMessage(msg, store, config, onOpenPanel),
+  );
+
+  if (!handle) {
+    // Popup was blocked — fall back to in-page
+    console.warn("[Showdesk] Popup blocked — falling back to in-page recording.");
+    handleVideoCaptureSPA(store, config, onOpenPanel);
+    return;
+  }
+
+  activePopupHandle = handle;
+
+  // Hide panel and show a popup-aware recording controller on the FAB
+  const panel = document.getElementById("sd-panel");
+  if (panel) panel.style.display = "none";
+
+  showPopupRecordingController({
+    onStop: () => handle.stop(),
+  });
+}
+
+function handlePopupMessage(
+  msg: RecordingMessage,
+  store: WidgetStore,
+  config: ShowdeskConfig,
+  onOpenPanel: () => void,
+): void {
+  switch (msg.type) {
+    case "recording-started":
+      // FAB already shows popup controller — nothing extra
+      break;
+
+    case "upload-complete":
+      // The popup uploaded directly — refresh the active conversation
+      if (msg.ticketId && !store.state.activeTicketId) {
+        store.update({ activeTicketId: msg.ticketId });
+      }
+      cleanupPopup(onOpenPanel);
+      break;
+
+    case "upload-failed":
+    case "recording-error":
+      cleanupPopup(onOpenPanel);
+      break;
+
+    case "popup-closed":
+      cleanupPopup(onOpenPanel);
+      break;
+
+    case "status-response":
+      // Re-attachment after navigation — update FAB with elapsed time
+      if (msg.isRecording || msg.isUploading) {
+        const panel = document.getElementById("sd-panel");
+        if (panel) panel.style.display = "none";
+        showPopupRecordingController({
+          onStop: () => activePopupHandle?.stop(),
+          initialElapsed: msg.elapsed,
+        });
+      }
+      break;
+
+    // duration-warning, upload-started, upload-progress, recording-stopped:
+    // informational — no action needed on the main page
+  }
+}
+
+function cleanupPopup(onOpenPanel: () => void): void {
+  if (activePopupHandle) {
+    activePopupHandle.destroy();
+    activePopupHandle = null;
+  }
+  hideRecordingController(onOpenPanel);
+  const panel = document.getElementById("sd-panel");
+  if (panel) panel.style.display = "";
+}
+
+/**
+ * Probe for an existing popup recorder after MPA navigation.
+ * Called once on widget init when navigationMode === "mpa".
+ */
+export async function reattachPopupIfNeeded(
+  store: WidgetStore,
+  config: ShowdeskConfig,
+  onOpenPanel: () => void,
+): Promise<void> {
+  const handle = await probeExistingPopup((msg) =>
+    handlePopupMessage(msg, store, config, onOpenPanel),
+  );
+  if (handle) {
+    activePopupHandle = handle;
   }
 }
