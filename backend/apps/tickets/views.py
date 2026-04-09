@@ -314,7 +314,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 "ticket": str(ticket.id),
                 "file": uploaded_file,
                 "filename": uploaded_file.name,
-                "content_type": uploaded_file.content_type or "application/octet-stream",
+                "content_type": uploaded_file.content_type
+                or "application/octet-stream",
                 "file_size": uploaded_file.size,
             }
         )
@@ -779,7 +780,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 "message": str(message.id),
                 "file": uploaded_file,
                 "filename": uploaded_file.name,
-                "content_type": uploaded_file.content_type or "application/octet-stream",
+                "content_type": uploaded_file.content_type
+                or "application/octet-stream",
                 "file_size": uploaded_file.size,
             }
         )

@@ -5,15 +5,19 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('organizations', '0004_organization_widget_secret'),
+        ("organizations", "0004_organization_widget_secret"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='organization',
-            name='api_token',
-            field=models.UUIDField(db_index=True, default=uuid.uuid4, help_text='Public token used by the widget to authenticate requests.', unique=True),
+            model_name="organization",
+            name="api_token",
+            field=models.UUIDField(
+                db_index=True,
+                default=uuid.uuid4,
+                help_text="Public token used by the widget to authenticate requests.",
+                unique=True,
+            ),
         ),
     ]

@@ -7,60 +7,121 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('organizations', '0005_widget_session_and_messaging'),
-        ('tickets', '0006_ticket_reference_unique_per_org'),
+        ("organizations", "0005_widget_session_and_messaging"),
+        ("tickets", "0006_ticket_reference_unique_per_org"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='ticketmessage',
-            name='body_type',
-            field=models.CharField(choices=[('text', 'Text'), ('audio', 'Audio'), ('image', 'Image'), ('video', 'Video'), ('screenshot', 'Screenshot'), ('system', 'System')], default='text', max_length=20),
+            model_name="ticketmessage",
+            name="body_type",
+            field=models.CharField(
+                choices=[
+                    ("text", "Text"),
+                    ("audio", "Audio"),
+                    ("image", "Image"),
+                    ("video", "Video"),
+                    ("screenshot", "Screenshot"),
+                    ("system", "System"),
+                ],
+                default="text",
+                max_length=20,
+            ),
         ),
         migrations.AddField(
-            model_name='ticketmessage',
-            name='sender_type',
-            field=models.CharField(choices=[('user', 'User'), ('agent', 'Agent'), ('system', 'System')], default='agent', max_length=10),
+            model_name="ticketmessage",
+            name="sender_type",
+            field=models.CharField(
+                choices=[("user", "User"), ("agent", "Agent"), ("system", "System")],
+                default="agent",
+                max_length=10,
+            ),
         ),
         migrations.AlterField(
-            model_name='ticketmessage',
-            name='author',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='ticket_messages', to=settings.AUTH_USER_MODEL),
+            model_name="ticketmessage",
+            name="author",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="ticket_messages",
+                to=settings.AUTH_USER_MODEL,
+            ),
         ),
         migrations.AlterField(
-            model_name='ticketmessage',
-            name='body',
+            model_name="ticketmessage",
+            name="body",
             field=models.TextField(blank=True),
         ),
         migrations.CreateModel(
-            name='WidgetSession',
+            name="WidgetSession",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('external_user_id', models.CharField(blank=True, db_index=True, default='', help_text='User ID from the host application, linked via HMAC auth.', max_length=255)),
-                ('name', models.CharField(blank=True, max_length=255)),
-                ('email', models.EmailField(blank=True, max_length=254)),
-                ('user_agent', models.TextField(blank=True)),
-                ('last_seen_at', models.DateTimeField(auto_now=True)),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='widget_sessions', to='organizations.organization')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True, db_index=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "external_user_id",
+                    models.CharField(
+                        blank=True,
+                        db_index=True,
+                        default="",
+                        help_text="User ID from the host application, linked via HMAC auth.",
+                        max_length=255,
+                    ),
+                ),
+                ("name", models.CharField(blank=True, max_length=255)),
+                ("email", models.EmailField(blank=True, max_length=254)),
+                ("user_agent", models.TextField(blank=True)),
+                ("last_seen_at", models.DateTimeField(auto_now=True)),
+                (
+                    "organization",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="widget_sessions",
+                        to="organizations.organization",
+                    ),
+                ),
             ],
         ),
         migrations.AddField(
-            model_name='ticket',
-            name='widget_session',
-            field=models.ForeignKey(blank=True, help_text='Widget session that created this ticket (messaging mode).', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='tickets', to='tickets.widgetsession'),
+            model_name="ticket",
+            name="widget_session",
+            field=models.ForeignKey(
+                blank=True,
+                help_text="Widget session that created this ticket (messaging mode).",
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="tickets",
+                to="tickets.widgetsession",
+            ),
         ),
         migrations.AddField(
-            model_name='ticketmessage',
-            name='widget_session',
-            field=models.ForeignKey(blank=True, help_text='Widget session that sent this message (for anonymous users).', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='messages', to='tickets.widgetsession'),
+            model_name="ticketmessage",
+            name="widget_session",
+            field=models.ForeignKey(
+                blank=True,
+                help_text="Widget session that sent this message (for anonymous users).",
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="messages",
+                to="tickets.widgetsession",
+            ),
         ),
         migrations.AddIndex(
-            model_name='widgetsession',
-            index=models.Index(fields=['organization', 'external_user_id'], name='tickets_wid_organiz_a72c5e_idx'),
+            model_name="widgetsession",
+            index=models.Index(
+                fields=["organization", "external_user_id"],
+                name="tickets_wid_organiz_a72c5e_idx",
+            ),
         ),
     ]

@@ -402,7 +402,9 @@ class TicketMessage(TimestampedModel):
         if self.author:
             sender = str(self.author)
         elif self.widget_session:
-            sender = self.widget_session.name or self.widget_session.email or "widget user"
+            sender = (
+                self.widget_session.name or self.widget_session.email or "widget user"
+            )
         else:
             sender = "unknown"
         return f"Message on {self.ticket.reference} by {sender}"
