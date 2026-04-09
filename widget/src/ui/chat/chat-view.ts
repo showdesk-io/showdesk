@@ -546,7 +546,7 @@ function handleVideoCaptureMPA(
 function handlePopupMessage(
   msg: RecordingMessage,
   store: WidgetStore,
-  config: ShowdeskConfig,
+  _config: ShowdeskConfig,
   onOpenPanel: () => void,
 ): void {
   switch (msg.type) {
