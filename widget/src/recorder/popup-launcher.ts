@@ -13,7 +13,7 @@ import {
   RECORDING_CHANNEL,
   type RecordingMessage,
 } from "./broadcast-protocol";
-import { buildPopupHtml, type PopupConfig } from "./popup-html";
+import { buildPopupHtml, type PopupConfig, type PopupRecordingMode } from "./popup-html";
 
 export interface PopupLaunchOptions {
   token: string;
@@ -21,6 +21,7 @@ export interface PopupLaunchOptions {
   sessionId: string;
   ticketId: string | null;
   color: string;
+  mode: PopupRecordingMode;
 }
 
 export type PopupMessageHandler = (msg: RecordingMessage) => void;
@@ -50,6 +51,7 @@ export function launchRecorderPopup(
     sessionId: options.sessionId,
     ticketId: options.ticketId,
     color: options.color,
+    mode: options.mode,
   };
 
   const html = buildPopupHtml(cfg);
@@ -62,12 +64,17 @@ export function launchRecorderPopup(
     "popup,width=380,height=280",
   );
 
-  // Revoke immediately — the popup has already started loading
-  URL.revokeObjectURL(url);
-
   if (!popup) {
+    URL.revokeObjectURL(url);
     return null;
   }
+
+  // Revoke the blob URL after the popup has loaded its content.
+  // Revoking too early causes a blank page in some browsers.
+  // Use a timeout as a safe fallback in case the load event doesn't fire.
+  const revoke = () => { try { URL.revokeObjectURL(url); } catch {} };
+  try { popup.addEventListener("load", revoke); } catch { /* cross-origin guard */ }
+  setTimeout(revoke, 5000);
 
   const channel = new BroadcastChannel(RECORDING_CHANNEL);
 

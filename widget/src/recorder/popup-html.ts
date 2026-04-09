@@ -14,24 +14,34 @@
  * - Mic mute toggle
  */
 
+export type PopupRecordingMode = "screen" | "audio";
+
 export interface PopupConfig {
   token: string;
   apiUrl: string;
   sessionId: string;
   ticketId: string | null;
   color: string;
+  /** "screen" for getDisplayMedia + mic, "audio" for mic-only. */
+  mode: PopupRecordingMode;
 }
 
 export function buildPopupHtml(cfg: PopupConfig): string {
   // Escape for safe embedding in JS string literals inside the HTML
   const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/"/g, "&quot;");
 
+  const isAudio = cfg.mode === "audio";
+  const title = isAudio ? "Audio Recording" : "Screen Recording";
+  const startLabel = isAudio ? "Start Microphone" : "Start Screen Capture";
+  const bodyType = isAudio ? "audio" : "video";
+  const fileExt = isAudio ? "webm" : "webm";
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Showdesk — Recording</title>
+<title>Showdesk — ${title}</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;overflow:hidden;user-select:none}
@@ -45,8 +55,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .timer{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff}
 .controls{display:flex;gap:8px;margin-top:12px}
-.controls button{padding:8px 16px;border:none;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:6px;transition:opacity .15s}
-.controls button:hover{opacity:.85}
+.controls button,.btn-start{padding:8px 16px;border:none;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:6px;transition:opacity .15s}
+.controls button:hover,.btn-start:hover{opacity:.85}
+.btn-start{background:${esc(cfg.color)};color:#fff;font-size:15px;font-weight:600;padding:12px 24px}
 .btn-mute{background:#334155;color:#e0e0e0}
 .btn-mute.muted{background:#f59e0b;color:#000}
 .btn-stop{background:#ef4444;color:#fff;font-weight:600}
@@ -59,6 +70,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .warning-banner{background:#f59e0b;color:#000;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:500;text-align:center;margin-bottom:8px;animation:fadeIn .3s}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .error-area{text-align:center;color:#ef4444}
+.start-hint{font-size:12px;color:#a0a0a0;margin-top:8px}
 .hidden{display:none!important}
 </style>
 </head>
@@ -68,10 +80,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${esc(cfg.color)}" stroke-width="2">
       <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
     </svg>
-    <h1>Screen Recording</h1>
+    <h1>${title}</h1>
   </div>
   <div id="warning-slot"></div>
-  <div id="view-recording" class="status-area">
+  <div id="view-start" class="status-area">
+    <button class="btn-start" id="btn-start">${startLabel}</button>
+    <p class="start-hint">Your browser requires a click to begin capture</p>
+  </div>
+  <div id="view-recording" class="status-area hidden">
     <div class="rec-indicator"><div class="rec-dot"></div><span style="font-size:12px;color:#a0a0a0">Recording</span></div>
     <div class="timer" id="timer">0:00</div>
     <div class="controls">
@@ -81,7 +97,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   </div>
   <div id="view-upload" class="status-area hidden">
     <div class="upload-area">
-      <p style="color:#fff;font-size:15px;font-weight:600">Uploading recording…</p>
+      <p style="color:#fff;font-size:15px;font-weight:600">Uploading…</p>
       <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
       <p id="upload-detail" style="color:#a0a0a0;font-size:12px">0%</p>
     </div>
@@ -111,6 +127,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     apiUrl: '${esc(cfg.apiUrl)}',
     sessionId: '${esc(cfg.sessionId)}',
     ticketId: ${cfg.ticketId ? "'" + esc(cfg.ticketId) + "'" : "null"},
+    mode: '${cfg.mode}',
+    bodyType: '${bodyType}',
+    fileExt: '${fileExt}',
   };
   var CHANNEL_NAME = 'showdesk-recording';
   var WARN_INTERVAL = 5 * 60 * 1000;
@@ -128,12 +147,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   var timerHandle = null;
   var warnHandle = null;
   var isUploading = false;
-  var recordingBlob = null;
 
   /* ---- DOM refs ---- */
   var $timer = document.getElementById('timer');
+  var $btnStart = document.getElementById('btn-start');
   var $btnMute = document.getElementById('btn-mute');
   var $btnStop = document.getElementById('btn-stop');
+  var $viewStart = document.getElementById('view-start');
   var $viewRec = document.getElementById('view-recording');
   var $viewUpload = document.getElementById('view-upload');
   var $viewDone = document.getElementById('view-done');
@@ -158,7 +178,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     try { channel.postMessage(msg); } catch(e) {}
   }
 
-  function getSupportedMime() {
+  function getSupportedMime(isAudioOnly) {
+    if (isAudioOnly) {
+      var audioTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+      for (var j = 0; j < audioTypes.length; j++) {
+        if (MediaRecorder.isTypeSupported(audioTypes[j])) return audioTypes[j];
+      }
+      return 'audio/webm';
+    }
     var types = [
       'video/webm;codecs=vp9,opus',
       'video/webm;codecs=vp8,opus',
@@ -175,22 +202,29 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 
   /* ---- Recording ---- */
   async function startRecording() {
+    var isAudioOnly = CFG.mode === 'audio';
     try {
-      var displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-        audio: true,
-        selfBrowserSurface: 'include',
-        preferCurrentTab: true,
-      });
-      streams.push(displayStream);
-
       var tracks = [];
-      // System audio tracks from display
-      displayStream.getAudioTracks().forEach(function(t) { tracks.push(t); });
-      // Video tracks
-      displayStream.getVideoTracks().forEach(function(t) { tracks.push(t); });
 
-      // Microphone via AudioContext (allows mute without stopping recorder)
+      if (!isAudioOnly) {
+        /* Screen capture */
+        var displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+          audio: true,
+          selfBrowserSurface: 'include',
+          preferCurrentTab: true,
+        });
+        streams.push(displayStream);
+        displayStream.getAudioTracks().forEach(function(t) { tracks.push(t); });
+        displayStream.getVideoTracks().forEach(function(t) { tracks.push(t); });
+
+        // Stop recording if user ends screen share via browser UI
+        displayStream.getVideoTracks().forEach(function(t) {
+          t.onended = function() { stopRecording(); };
+        });
+      }
+
+      /* Microphone via AudioContext (allows mute without stopping recorder) */
       try {
         var micStream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true }
@@ -203,16 +237,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
         audioDest.stream.getAudioTracks().forEach(function(t) { tracks.push(t); });
       } catch(e) {
         console.warn('[Showdesk Popup] Mic denied:', e);
+        if (isAudioOnly) throw new Error('Microphone access denied');
       }
 
-      // Stop recording if user ends screen share via browser UI
-      displayStream.getVideoTracks().forEach(function(t) {
-        t.onended = function() { stopRecording(); };
-      });
+      if (tracks.length === 0) throw new Error('No media tracks available');
 
-      var mimeType = getSupportedMime();
+      var mimeType = getSupportedMime(isAudioOnly);
       var combined = new MediaStream(tracks);
-      mediaRecorder = new MediaRecorder(combined, { mimeType: mimeType, videoBitsPerSecond: 2500000 });
+      var recOptions = { mimeType: mimeType };
+      if (!isAudioOnly) recOptions.videoBitsPerSecond = 2500000;
+      mediaRecorder = new MediaRecorder(combined, recOptions);
       chunks = [];
 
       mediaRecorder.ondataavailable = function(e) {
@@ -220,13 +254,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       };
 
       mediaRecorder.onstop = function() {
-        recordingBlob = new Blob(chunks, { type: mimeType });
+        var blob = new Blob(chunks, { type: mimeType });
         cleanupStreams();
-        send({ type: 'recording-stopped', blobSize: recordingBlob.size });
-        uploadBlob(recordingBlob);
+        send({ type: 'recording-stopped', blobSize: blob.size });
+        uploadBlob(blob);
       };
 
-      mediaRecorder.start(1000);
+      mediaRecorder.start(isAudioOnly ? 100 : 1000);
+
+      // Switch from start view to recording view
+      hide($viewStart);
+      show($viewRec);
 
       // Timer
       elapsed = 0;
@@ -247,7 +285,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       send({ type: 'recording-started' });
     } catch(e) {
       send({ type: 'recording-error', error: e.message || 'Failed to start' });
-      showError(e.message || 'Failed to start screen capture');
+      showError(e.message || 'Failed to start capture');
     }
   }
 
@@ -277,15 +315,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     send({ type: 'upload-started' });
 
     var form = new FormData();
-    form.append('file', blob, 'recording-' + Date.now() + '.webm');
-    form.append('body_type', 'video');
+    form.append('file', blob, 'recording-' + Date.now() + '.' + CFG.fileExt);
+    form.append('body_type', CFG.bodyType);
     if (CFG.ticketId) form.append('ticket_id', CFG.ticketId);
 
     var xhr = new XMLHttpRequest();
     xhr.open('POST', CFG.apiUrl + '/tickets/widget_message_attachment/');
     xhr.setRequestHeader('X-Widget-Token', CFG.token);
     xhr.setRequestHeader('X-Widget-Session', CFG.sessionId);
-    xhr.timeout = 600000; // 10 min
+    xhr.timeout = 600000;
 
     xhr.upload.onprogress = function(e) {
       if (e.lengthComputable) {
@@ -346,6 +384,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   }
 
   function showError(msg) {
+    hide($viewStart);
     hide($viewRec);
     hide($viewUpload);
     $errorDetail.textContent = msg;
@@ -362,6 +401,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   }
 
   /* ---- Controls ---- */
+  $btnStart.onclick = function() { startRecording(); };
   $btnStop.onclick = function() { stopRecording(); };
 
   $btnMute.onclick = function() {
@@ -399,9 +439,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     }
     send({ type: 'popup-closed' });
   });
-
-  /* ---- Init: start recording immediately ---- */
-  startRecording();
 })();
 </script>
 </body>

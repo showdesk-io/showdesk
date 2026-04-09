@@ -319,6 +319,9 @@ async function handleAudioCapture(
   config: ShowdeskConfig,
   onOpenPanel: () => void,
 ): Promise<void> {
+  if (config.navigationMode === "mpa") {
+    return handleAudioCaptureMPA(store, config, onOpenPanel);
+  }
   try {
     // Hide panel so it doesn't block the page
     const panel = document.getElementById("sd-panel");
@@ -404,6 +407,48 @@ async function handleAudioCapture(
   }
 }
 
+/** MPA mode — open audio recording in a popup window. */
+function handleAudioCaptureMPA(
+  store: WidgetStore,
+  config: ShowdeskConfig,
+  onOpenPanel: () => void,
+): void {
+  const session = store.state.session;
+  if (!session) return;
+
+  const handle = launchRecorderPopup(
+    {
+      token: config.token,
+      apiUrl: config.apiUrl,
+      sessionId: session.sessionId,
+      ticketId: store.state.activeTicketId,
+      color: config.color,
+      mode: "audio",
+    },
+    (msg) => handlePopupMessage(msg, store, config, onOpenPanel),
+  );
+
+  if (!handle) {
+    // Popup blocked — fall back to in-page audio
+    console.warn("[Showdesk] Popup blocked — falling back to in-page audio recording.");
+    // Re-call without MPA to use the SPA path
+    const origMode = config.navigationMode;
+    config.navigationMode = "spa";
+    handleAudioCapture(store, config, onOpenPanel);
+    config.navigationMode = origMode;
+    return;
+  }
+
+  activePopupHandle = handle;
+
+  const panel = document.getElementById("sd-panel");
+  if (panel) panel.style.display = "none";
+
+  showPopupRecordingController({
+    onStop: () => handle.stop(),
+  });
+}
+
 async function handleVideoCapture(
   store: WidgetStore,
   config: ShowdeskConfig,
@@ -475,6 +520,7 @@ function handleVideoCaptureMPA(
       sessionId: session.sessionId,
       ticketId: store.state.activeTicketId,
       color: config.color,
+      mode: "screen",
     },
     (msg) => handlePopupMessage(msg, store, config, onOpenPanel),
   );
