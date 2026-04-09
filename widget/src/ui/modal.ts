@@ -88,10 +88,7 @@ export async function initSession(config: ShowdeskConfig): Promise<void> {
 /**
  * Open the messaging panel.
  */
-export function createModal(
-  config: ShowdeskConfig,
-  screenshotBlob?: Blob | null,
-): void {
+export function createModal(config: ShowdeskConfig): void {
   // If already open, just bring to front
   if (currentPanel) {
     currentPanel.style.display = "";
@@ -99,15 +96,6 @@ export function createModal(
   }
 
   const s = getStore();
-
-  // Store screenshot suggestion if provided
-  if (screenshotBlob) {
-    const url = URL.createObjectURL(screenshotBlob);
-    s.update({
-      screenshotSuggestion: screenshotBlob,
-      screenshotSuggestionUrl: url,
-    });
-  }
 
   // Reset unread count when opening
   s.update({ unreadCount: 0 });

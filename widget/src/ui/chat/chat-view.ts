@@ -16,7 +16,6 @@ import type { ChatMessage, ShowdeskConfig } from "../../types";
 import { renderContactNudge } from "./contact-nudge";
 import { renderMessageBubble } from "./message-bubble";
 import { renderMessageInput } from "./message-input";
-import { renderScreenshotSuggestion } from "./screenshot-suggestion";
 import { ScreenRecorder } from "../../recorder/screen-recorder";
 
 let messageListEl: HTMLElement | null = null;
@@ -34,18 +33,6 @@ export function renderChatView(
   container.appendChild(messageListEl);
 
   renderMessages(store);
-
-  // Screenshot suggestion (if available and no messages yet)
-  if (
-    store.state.screenshotSuggestion &&
-    store.state.messages.length === 0
-  ) {
-    const suggestion = renderScreenshotSuggestion(store, (blob) => {
-      handleSendAttachment(blob, "screenshot", "screenshot.png", store, config);
-    });
-    messageListEl.appendChild(suggestion);
-    scrollToBottom();
-  }
 
   // Contact nudge (after first message, if anonymous and not dismissed)
   if (shouldShowNudge(store, config)) {

@@ -121,9 +121,7 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
 
   // Create the floating button (unless hidden for programmatic use)
   if (!config.hideButton) {
-    createButton(config, (screenshotBlob) => {
-      openWithScreenshot(screenshotBlob);
-    });
+    createButton(config, () => open());
   }
 
   // Subscribe to unread count changes for the FAB badge
@@ -137,21 +135,14 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
 }
 
 /**
- * Open the messaging panel with an optional screenshot.
+ * Open the messaging panel.
  */
-function openWithScreenshot(screenshotBlob: Blob | null): void {
+function open(): void {
   if (!isInitialized) {
     console.error("[Showdesk] Widget not initialized. Call Showdesk.init() first.");
     return;
   }
-  createModal(config, screenshotBlob);
-}
-
-/**
- * Open the messaging panel (without screenshot).
- */
-function open(): void {
-  openWithScreenshot(null);
+  createModal(config);
 }
 
 /**
