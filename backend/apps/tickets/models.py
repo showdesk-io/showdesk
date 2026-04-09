@@ -137,6 +137,41 @@ class SLAPolicy(TimestampedModel):
         return f"{self.name} ({self.priority})"
 
 
+class WidgetSession(TimestampedModel):
+    """Anonymous or identified widget user session.
+
+    Sessions are bound to an organization and optionally linked to an
+    external_user_id (for HMAC-authenticated users). Anonymous sessions
+    are identified only by their UUID, stored in the browser's localStorage.
+    """
+
+    organization = models.ForeignKey(
+        "organizations.Organization",
+        on_delete=models.CASCADE,
+        related_name="widget_sessions",
+    )
+    external_user_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="User ID from the host application, linked via HMAC auth.",
+    )
+    name = models.CharField(max_length=255, blank=True)
+    email = models.EmailField(blank=True)
+    user_agent = models.TextField(blank=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["organization", "external_user_id"]),
+        ]
+
+    def __str__(self) -> str:
+        identifier = self.email or self.name or str(self.id)[:8]
+        return f"WidgetSession {identifier} ({self.organization})"
+
+
 class Ticket(TimestampedModel):
     """A support ticket submitted by an end-user or created by an agent.
 
@@ -261,6 +296,16 @@ class Ticket(TimestampedModel):
     requester_name = models.CharField(max_length=255, blank=True)
     requester_email = models.EmailField(blank=True)
 
+    # Widget session (for messaging-style widget conversations)
+    widget_session = models.ForeignKey(
+        WidgetSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tickets",
+        help_text="Widget session that created this ticket (messaging mode).",
+    )
+
     # SLA tracking
     sla_policy = models.ForeignKey(
         SLAPolicy,
@@ -291,11 +336,27 @@ class TicketMessage(TimestampedModel):
     Messages can be either public replies (visible to the requester)
     or internal notes (visible only to agents). This distinction is
     key for agent collaboration without exposing internal discussions.
+
+    Widget users send messages with sender_type='user' and author=None,
+    using widget_session to identify the sender.
     """
 
     class MessageType(models.TextChoices):
         REPLY = "reply", "Reply"
         INTERNAL_NOTE = "internal_note", "Internal Note"
+
+    class SenderType(models.TextChoices):
+        USER = "user", "User"
+        AGENT = "agent", "Agent"
+        SYSTEM = "system", "System"
+
+    class BodyType(models.TextChoices):
+        TEXT = "text", "Text"
+        AUDIO = "audio", "Audio"
+        IMAGE = "image", "Image"
+        VIDEO = "video", "Video"
+        SCREENSHOT = "screenshot", "Screenshot"
+        SYSTEM = "system", "System"
 
     ticket = models.ForeignKey(
         Ticket,
@@ -306,20 +367,54 @@ class TicketMessage(TimestampedModel):
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
+        blank=True,
         related_name="ticket_messages",
     )
-    body = models.TextField()
+    widget_session = models.ForeignKey(
+        WidgetSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="messages",
+        help_text="Widget session that sent this message (for anonymous users).",
+    )
+    body = models.TextField(blank=True)
     message_type = models.CharField(
         max_length=20,
         choices=MessageType.choices,
         default=MessageType.REPLY,
+    )
+    sender_type = models.CharField(
+        max_length=10,
+        choices=SenderType.choices,
+        default=SenderType.AGENT,
+    )
+    body_type = models.CharField(
+        max_length=20,
+        choices=BodyType.choices,
+        default=BodyType.TEXT,
     )
 
     class Meta:
         ordering = ["created_at"]
 
     def __str__(self) -> str:
-        return f"Message on {self.ticket.reference} by {self.author}"
+        if self.author:
+            sender = str(self.author)
+        elif self.widget_session:
+            sender = self.widget_session.name or self.widget_session.email or "widget user"
+        else:
+            sender = "unknown"
+        return f"Message on {self.ticket.reference} by {sender}"
+
+    @property
+    def sender_name(self) -> str:
+        """Display name for the message sender."""
+        if self.sender_type == self.SenderType.AGENT and self.author:
+            return self.author.get_full_name() or self.author.email
+        if self.sender_type == self.SenderType.USER and self.widget_session:
+            return self.widget_session.name or self.widget_session.email or ""
+        return ""
 
 
 class SavedView(TimestampedModel):

@@ -1,275 +1,252 @@
 /**
- * Wizard-based ticket submission modal.
+ * Modal — Messaging panel (replaces the old wizard modal).
  *
- * Orchestrates a multi-step flow:
- *   Qualification -> Capture -> Contact/Recap -> Sending -> Confirmation
- *
- * Context is captured at submission time (not modal open time) so that
- * the freshest console/network errors are included.
+ * Docked panel (bottom-right/left) with tab bar and content area.
+ * Structure:
+ *   Header (greeting + close)
+ *   Tab bar (Chat | History)
+ *   Content area (chat view or history view)
  */
 
-import type { ShowdeskConfig } from "../types";
-import { createInitialState, canSkipContact } from "./wizard/wizard-state";
-import type { WizardStep } from "./wizard/wizard-state";
-import { renderQualificationStep } from "./wizard/step-qualification";
-import { renderCaptureStep } from "./wizard/step-capture";
-import { renderContactStep } from "./wizard/step-contact";
-import { renderConfirmationStep } from "./wizard/step-confirmation";
-import { captureContext } from "../api/context";
-import { submitTicket, uploadAttachment, uploadVideo } from "../api/submit";
-import { clearConsoleEntries } from "../collectors/console-collector";
-import { clearNetworkEntries } from "../collectors/network-collector";
-import type { ScreenRecorder } from "../recorder/screen-recorder";
+import { createOrResumeSession } from "../api/chat-api";
+import { WidgetWebSocket } from "../api/websocket";
+import {
+  getStoredSessionId,
+  storeSessionId,
+} from "../session/session-manager";
+import { createWidgetStore } from "../state/widget-state";
+import type { WidgetStore } from "../state/widget-state";
+import type { ChatMessage, ShowdeskConfig, WidgetTab } from "../types";
+import { renderChatView } from "./chat/chat-view";
+import { renderHistoryView } from "./history/history-view";
 
-export function createModal(config: ShowdeskConfig): void {
-  // Remove existing modal if any
-  const existing = document.getElementById("showdesk-modal-overlay");
-  if (existing) existing.remove();
+let currentPanel: HTMLElement | null = null;
+let store: WidgetStore | null = null;
+let ws: WidgetWebSocket | null = null;
+let unsubscribe: (() => void) | null = null;
 
-  const container = document.getElementById("showdesk-widget-container");
-  if (!container) return;
-
-  // Track active screen recorder so we can clean up on modal close
-  let activeRecorder: ScreenRecorder | null = null;
-
-  // Initialize wizard state with pre-filled user info
-  const state = createInitialState(
-    config.user?.name || "",
-    config.user?.email || "",
-  );
-
-  // Create overlay
-  const overlay = document.createElement("div");
-  overlay.id = "showdesk-modal-overlay";
-  overlay.className = "sd-overlay";
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) closeModal();
-  });
-
-  // Create modal shell
-  const modal = document.createElement("div");
-  modal.className = "sd-modal";
-  modal.setAttribute("role", "dialog");
-  modal.setAttribute("aria-label", "Submit a support ticket");
-
-  // Header with step indicator + close button
-  const header = document.createElement("div");
-  header.className = "sd-modal-header";
-
-  const stepIndicator = document.createElement("div");
-  stepIndicator.className = "sd-step-dots";
-  for (let i = 0; i < 4; i++) {
-    const dot = document.createElement("span");
-    dot.className = "sd-step-dot";
-    stepIndicator.appendChild(dot);
+/**
+ * Get or create the shared widget store.
+ */
+export function getStore(): WidgetStore {
+  if (!store) {
+    store = createWidgetStore();
   }
-  header.appendChild(stepIndicator);
+  return store;
+}
+
+/**
+ * Get or create the shared WebSocket instance.
+ */
+export function getWebSocket(): WidgetWebSocket {
+  if (!ws) {
+    ws = new WidgetWebSocket();
+  }
+  return ws;
+}
+
+/**
+ * Initialize the session and WebSocket connection.
+ * Called once on first widget open.
+ */
+export async function initSession(config: ShowdeskConfig): Promise<void> {
+  const s = getStore();
+  if (s.state.session) return; // Already initialized
+
+  try {
+    const existingSessionId = getStoredSessionId();
+    const session = await createOrResumeSession(config, existingSessionId);
+    storeSessionId(session.sessionId);
+    s.update({ session });
+
+    // Connect WebSocket
+    const socket = getWebSocket();
+    socket.onMessage = (msg: ChatMessage) => {
+      // Only add if it's for the active conversation
+      if (msg.ticketId === s.state.activeTicketId) {
+        // Don't add duplicates (optimistic messages)
+        const exists = s.state.messages.some((m) => m.id === msg.id);
+        if (!exists) {
+          s.update({ messages: [...s.state.messages, msg] });
+        }
+      } else {
+        // Agent replied on a different conversation — increment unread
+        s.update({ unreadCount: s.state.unreadCount + 1 });
+      }
+    };
+    socket.onConnectionChange = (connected: boolean) => {
+      s.update({ isConnected: connected });
+    };
+    socket.connect(config.apiUrl, config.token, session.sessionId);
+  } catch (err) {
+    console.error("[Showdesk] Session initialization failed:", err);
+  }
+}
+
+/**
+ * Open the messaging panel.
+ */
+export function createModal(
+  config: ShowdeskConfig,
+  screenshotBlob?: Blob | null,
+): void {
+  // If already open, just bring to front
+  if (currentPanel) {
+    currentPanel.style.display = "";
+    return;
+  }
+
+  const s = getStore();
+
+  // Store screenshot suggestion if provided
+  if (screenshotBlob) {
+    const url = URL.createObjectURL(screenshotBlob);
+    s.update({
+      screenshotSuggestion: screenshotBlob,
+      screenshotSuggestionUrl: url,
+    });
+  }
+
+  // Reset unread count when opening
+  s.update({ unreadCount: 0 });
+
+  // Create panel
+  const panel = document.createElement("div");
+  panel.id = "sd-panel";
+  panel.className = `sd-panel sd-panel-${config.position}`;
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "sd-panel-header";
+
+  const greeting = document.createElement("div");
+  greeting.className = "sd-panel-greeting";
+  greeting.textContent = config.greeting;
 
   const closeBtn = document.createElement("button");
-  closeBtn.className = "sd-modal-close";
-  closeBtn.setAttribute("aria-label", "Close");
-  closeBtn.innerHTML = "&times;";
-  closeBtn.addEventListener("click", closeModal);
+  closeBtn.className = "sd-panel-close";
+  closeBtn.innerHTML = "×";
+  closeBtn.title = "Close";
+  closeBtn.onclick = () => closeModal();
+
+  header.appendChild(greeting);
   header.appendChild(closeBtn);
 
-  modal.appendChild(header);
+  // Tab bar
+  const tabBar = document.createElement("div");
+  tabBar.className = "sd-tab-bar";
+
+  const chatTab = createTabBtn("chat", "💬 Chat", s, config);
+  const historyTab = createTabBtn("history", "📋 History", s, config);
+
+  tabBar.appendChild(chatTab);
+  tabBar.appendChild(historyTab);
 
   // Content area
-  const contentEl = document.createElement("div");
-  contentEl.className = "sd-modal-body";
-  modal.appendChild(contentEl);
+  const content = document.createElement("div");
+  content.className = "sd-panel-content";
 
-  overlay.appendChild(modal);
-  container.appendChild(overlay);
+  panel.appendChild(header);
+  panel.appendChild(tabBar);
+  panel.appendChild(content);
 
-  // Escape key handler
-  function onKeyDown(e: KeyboardEvent): void {
-    if (e.key === "Escape") closeModal();
+  // Get or create container
+  let container = document.getElementById("showdesk-widget-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "showdesk-widget-container";
+    document.body.appendChild(container);
   }
-  document.addEventListener("keydown", onKeyDown);
+  container.appendChild(panel);
+  currentPanel = panel;
 
-  function closeModal(): void {
-    // Stop any active recording and clean up streams
-    if (activeRecorder) {
-      if (activeRecorder.isRecording) {
-        activeRecorder.stop();
-      }
-      // Remove the floating recording bar if present
-      const floatingBar = document.getElementById("sd-floating-recording-bar");
-      if (floatingBar) floatingBar.remove();
-      // Restore the original FAB button (hidden during recording)
-      const fab = document.querySelector<HTMLElement>("#showdesk-widget-container .sd-button");
-      if (fab) fab.style.display = "";
-      activeRecorder = null;
-    }
-    document.removeEventListener("keydown", onKeyDown);
-    overlay.remove();
-  }
+  // Render active tab
+  renderTab(content, s, config);
 
-  // Update step indicator dots
-  function updateStepIndicator(step: WizardStep): void {
-    const stepIndex: Record<WizardStep, number> = {
-      qualification: 0,
-      capture: 1,
-      contact: 2,
-      sending: 2,
-      confirmation: 3,
-    };
-    const dots = stepIndicator.querySelectorAll(".sd-step-dot");
-    dots.forEach((dot, i) => {
-      dot.classList.toggle("sd-step-active", i <= stepIndex[step]);
-    });
-  }
-
-  // --- Step orchestration ---
-
-  function goToQualification(): void {
-    state.step = "qualification";
-    updateStepIndicator("qualification");
-    renderQualificationStep(contentEl, (result) => {
-      state.issueType = result.issueType;
-      state.bugVisibility = result.bugVisibility;
-      goToCapture();
-    });
-  }
-
-  function goToCapture(): void {
-    state.step = "capture";
-    updateStepIndicator("capture");
-    renderCaptureStep(contentEl, state, config, (updates) => {
-      Object.assign(state, updates);
-      // Skip contact step if identity is already known
-      if (canSkipContact(state.requesterName, state.requesterEmail)) {
-        goToSending();
-      } else {
-        goToContact();
-      }
-    }, goToQualification, (recorder) => {
-      activeRecorder = recorder;
-    });
-  }
-
-  function goToContact(): void {
-    state.step = "contact";
-    updateStepIndicator("contact");
-    const hasIdentity = canSkipContact(
-      config.user?.name || "",
-      config.user?.email || "",
+  // Subscribe to tab changes
+  unsubscribe = s.subscribe(() => {
+    chatTab.classList.toggle("sd-tab-active", s.state.activeTab === "chat");
+    historyTab.classList.toggle(
+      "sd-tab-active",
+      s.state.activeTab === "history",
     );
-    renderContactStep(contentEl, state, hasIdentity, (updates) => {
-      Object.assign(state, updates);
-      goToSending();
-    }, goToCapture);
+  });
+
+  // Close on Escape
+  const escHandler = (e: KeyboardEvent) => {
+    if (e.key === "Escape") closeModal();
+  };
+  document.addEventListener("keydown", escHandler);
+  (panel as unknown as Record<string, unknown>)._escHandler = escHandler;
+
+  // Initialize session (async, don't block render)
+  initSession(config);
+}
+
+function createTabBtn(
+  tab: WidgetTab,
+  label: string,
+  s: WidgetStore,
+  config: ShowdeskConfig,
+): HTMLElement {
+  const el = document.createElement("button");
+  el.className = `sd-tab ${s.state.activeTab === tab ? "sd-tab-active" : ""}`;
+  el.textContent = label;
+  el.onclick = () => {
+    if (s.state.activeTab === tab) return;
+    s.update({ activeTab: tab });
+    const content = currentPanel?.querySelector(
+      ".sd-panel-content",
+    ) as HTMLElement | null;
+    if (content) {
+      renderTab(content, s, config);
+    }
+  };
+  return el;
+}
+
+function renderTab(
+  content: HTMLElement,
+  s: WidgetStore,
+  config: ShowdeskConfig,
+): void {
+  content.innerHTML = "";
+  if (s.state.activeTab === "chat") {
+    renderChatView(content, s, config);
+  } else {
+    renderHistoryView(content, s, config);
   }
+}
 
-  async function goToSending(): Promise<void> {
-    state.step = "sending";
-    updateStepIndicator("sending");
-    contentEl.innerHTML = "";
-
-    const wrapper = document.createElement("div");
-    wrapper.className = "sd-wizard-step";
-    wrapper.style.textAlign = "center";
-    wrapper.style.padding = "48px 24px";
-
-    const spinner = document.createElement("div");
-    spinner.className = "sd-loading-spinner";
-    wrapper.appendChild(spinner);
-
-    const statusText = document.createElement("p");
-    statusText.style.marginTop = "16px";
-    statusText.style.color = "var(--sd-text-light)";
-    statusText.textContent = "Sending your message...";
-    wrapper.appendChild(statusText);
-
-    contentEl.appendChild(wrapper);
-
-    try {
-      // Capture context at submission time for freshest error data
-      const context = captureContext();
-      clearConsoleEntries();
-      clearNetworkEntries();
-
-      const ticketData = {
-        title: state.description.slice(0, 100),
-        description: state.description,
-        requester_name: state.requesterName,
-        requester_email: state.requesterEmail,
-        priority: "medium",
-        issue_type: state.issueType || "other",
-        external_user_id: config.user?.id || "",
-        context_url: context.url,
-        context_user_agent: context.userAgent,
-        context_os: context.os,
-        context_browser: context.browser,
-        context_screen_resolution: context.screenResolution,
-        context_metadata: {
-          language: context.language,
-          timezone: context.timezone,
-          referrer: context.referrer,
-          console_errors: context.consoleErrors,
-          network_errors: context.networkErrors,
-        },
-      };
-
-      const ticket = await submitTicket(config, ticketData);
-
-      // Upload video if recorded
-      if (state.recordedBlob && ticket.id) {
-        statusText.textContent = "Uploading video...";
-        await uploadVideo(config, ticket.id, state.recordedBlob, {
-          hasAudio: state.hasAudio,
-          hasCamera: state.hasCamera,
-          onProgress: (percent: number) => {
-            statusText.textContent = `Uploading video... ${Math.round(percent)}%`;
-          },
-        });
-      }
-
-      // Upload file attachments (screenshots, etc.)
-      if (state.attachments.length > 0 && ticket.id) {
-        for (let i = 0; i < state.attachments.length; i++) {
-          const file = state.attachments[i];
-          if (!file) continue;
-          statusText.textContent = `Uploading attachment ${i + 1}/${state.attachments.length}...`;
-          await uploadAttachment(config, ticket.id, file);
-        }
-      }
-
-      goToConfirmation(ticket.reference ?? "");
-    } catch (err) {
-      console.error("[Showdesk] Submission failed:", err);
-
-      wrapper.innerHTML = "";
-      const errorDiv = document.createElement("div");
-      errorDiv.className = "sd-error";
-      errorDiv.textContent = "Something went wrong. Please try again.";
-      wrapper.appendChild(errorDiv);
-
-      const retryBtn = document.createElement("button");
-      retryBtn.className = "sd-submit-btn";
-      retryBtn.style.marginTop = "12px";
-      retryBtn.textContent = "Retry";
-      retryBtn.addEventListener("click", () => {
-        void goToSending();
-      });
-      wrapper.appendChild(retryBtn);
-
-      const backBtn = document.createElement("button");
-      backBtn.className = "sd-back-btn";
-      backBtn.style.marginTop = "8px";
-      backBtn.textContent = "\u25C0 Back";
-      backBtn.addEventListener("click", goToCapture);
-      wrapper.appendChild(backBtn);
+/**
+ * Close the messaging panel (hide, don't destroy).
+ */
+export function closeModal(): void {
+  if (currentPanel) {
+    currentPanel.style.display = "none";
+    const escHandler = (currentPanel as unknown as Record<string, unknown>)
+      ._escHandler as EventListener;
+    if (escHandler) {
+      document.removeEventListener("keydown", escHandler);
     }
   }
+}
 
-  function goToConfirmation(ticketReference: string): void {
-    state.step = "confirmation";
-    updateStepIndicator("confirmation");
-    renderConfirmationStep(contentEl, ticketReference, closeModal);
+/**
+ * Destroy the panel and clean up.
+ */
+export function destroyModal(): void {
+  if (unsubscribe) {
+    unsubscribe();
+    unsubscribe = null;
   }
-
-  // Start the wizard
-  goToQualification();
+  if (ws) {
+    ws.disconnect();
+    ws = null;
+  }
+  if (currentPanel) {
+    currentPanel.remove();
+    currentPanel = null;
+  }
+  store = null;
 }

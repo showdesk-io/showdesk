@@ -1,4 +1,8 @@
-"""WebSocket consumers for real-time notifications."""
+"""WebSocket consumers for real-time notifications.
+
+TicketConsumer — agent dashboard (JWT-authenticated).
+WidgetConsumer — widget chat users (token + session-authenticated).
+"""
 
 import logging
 
@@ -59,3 +63,40 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
         if user.organization_id:
             return str(user.organization_id)
         return None
+
+
+class WidgetConsumer(AsyncJsonWebsocketConsumer):
+    """WebSocket consumer for widget chat users.
+
+    Widget users connect with their session_id and org token (via query params).
+    They receive real-time agent replies on their tickets.
+    """
+
+    async def connect(self) -> None:
+        """Handle WebSocket connection."""
+        session = self.scope.get("widget_session")
+        if not session:
+            await self.close()
+            return
+
+        self.session_id = str(session.id)
+        self.group_name = f"widget_session_{self.session_id}"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code: int) -> None:
+        """Handle WebSocket disconnection."""
+        if hasattr(self, "group_name"):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def receive_json(self, content: dict) -> None:
+        """Handle incoming messages — currently unused."""
+        pass
+
+    async def widget_message(self, event: dict) -> None:
+        """Send a new message (agent reply) to the widget client."""
+        await self.send_json(event["data"])
+
+    async def ticket_status_update(self, event: dict) -> None:
+        """Send ticket status change to the widget client."""
+        await self.send_json(event["data"])

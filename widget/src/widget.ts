@@ -2,9 +2,9 @@
  * Showdesk Widget — Entry Point
  *
  * A single, self-contained JavaScript file that can be embedded in any
- * website. Zero dependencies, zero installation required. The widget
- * captures the user's screen, webcam, and microphone to submit
- * video-first support tickets.
+ * website. Zero dependencies, zero installation required.
+ *
+ * v2: Messaging-style interface (WhatsApp-like chat).
  *
  * Usage:
  *   <script src="https://showdesk.io/widget.js"
@@ -30,8 +30,8 @@ import { installNetworkCollector } from "./collectors/network-collector";
 installConsoleCollector();
 installNetworkCollector();
 
-import { createButton } from "./ui/button";
-import { createModal } from "./ui/modal";
+import { createButton, updateBadge } from "./ui/button";
+import { createModal, destroyModal, getStore } from "./ui/modal";
 import { injectStyles } from "./ui/styles";
 import type { ShowdeskConfig, ShowdeskUserIdentity } from "./types";
 
@@ -121,23 +121,37 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
 
   // Create the floating button (unless hidden for programmatic use)
   if (!config.hideButton) {
-    createButton(config, () => open());
+    createButton(config, (screenshotBlob) => {
+      openWithScreenshot(screenshotBlob);
+    });
   }
+
+  // Subscribe to unread count changes for the FAB badge
+  const store = getStore();
+  store.subscribe(() => {
+    updateBadge(store.state.unreadCount);
+  });
 
   isInitialized = true;
   console.info("[Showdesk] Widget initialized.");
 }
 
 /**
- * Open the ticket submission modal.
+ * Open the messaging panel with an optional screenshot.
  */
-function open(): void {
+function openWithScreenshot(screenshotBlob: Blob | null): void {
   if (!isInitialized) {
     console.error("[Showdesk] Widget not initialized. Call Showdesk.init() first.");
     return;
   }
+  createModal(config, screenshotBlob);
+}
 
-  createModal(config);
+/**
+ * Open the messaging panel (without screenshot).
+ */
+function open(): void {
+  openWithScreenshot(null);
 }
 
 /**
@@ -155,6 +169,7 @@ function setUser(user: ShowdeskUserIdentity): void {
  * Destroy the widget and clean up DOM elements.
  */
 function destroy(): void {
+  destroyModal();
   const container = document.getElementById("showdesk-widget-container");
   if (container) {
     container.remove();

@@ -11,7 +11,12 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from apps.core.permissions import get_active_org
 from rest_framework.parsers import FormParser, MultiPartParser
-from apps.core.throttling import WidgetSubmitThrottle, WidgetUploadThrottle
+from apps.core.throttling import (
+    WidgetMessageThrottle,
+    WidgetSessionThrottle,
+    WidgetSubmitThrottle,
+    WidgetUploadThrottle,
+)
 from apps.notifications.signals import (
     notify_new_message,
     notify_new_ticket,
@@ -26,6 +31,7 @@ from .models import (
     Ticket,
     TicketAttachment,
     TicketMessage,
+    WidgetSession,
 )
 from .serializers import (
     PriorityLevelSerializer,
@@ -36,6 +42,10 @@ from .serializers import (
     TicketListSerializer,
     TicketMessageSerializer,
     TicketSerializer,
+    WidgetConversationListSerializer,
+    WidgetMessageCreateSerializer,
+    WidgetMessageSerializer,
+    WidgetSessionSerializer,
 )
 from .tasks import (
     send_ticket_assigned_email,
@@ -45,6 +55,48 @@ from .tasks import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_widget_org(request):
+    """Validate X-Widget-Token header and return the Organization.
+
+    Returns (organization, None) on success, or (None, Response) on failure.
+    """
+    token = request.headers.get("X-Widget-Token")
+    if not token:
+        return None, Response(
+            {"error": "Missing X-Widget-Token header."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    try:
+        org = Organization.objects.get(api_token=token, is_active=True)
+    except Organization.DoesNotExist:
+        return None, Response(
+            {"error": "Invalid or inactive organization token."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    return org, None
+
+
+def _get_widget_session(request, organization):
+    """Validate X-Widget-Session header and return the WidgetSession.
+
+    Returns (session, None) on success, or (None, Response) on failure.
+    """
+    session_id = request.headers.get("X-Widget-Session")
+    if not session_id:
+        return None, Response(
+            {"error": "Missing X-Widget-Session header."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    try:
+        session = WidgetSession.objects.get(id=session_id, organization=organization)
+    except (WidgetSession.DoesNotExist, ValueError):
+        return None, Response(
+            {"error": "Invalid session."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    return session, None
 
 
 class TicketViewSet(viewsets.ModelViewSet):
@@ -430,6 +482,421 @@ class TicketViewSet(viewsets.ModelViewSet):
             logger.exception("WebSocket notification failed for %s", ticket.reference)
 
         return Response(TicketSerializer(ticket).data)
+
+    # ------------------------------------------------------------------
+    # Widget messaging endpoints (chat-style)
+    # ------------------------------------------------------------------
+
+    @action(
+        detail=False,
+        methods=["post", "patch"],
+        permission_classes=[AllowAny],
+        throttle_classes=[WidgetSessionThrottle],
+        url_path="widget_session",
+    )
+    def widget_session(self, request):  # noqa: ANN001, ANN201
+        """Create, resume, or update a widget session.
+
+        POST: Create a new session or resume an existing one.
+        PATCH: Update contact info (name/email) on an existing session.
+        """
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+
+        if request.method == "PATCH":
+            session, err = _get_widget_session(request, org)
+            if err:
+                return err
+            name = request.data.get("name")
+            email = request.data.get("email")
+            if name is not None:
+                session.name = name
+            if email is not None:
+                session.email = email
+            session.save(update_fields=["name", "email", "last_seen_at"])
+            # Backfill on linked tickets with blank requester info
+            if session.name or session.email:
+                update_fields = {}
+                if session.name:
+                    update_fields["requester_name"] = session.name
+                if session.email:
+                    update_fields["requester_email"] = session.email
+                Ticket.objects.filter(
+                    widget_session=session,
+                    requester_name="",
+                ).update(**update_fields)
+            return Response(WidgetSessionSerializer(session).data)
+
+        # POST — create or resume
+        session_id = request.data.get("session_id")
+        external_user_id = request.data.get("external_user_id", "")
+        user_hash = request.data.get("user_hash", "")
+        name = request.data.get("name", "")
+        email = request.data.get("email", "")
+
+        # Try to resume existing session
+        if session_id:
+            try:
+                session = WidgetSession.objects.get(id=session_id, organization=org)
+                session.last_seen_at = timezone.now()
+                if name and not session.name:
+                    session.name = name
+                if email and not session.email:
+                    session.email = email
+                session.save()
+                return Response(WidgetSessionSerializer(session).data)
+            except (WidgetSession.DoesNotExist, ValueError):
+                pass  # Fall through to create new
+
+        # HMAC-identified user: find-or-create by external_user_id
+        if external_user_id and user_hash:
+            if not org.widget_secret:
+                return Response(
+                    {"error": "Identity verification not configured."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if not org.verify_user_hash(external_user_id, user_hash):
+                return Response(
+                    {"error": "Invalid user_hash."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            session, created = WidgetSession.objects.get_or_create(
+                organization=org,
+                external_user_id=external_user_id,
+                defaults={
+                    "name": name,
+                    "email": email,
+                    "user_agent": request.META.get("HTTP_USER_AGENT", ""),
+                },
+            )
+            if not created:
+                session.last_seen_at = timezone.now()
+                if name and not session.name:
+                    session.name = name
+                if email and not session.email:
+                    session.email = email
+                session.save()
+            resp_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+            return Response(WidgetSessionSerializer(session).data, status=resp_status)
+
+        # Anonymous session
+        session = WidgetSession.objects.create(
+            organization=org,
+            name=name,
+            email=email,
+            user_agent=request.META.get("HTTP_USER_AGENT", ""),
+        )
+        return Response(
+            WidgetSessionSerializer(session).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[AllowAny],
+        throttle_classes=[WidgetMessageThrottle],
+        url_path="widget_message",
+    )
+    def widget_message(self, request):  # noqa: ANN001, ANN201
+        """Send a chat message from the widget.
+
+        Creates a ticket on the first message (when ticket_id is null).
+        Subsequent messages are appended to the existing ticket.
+        """
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+
+        serializer = WidgetMessageCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        ticket_id = data.get("ticket_id")
+        body = data.get("body", "")
+        body_type = data.get("body_type", "text")
+        context_data = data.get("context", {})
+
+        # Create or retrieve ticket
+        if ticket_id:
+            try:
+                ticket = Ticket.objects.get(
+                    id=ticket_id,
+                    organization=org,
+                    widget_session=session,
+                )
+            except Ticket.DoesNotExist:
+                return Response(
+                    {"error": "Ticket not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            # First message — create ticket
+            title = body[:100] if body else f"[{body_type.capitalize()}]"
+            ticket = Ticket.objects.create(
+                organization=org,
+                reference=org.next_ticket_reference(),
+                title=title,
+                description=body,
+                source=Ticket.Source.WIDGET,
+                widget_session=session,
+                requester_name=session.name,
+                requester_email=session.email,
+                external_user_id=session.external_user_id,
+                context_url=context_data.get("url", ""),
+                context_user_agent=context_data.get("user_agent", ""),
+                context_os=context_data.get("os", ""),
+                context_browser=context_data.get("browser", ""),
+                context_screen_resolution=context_data.get("screen_resolution", ""),
+                context_metadata={
+                    k: v
+                    for k, v in context_data.items()
+                    if k
+                    not in (
+                        "url",
+                        "user_agent",
+                        "os",
+                        "browser",
+                        "screen_resolution",
+                    )
+                },
+            )
+            try:
+                notify_new_ticket(ticket)
+            except Exception:
+                logger.exception(
+                    "WebSocket notification failed for %s", ticket.reference
+                )
+            send_ticket_created_email.delay(str(ticket.id))
+
+        # Create message
+        message = TicketMessage.objects.create(
+            ticket=ticket,
+            widget_session=session,
+            sender_type=TicketMessage.SenderType.USER,
+            body=body,
+            body_type=body_type,
+        )
+
+        try:
+            notify_new_message(message)
+        except Exception:
+            logger.exception("WebSocket notification failed for message %s", message.id)
+
+        return Response(
+            {
+                "ticket_id": str(ticket.id),
+                "message_id": str(message.id),
+                "reference": ticket.reference,
+                "created_at": message.created_at.isoformat(),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[AllowAny],
+        throttle_classes=[WidgetUploadThrottle],
+        parser_classes=[MultiPartParser, FormParser],
+        url_path="widget_message_attachment",
+    )
+    def widget_message_attachment(self, request):  # noqa: ANN001, ANN201
+        """Upload a media attachment as a chat message from the widget.
+
+        Supports screenshots, audio messages, images, and video recordings.
+        Creates a ticket on the first message if ticket_id is not provided.
+        """
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+
+        uploaded_file = request.FILES.get("file")
+        if not uploaded_file:
+            return Response(
+                {"error": "'file' is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ticket_id = request.data.get("ticket_id")
+        body_type = request.data.get("body_type", "image")
+        body = request.data.get("body", "")
+
+        # Create or retrieve ticket
+        if ticket_id:
+            try:
+                ticket = Ticket.objects.get(
+                    id=ticket_id,
+                    organization=org,
+                    widget_session=session,
+                )
+            except Ticket.DoesNotExist:
+                return Response(
+                    {"error": "Ticket not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            title = body[:100] if body else f"[{body_type.capitalize()}]"
+            ticket = Ticket.objects.create(
+                organization=org,
+                reference=org.next_ticket_reference(),
+                title=title,
+                description=body,
+                source=Ticket.Source.WIDGET,
+                widget_session=session,
+                requester_name=session.name,
+                requester_email=session.email,
+                external_user_id=session.external_user_id,
+            )
+            try:
+                notify_new_ticket(ticket)
+            except Exception:
+                logger.exception(
+                    "WebSocket notification failed for %s", ticket.reference
+                )
+            send_ticket_created_email.delay(str(ticket.id))
+
+        # Create message
+        message = TicketMessage.objects.create(
+            ticket=ticket,
+            widget_session=session,
+            sender_type=TicketMessage.SenderType.USER,
+            body=body,
+            body_type=body_type,
+        )
+
+        # Validate and save attachment
+        att_serializer = TicketAttachmentSerializer(
+            data={
+                "ticket": str(ticket.id),
+                "message": str(message.id),
+                "file": uploaded_file,
+                "filename": uploaded_file.name,
+                "content_type": uploaded_file.content_type or "application/octet-stream",
+                "file_size": uploaded_file.size,
+            }
+        )
+        att_serializer.is_valid(raise_exception=True)
+        att_serializer.save(uploaded_by=None)
+
+        # For video uploads, also create VideoRecording
+        if body_type == "video":
+            from apps.videos.models import VideoRecording
+
+            video = VideoRecording.objects.create(
+                ticket=ticket,
+                original_file=uploaded_file,
+                status=VideoRecording.Status.UPLOADING,
+                recording_type=request.data.get("recording_type", "screen"),
+                has_audio=request.data.get("has_audio", "false").lower() == "true",
+                has_camera=request.data.get("has_camera", "false").lower() == "true",
+                mime_type=uploaded_file.content_type or "video/webm",
+                file_size=uploaded_file.size,
+            )
+            from apps.videos.tasks import process_video
+
+            process_video.delay(str(video.id))
+
+        try:
+            notify_new_message(message)
+        except Exception:
+            logger.exception("WebSocket notification failed for message %s", message.id)
+
+        return Response(
+            {
+                "ticket_id": str(ticket.id),
+                "message_id": str(message.id),
+                "reference": ticket.reference,
+                "attachment": att_serializer.data,
+                "created_at": message.created_at.isoformat(),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[AllowAny],
+        url_path="widget_conversation",
+    )
+    def widget_conversation(self, request):  # noqa: ANN001, ANN201
+        """Fetch messages for a specific conversation from the widget."""
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+
+        ticket_id = request.query_params.get("ticket_id")
+        if not ticket_id:
+            return Response(
+                {"error": "ticket_id query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            ticket = Ticket.objects.get(
+                id=ticket_id,
+                organization=org,
+                widget_session=session,
+            )
+        except (Ticket.DoesNotExist, ValueError):
+            return Response(
+                {"error": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        messages = (
+            ticket.messages.filter(message_type=TicketMessage.MessageType.REPLY)
+            .select_related("author", "widget_session")
+            .prefetch_related("attachments")
+            .order_by("created_at")
+        )
+
+        serializer = WidgetMessageSerializer(messages, many=True)
+        return Response(
+            {
+                "ticket_id": str(ticket.id),
+                "reference": ticket.reference,
+                "status": ticket.status,
+                "messages": serializer.data,
+            }
+        )
+
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[AllowAny],
+        url_path="widget_history",
+    )
+    def widget_history(self, request):  # noqa: ANN001, ANN201
+        """Fetch conversation history for the current widget session."""
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+
+        # Find tickets by session, or by external_user_id for cross-session history
+        q = models.Q(widget_session=session)
+        if session.external_user_id:
+            q |= models.Q(
+                external_user_id=session.external_user_id,
+                organization=org,
+            )
+
+        tickets = Ticket.objects.filter(q).order_by("-updated_at")[:30]
+        serializer = WidgetConversationListSerializer(tickets, many=True)
+        return Response(serializer.data)
 
 
 class TicketMessageViewSet(viewsets.ModelViewSet):

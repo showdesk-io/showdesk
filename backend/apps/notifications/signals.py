@@ -49,7 +49,11 @@ def notify_new_ticket(ticket) -> None:  # noqa: ANN001
 
 
 def notify_new_message(message) -> None:  # noqa: ANN001
-    """Send a new message notification to the organization channel."""
+    """Send a new message notification to the organization channel.
+
+    Also broadcasts to the widget session group if the ticket was created
+    from the widget, so the end-user receives agent replies in real-time.
+    """
     channel_layer = get_channel_layer()
     group_name = f"org_{message.ticket.organization_id}"
 
@@ -66,3 +70,23 @@ def notify_new_message(message) -> None:  # noqa: ANN001
             },
         },
     )
+
+    # Broadcast to widget session for real-time chat
+    widget_session_id = message.ticket.widget_session_id
+    if widget_session_id:
+        async_to_sync(channel_layer.group_send)(
+            f"widget_session_{widget_session_id}",
+            {
+                "type": "widget_message",
+                "data": {
+                    "event": "message.created",
+                    "ticket_id": str(message.ticket_id),
+                    "message_id": str(message.id),
+                    "body": message.body,
+                    "body_type": getattr(message, "body_type", "text"),
+                    "sender_type": getattr(message, "sender_type", "agent"),
+                    "sender_name": message.sender_name,
+                    "created_at": message.created_at.isoformat(),
+                },
+            },
+        )

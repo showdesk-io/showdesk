@@ -12,6 +12,7 @@ from .models import (
     Ticket,
     TicketAttachment,
     TicketMessage,
+    WidgetSession,
 )
 
 
@@ -127,6 +128,7 @@ class TicketMessageSerializer(serializers.ModelSerializer):
 
     author_detail = UserSerializer(source="author", read_only=True)
     attachments = TicketAttachmentSerializer(many=True, read_only=True)
+    sender_name = serializers.CharField(read_only=True)
 
     class Meta:
         model = TicketMessage
@@ -137,6 +139,9 @@ class TicketMessageSerializer(serializers.ModelSerializer):
             "author_detail",
             "body",
             "message_type",
+            "sender_type",
+            "body_type",
+            "sender_name",
             "attachments",
             "created_at",
             "updated_at",
@@ -343,3 +348,122 @@ class SavedViewSerializer(serializers.ModelSerializer):
         if qs.exists():
             raise serializers.ValidationError("A view with this name already exists.")
         return value
+
+
+# ---------------------------------------------------------------------------
+# Widget messaging serializers
+# ---------------------------------------------------------------------------
+
+
+class WidgetSessionSerializer(serializers.ModelSerializer):
+    """Serializer for widget session creation and display."""
+
+    session_id = serializers.UUIDField(source="id", read_only=True)
+
+    class Meta:
+        model = WidgetSession
+        fields = [
+            "session_id",
+            "name",
+            "email",
+            "external_user_id",
+        ]
+        read_only_fields = ["session_id"]
+
+
+class WidgetMessageCreateSerializer(serializers.Serializer):
+    """Validates incoming widget chat messages."""
+
+    ticket_id = serializers.UUIDField(required=False, allow_null=True)
+    body = serializers.CharField(required=False, allow_blank=True, max_length=10000)
+    body_type = serializers.ChoiceField(
+        choices=TicketMessage.BodyType.choices,
+        default=TicketMessage.BodyType.TEXT,
+    )
+    context = serializers.JSONField(required=False, default=dict)
+
+    def validate(self, attrs):  # noqa: ANN001, ANN201
+        body = attrs.get("body", "")
+        body_type = attrs.get("body_type", "text")
+        if body_type == "text" and not body.strip():
+            raise serializers.ValidationError(
+                {"body": "Text messages must have a body."}
+            )
+        return attrs
+
+
+class WidgetMessageSerializer(serializers.ModelSerializer):
+    """Serializer for displaying messages in widget conversations."""
+
+    attachments = TicketAttachmentSerializer(many=True, read_only=True)
+    sender_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = TicketMessage
+        fields = [
+            "id",
+            "ticket",
+            "body",
+            "body_type",
+            "sender_type",
+            "sender_name",
+            "attachments",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class WidgetConversationListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for listing conversations in the widget history tab."""
+
+    last_message_preview = serializers.SerializerMethodField()
+    last_message_at = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Ticket
+        fields = [
+            "id",
+            "reference",
+            "title",
+            "status",
+            "last_message_preview",
+            "last_message_at",
+            "unread_count",
+            "created_at",
+        ]
+
+    def get_last_message_preview(self, obj: Ticket) -> str:
+        last_msg = (
+            obj.messages.filter(message_type="reply")
+            .order_by("-created_at")
+            .values_list("body", flat=True)
+            .first()
+        )
+        if not last_msg:
+            return ""
+        return last_msg[:120]
+
+    def get_last_message_at(self, obj: Ticket) -> str | None:
+        last_msg = (
+            obj.messages.filter(message_type="reply")
+            .order_by("-created_at")
+            .values_list("created_at", flat=True)
+            .first()
+        )
+        return last_msg.isoformat() if last_msg else None
+
+    def get_unread_count(self, obj: Ticket) -> int:
+        """Count agent replies since last user message."""
+        last_user_msg = (
+            obj.messages.filter(sender_type="user")
+            .order_by("-created_at")
+            .values_list("created_at", flat=True)
+            .first()
+        )
+        if not last_user_msg:
+            return obj.messages.filter(sender_type="agent").count()
+        return obj.messages.filter(
+            sender_type="agent",
+            created_at__gt=last_user_msg,
+        ).count()

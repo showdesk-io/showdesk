@@ -69,3 +69,57 @@ export interface RecorderState {
   hasCamera: boolean;
   blob: Blob | null;
 }
+
+/* ------------------------------------------------------------------ */
+/* Chat / messaging types                                              */
+/* ------------------------------------------------------------------ */
+
+export type WidgetTab = "chat" | "history";
+
+export interface WidgetSession {
+  sessionId: string;
+  name: string;
+  email: string;
+  externalUserId: string;
+}
+
+export interface ChatAttachment {
+  id: string;
+  url: string;
+  filename: string;
+  contentType: string;
+  fileSize: number;
+}
+
+export type BodyType =
+  | "text"
+  | "audio"
+  | "image"
+  | "video"
+  | "screenshot"
+  | "system";
+
+export type SenderType = "user" | "agent" | "system";
+
+export interface ChatMessage {
+  id: string;
+  ticketId: string;
+  body: string;
+  bodyType: BodyType;
+  senderType: SenderType;
+  senderName: string;
+  attachments: ChatAttachment[];
+  createdAt: string;
+  /** Client-only status for optimistic updates. */
+  _status?: "sending" | "sent" | "failed";
+}
+
+export interface ConversationSummary {
+  id: string;
+  reference: string;
+  title: string;
+  status: string;
+  lastMessagePreview: string;
+  lastMessageAt: string | null;
+  unreadCount: number;
+}
