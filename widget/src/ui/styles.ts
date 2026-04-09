@@ -723,13 +723,13 @@ export function injectStyles(primaryColor: string): void {
     .sd-msg-delete {
       display: none;
       position: absolute;
-      top: 4px;
-      left: -28px;
+      top: -6px;
+      right: -6px;
       width: 22px;
       height: 22px;
       border-radius: 50%;
       border: none;
-      background: #f1f5f9;
+      background: white;
       color: #94a3b8;
       cursor: pointer;
       align-items: center;
@@ -737,6 +737,7 @@ export function injectStyles(primaryColor: string): void {
       font-size: 12px;
       transition: all 0.15s;
       padding: 0;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.12);
     }
 
     .sd-msg-delete:hover {
