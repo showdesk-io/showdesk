@@ -1436,6 +1436,40 @@ export function injectStyles(primaryColor: string): void {
     .sd-lightbox-audio-wrapper audio {
       width: 300px;
     }
+
+    /* Undo toast */
+    .sd-toast {
+      position: absolute;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1e293b;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 10;
+      animation: sd-fadeIn 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .sd-toast-undo {
+      background: none;
+      border: none;
+      color: var(--sd-primary);
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .sd-toast-undo:hover {
+      text-decoration: underline;
+    }
   `;
 
   document.head.appendChild(style);

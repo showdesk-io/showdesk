@@ -57,6 +57,10 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
         """Send new message notification to the WebSocket client."""
         await self.send_json(event["data"])
 
+    async def ticket_message_deleted(self, event: dict) -> None:
+        """Send message deletion notification to the WebSocket client."""
+        await self.send_json(event["data"])
+
     @database_sync_to_async
     def _get_organization_id(self, user) -> str | None:  # noqa: ANN001
         """Get the organization ID for a user."""

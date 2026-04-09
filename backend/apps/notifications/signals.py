@@ -90,3 +90,22 @@ def notify_new_message(message) -> None:  # noqa: ANN001
                 },
             },
         )
+
+
+def notify_message_deleted(ticket, message_id: str) -> None:  # noqa: ANN001
+    """Notify agent dashboard and widget that a message was deleted."""
+    channel_layer = get_channel_layer()
+
+    # Notify agents
+    async_to_sync(channel_layer.group_send)(
+        f"org_{ticket.organization_id}",
+        {
+            "type": "ticket_message_deleted",
+            "data": {
+                "event": "message.deleted",
+                "ticket_id": str(ticket.id),
+                "message_id": message_id,
+                "reference": ticket.reference,
+            },
+        },
+    )

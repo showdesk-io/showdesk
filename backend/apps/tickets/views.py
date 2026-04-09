@@ -18,6 +18,7 @@ from apps.core.throttling import (
     WidgetUploadThrottle,
 )
 from apps.notifications.signals import (
+    notify_message_deleted,
     notify_new_message,
     notify_new_ticket,
     notify_ticket_update,
@@ -944,9 +945,18 @@ class TicketViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Keep references before deleting
+        ticket = message.ticket
+        deleted_message_id = str(message.id)
+
         # Delete associated attachments (files on storage) and the message
         message.attachments.all().delete()
         message.delete()
+
+        try:
+            notify_message_deleted(ticket, deleted_message_id)
+        except Exception:
+            logger.exception("WebSocket notification failed for deleted message %s", deleted_message_id)
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 

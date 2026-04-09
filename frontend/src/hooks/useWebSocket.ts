@@ -36,10 +36,18 @@ interface MessageCreatedEvent {
   message_type: string;
 }
 
+interface MessageDeletedEvent {
+  event: "message.deleted";
+  ticket_id: string;
+  message_id: string;
+  reference: string;
+}
+
 type WebSocketEvent =
   | TicketCreatedEvent
   | TicketUpdatedEvent
-  | MessageCreatedEvent;
+  | MessageCreatedEvent
+  | MessageDeletedEvent;
 
 /** Max reconnection attempts before giving up. */
 const MAX_RECONNECT_ATTEMPTS = 10;
@@ -108,6 +116,13 @@ export function useWebSocket() {
               duration: 4000,
             });
           }
+          break;
+
+        case "message.deleted":
+          // Refresh the ticket detail so the deleted message disappears
+          void queryClient.invalidateQueries({
+            queryKey: ["ticket", data.ticket_id],
+          });
           break;
       }
     },

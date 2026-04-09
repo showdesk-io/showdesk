@@ -180,13 +180,22 @@ function buildEmptyState(): HTMLElement {
   return el;
 }
 
-async function handleDeleteMessage(
+/** Pending undo state — only one at a time. */
+let pendingDelete: { timer: ReturnType<typeof setTimeout>; messageId: string } | null = null;
+
+function handleDeleteMessage(
   messageId: string,
   store: WidgetStore,
   config: ShowdeskConfig,
-): Promise<void> {
+): void {
   const session = store.state.session;
   if (!session) return;
+
+  // Cancel any previous pending delete
+  if (pendingDelete) {
+    clearTimeout(pendingDelete.timer);
+    commitDelete(pendingDelete.messageId, store, config);
+  }
 
   // Optimistic removal from UI
   const previousMessages = store.state.messages;
@@ -194,11 +203,54 @@ async function handleDeleteMessage(
     messages: previousMessages.filter((m) => m.id !== messageId),
   });
 
+  // Show undo toast
+  removeToast();
+  const toast = document.createElement("div");
+  toast.className = "sd-toast";
+  toast.id = "sd-delete-toast";
+  toast.innerHTML = `
+    Message deleted
+    <button class="sd-toast-undo">Undo</button>
+  `;
+
+  const undoBtn = toast.querySelector(".sd-toast-undo")!;
+  undoBtn.addEventListener("click", () => {
+    // Restore the message
+    if (pendingDelete) {
+      clearTimeout(pendingDelete.timer);
+      pendingDelete = null;
+    }
+    store.update({ messages: previousMessages });
+    removeToast();
+  });
+
+  const panel = document.getElementById("sd-panel");
+  if (panel) panel.appendChild(toast);
+
+  // Commit delete after 5 seconds
+  const timer = setTimeout(() => {
+    pendingDelete = null;
+    removeToast();
+    commitDelete(messageId, store, config);
+  }, 5000);
+
+  pendingDelete = { timer, messageId };
+}
+
+function removeToast(): void {
+  document.getElementById("sd-delete-toast")?.remove();
+}
+
+async function commitDelete(
+  messageId: string,
+  store: WidgetStore,
+  config: ShowdeskConfig,
+): Promise<void> {
+  const session = store.state.session;
+  if (!session) return;
   try {
     await deleteMessage(config, session.sessionId, messageId);
   } catch {
-    // Restore on failure
-    store.update({ messages: previousMessages });
     console.error("[Showdesk] Failed to delete message:", messageId);
   }
 }
