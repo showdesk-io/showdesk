@@ -67,16 +67,16 @@ export function showRecordingController(callbacks: {
     <span class="sd-rec-dot"></span>
     <span class="sd-rec-timer">0:00</span>
     <span class="sd-rec-mic-wrapper">
-      <button class="sd-rec-mic" title="${audioOn ? "Mute microphone" : "Unmute microphone"}" aria-label="Toggle microphone">
+      <span class="sd-rec-mic" title="${audioOn ? "Mute microphone" : "Unmute microphone"}" aria-label="Toggle microphone" role="button" tabindex="0">
         ${audioOn ? "🎤" : "🔇"}
-      </button>
-      <button class="sd-rec-mic-select" title="Choose microphone" aria-label="Choose microphone">
+      </span>
+      <span class="sd-rec-mic-select" title="Choose microphone" aria-label="Choose microphone" role="button" tabindex="0">
         ▾
-      </button>
+      </span>
     </span>
-    <button class="sd-rec-stop" title="Stop recording" aria-label="Stop recording">
+    <span class="sd-rec-stop" title="Stop recording" aria-label="Stop recording" role="button" tabindex="0">
       ⏹
-    </button>
+    </span>
   `;
 
   // Prevent FAB click from doing anything
@@ -177,6 +177,27 @@ async function showMicSelector(
 }
 
 /**
+ * Transform the FAB into a "waiting for popup" state.
+ * Shows a pulsing dot and "Waiting..." text — no timer, no stop.
+ * Transitions to recording controller when the popup starts recording.
+ */
+export function showPopupWaitingController(): void {
+  if (!buttonEl) return;
+
+  const newButton = buttonEl.cloneNode(false) as HTMLButtonElement;
+  buttonEl.replaceWith(newButton);
+  buttonEl = newButton;
+
+  buttonEl.className = buttonEl.className.replace("sd-button", "sd-button sd-button-recording");
+  buttonEl.innerHTML = `
+    <span class="sd-rec-dot sd-rec-dot-waiting"></span>
+    <span class="sd-rec-timer" style="color: #a0a0a0">Waiting…</span>
+  `;
+
+  buttonEl.onclick = (e) => e.preventDefault();
+}
+
+/**
  * Transform the FAB into a lightweight controller for popup-based recording.
  * Shows: [recording dot + timer] [stop button]
  * The actual recording runs in the popup — this is just a remote control.
@@ -197,9 +218,9 @@ export function showPopupRecordingController(callbacks: {
   buttonEl.innerHTML = `
     <span class="sd-rec-dot"></span>
     <span class="sd-rec-timer">${formatElapsed(elapsed)}</span>
-    <button class="sd-rec-stop" title="Stop recording" aria-label="Stop recording">
+    <span class="sd-rec-stop" title="Stop recording" aria-label="Stop recording" role="button" tabindex="0">
       ⏹
-    </button>
+    </span>
   `;
 
   buttonEl.onclick = (e) => e.preventDefault();

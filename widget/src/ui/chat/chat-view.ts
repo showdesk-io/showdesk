@@ -8,6 +8,7 @@
 import {
   sendMessage,
   sendAttachmentMessage,
+  fetchConversation,
   updateSessionContact,
 } from "../../api/chat-api";
 import { captureContext } from "../../api/context";
@@ -15,6 +16,7 @@ import type { WidgetStore } from "../../state/widget-state";
 import type { ChatMessage, ShowdeskConfig } from "../../types";
 import {
   showRecordingController,
+  showPopupWaitingController,
   showPopupRecordingController,
   hideRecordingController,
 } from "../button";
@@ -88,6 +90,17 @@ export function renderChatView(
 function renderMessages(store: WidgetStore): void {
   if (!messageListEl) return;
 
+  const emptyState = messageListEl.querySelector(".sd-empty-state");
+
+  // Show or hide empty state
+  if (store.state.messages.length === 0) {
+    if (!emptyState) {
+      messageListEl.appendChild(buildEmptyState());
+    }
+    return;
+  }
+  if (emptyState) emptyState.remove();
+
   // Build set of current message IDs in state
   const stateIds = new Set(store.state.messages.map((m) => m.id));
 
@@ -124,6 +137,42 @@ function renderMessages(store: WidgetStore): void {
   }
 
   scrollToBottom();
+}
+
+function buildEmptyState(): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "sd-empty-state";
+  el.innerHTML = `
+    <div class="sd-empty-icon">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--sd-primary)" stroke-width="1.5" opacity="0.6">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+    </div>
+    <p class="sd-empty-title">How can we help?</p>
+    <div class="sd-empty-chips">
+      <span class="sd-empty-chip">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        Text
+      </span>
+      <span class="sd-empty-chip">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/></svg>
+        Screen
+      </span>
+      <span class="sd-empty-chip">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+        Audio
+      </span>
+      <span class="sd-empty-chip">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        File
+      </span>
+    </div>
+    <p class="sd-empty-hint">Type a message below or tap <strong>+</strong> to attach a capture</p>
+    <div class="sd-empty-arrow">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--sd-text-light)" stroke-width="2" opacity="0.4"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>
+    </div>
+  `;
+  return el;
 }
 
 function scrollToBottom(): void {
@@ -444,9 +493,7 @@ function handleAudioCaptureMPA(
   const panel = document.getElementById("sd-panel");
   if (panel) panel.style.display = "none";
 
-  showPopupRecordingController({
-    onStop: () => handle.stop(),
-  });
+  showPopupWaitingController();
 }
 
 async function handleVideoCapture(
@@ -534,32 +581,36 @@ function handleVideoCaptureMPA(
 
   activePopupHandle = handle;
 
-  // Hide panel and show a popup-aware recording controller on the FAB
+  // Hide panel and show a waiting indicator on the FAB
   const panel = document.getElementById("sd-panel");
   if (panel) panel.style.display = "none";
 
-  showPopupRecordingController({
-    onStop: () => handle.stop(),
-  });
+  showPopupWaitingController();
 }
 
 function handlePopupMessage(
   msg: RecordingMessage,
   store: WidgetStore,
-  _config: ShowdeskConfig,
+  config: ShowdeskConfig,
   onOpenPanel: () => void,
 ): void {
   switch (msg.type) {
-    case "recording-started":
-      // FAB already shows popup controller — nothing extra
+    case "recording-started": {
+      // Transition FAB from waiting state to recording controller
+      const panel = document.getElementById("sd-panel");
+      if (panel) panel.style.display = "none";
+      showPopupRecordingController({
+        onStop: () => activePopupHandle?.stop(),
+      });
       break;
+    }
 
     case "upload-complete":
-      // The popup uploaded directly — refresh the active conversation
-      if (msg.ticketId && !store.state.activeTicketId) {
-        store.update({ activeTicketId: msg.ticketId });
-      }
+      // The popup uploaded directly — fetch the new message into the store
+      store.update({ activeTicketId: msg.ticketId });
       cleanupPopup(onOpenPanel);
+      // Load the conversation so the message appears in the chat
+      loadPopupUploadedMessage(store, config, msg.ticketId);
       break;
 
     case "upload-failed":
@@ -571,20 +622,44 @@ function handlePopupMessage(
       cleanupPopup(onOpenPanel);
       break;
 
-    case "status-response":
-      // Re-attachment after navigation — update FAB with elapsed time
-      if (msg.isRecording || msg.isUploading) {
-        const panel = document.getElementById("sd-panel");
-        if (panel) panel.style.display = "none";
+    case "status-response": {
+      // Re-attachment after navigation
+      const panel = document.getElementById("sd-panel");
+      if (panel) panel.style.display = "none";
+      if (msg.isRecording) {
         showPopupRecordingController({
           onStop: () => activePopupHandle?.stop(),
           initialElapsed: msg.elapsed,
         });
+      } else {
+        // Popup is alive (start screen or uploading) — show waiting state
+        showPopupWaitingController();
       }
       break;
+    }
 
     // duration-warning, upload-started, upload-progress, recording-stopped:
     // informational — no action needed on the main page
+  }
+}
+
+/** Fetch the conversation after the popup uploaded a recording. */
+async function loadPopupUploadedMessage(
+  store: WidgetStore,
+  config: ShowdeskConfig,
+  ticketId: string,
+): Promise<void> {
+  const session = store.state.session;
+  if (!session) return;
+  try {
+    const conv = await fetchConversation(config, session.sessionId, ticketId);
+    store.update({
+      activeTicketId: conv.ticketId,
+      activeTicketReference: conv.reference,
+      messages: conv.messages,
+    });
+  } catch (err) {
+    console.error("[Showdesk] Failed to load popup recording message:", err);
   }
 }
 
@@ -607,6 +682,7 @@ export async function reattachPopupIfNeeded(
   config: ShowdeskConfig,
   onOpenPanel: () => void,
 ): Promise<void> {
+  if (activePopupHandle) return; // Already attached
   const handle = await probeExistingPopup((msg) =>
     handlePopupMessage(msg, store, config, onOpenPanel),
   );

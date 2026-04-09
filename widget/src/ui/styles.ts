@@ -588,6 +588,79 @@ export function injectStyles(primaryColor: string): void {
       gap: 8px;
     }
 
+    /* Empty state */
+    .sd-empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      gap: 12px;
+      padding: 24px 16px 8px;
+      animation: sd-fadeIn 0.3s ease;
+    }
+
+    .sd-empty-icon {
+      opacity: 0.7;
+    }
+
+    .sd-empty-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--sd-text);
+      margin: 0;
+    }
+
+    .sd-empty-chips {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .sd-empty-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: #f1f5f9;
+      color: var(--sd-text-light);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .sd-empty-hint {
+      font-size: 13px;
+      color: var(--sd-text-light);
+      margin: 4px 0 0;
+      line-height: 1.5;
+    }
+
+    .sd-empty-hint strong {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 1px solid var(--sd-border);
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--sd-text);
+      vertical-align: middle;
+    }
+
+    .sd-empty-arrow {
+      animation: sd-bounce 2s ease-in-out infinite;
+    }
+
+    @keyframes sd-bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(4px); }
+    }
+
     /* Message bubbles */
     .sd-msg {
       display: flex;
@@ -1080,6 +1153,11 @@ export function injectStyles(primaryColor: string): void {
       border-radius: 50%;
       animation: sd-pulse 1s infinite;
       flex-shrink: 0;
+    }
+
+    .sd-rec-dot-waiting {
+      background: #f59e0b;
+      animation: sd-pulse 1.5s ease-in-out infinite;
     }
 
     .sd-rec-timer {
