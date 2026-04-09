@@ -45,9 +45,16 @@ export function launchRecorderPopup(
   options: PopupLaunchOptions,
   onMessage: PopupMessageHandler,
 ): PopupHandle | null {
+  // Blob URL pages can't resolve relative paths in XHR/fetch —
+  // convert to absolute URL using the opener's origin.
+  let absoluteApiUrl = options.apiUrl;
+  try {
+    absoluteApiUrl = new URL(options.apiUrl, window.location.origin).href;
+  } catch { /* already absolute or malformed — use as-is */ }
+
   const cfg: PopupConfig = {
     token: options.token,
-    apiUrl: options.apiUrl,
+    apiUrl: absoluteApiUrl,
     sessionId: options.sessionId,
     ticketId: options.ticketId,
     color: options.color,
@@ -61,7 +68,7 @@ export function launchRecorderPopup(
   const popup = window.open(
     url,
     "showdesk-recorder",
-    "popup,width=380,height=280",
+    "popup,width=480,height=400",
   );
 
   if (!popup) {

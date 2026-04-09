@@ -133,14 +133,27 @@ export class ScreenRecorder {
 
     this.streams.push(displayStream);
 
-    // Collect audio tracks from display stream (system audio)
-    tracks.push(...displayStream.getAudioTracks());
-
-    // Always request microphone when audio is enabled.
-    // System/tab audio and microphone are independent — the user
-    // needs the mic to narrate over the screen capture.
+    // Mix all audio (system + mic) through a single AudioContext.
+    // MediaRecorder only captures one audio track — multiple separate
+    // tracks would cause the mic to be silently dropped.
     if (options.audio) {
+      this._audioCtx = new AudioContext();
+      this._audioDest = this._audioCtx.createMediaStreamDestination();
+
+      // Route system/tab audio through the mixer
+      const displayAudioTracks = displayStream.getAudioTracks();
+      if (displayAudioTracks.length > 0) {
+        const displayAudioSource = this._audioCtx.createMediaStreamSource(
+          new MediaStream(displayAudioTracks),
+        );
+        displayAudioSource.connect(this._audioDest);
+      }
+
+      // Route mic through the same mixer
       await this.addMicrophoneTrack(tracks);
+
+      // Single mixed audio track for MediaRecorder
+      tracks.push(...this._audioDest.stream.getAudioTracks());
     }
 
     // Request or reuse camera
@@ -220,18 +233,31 @@ export class ScreenRecorder {
     tracks.push(...cameraStream.getVideoTracks());
 
     // Add audio: from camera stream or separate mic
-    const cameraAudioTracks = cameraStream.getAudioTracks();
-    if (cameraAudioTracks.length) {
-      tracks.push(...cameraAudioTracks);
-    } else if (options.audio) {
-      await this.addMicrophoneTrack(tracks);
+    if (options.audio) {
+      this._audioCtx = new AudioContext();
+      this._audioDest = this._audioCtx.createMediaStreamDestination();
+
+      const cameraAudioTracks = cameraStream.getAudioTracks();
+      if (cameraAudioTracks.length) {
+        const camAudioSource = this._audioCtx.createMediaStreamSource(
+          new MediaStream(cameraAudioTracks),
+        );
+        camAudioSource.connect(this._audioDest);
+      } else {
+        await this.addMicrophoneTrack(tracks);
+      }
+
+      tracks.push(...this._audioDest.stream.getAudioTracks());
     }
   }
 
   /**
-   * Request microphone access and add the audio track.
+   * Request microphone access and connect to the shared AudioContext mixer.
+   * The caller is responsible for adding the mixed audio track to the
+   * MediaRecorder stream — this only connects the mic source.
    */
-  private async addMicrophoneTrack(tracks: MediaStreamTrack[]): Promise<void> {
+  private async addMicrophoneTrack(_tracks: MediaStreamTrack[]): Promise<void> {
+    if (!this._audioCtx || !this._audioDest) return;
     try {
       const audioConstraints: MediaTrackConstraints = {
         echoCancellation: true,
@@ -245,13 +271,10 @@ export class ScreenRecorder {
       });
       this.streams.push(audioStream);
 
-      // Route mic through AudioContext so we can switch devices
-      // without modifying the MediaRecorder's stream (which would stop it).
-      this._audioCtx = new AudioContext();
-      this._audioDest = this._audioCtx.createMediaStreamDestination();
+      // Route mic through the shared AudioContext (same destination as
+      // system audio) so we can switch devices mid-recording.
       this._micSource = this._audioCtx.createMediaStreamSource(audioStream);
       this._micSource.connect(this._audioDest);
-      tracks.push(...this._audioDest.stream.getAudioTracks());
     } catch (err) {
       console.warn("[Showdesk] Microphone access denied:", err);
     }

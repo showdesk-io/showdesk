@@ -25,7 +25,8 @@ export class WidgetWebSocket {
   connect(apiUrl: string, token: string, sessionId: string): void {
     this.intentionalClose = false;
     // Derive WS URL: http(s)://host/api/v1 → ws(s)://host/ws/widget/
-    const url = new URL(apiUrl);
+    // Handle both absolute and relative API URLs.
+    const url = new URL(apiUrl, window.location.origin);
     const protocol = url.protocol === "https:" ? "wss:" : "ws:";
     this.wsUrl =
       `${protocol}//${url.host}/ws/widget/?token=${token}&session=${sessionId}`;

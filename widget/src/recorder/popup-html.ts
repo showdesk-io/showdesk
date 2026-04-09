@@ -54,13 +54,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .rec-dot{width:10px;height:10px;border-radius:50%;background:#ef4444;animation:pulse 1.5s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .timer{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff}
-.controls{display:flex;gap:8px;margin-top:12px}
+.controls{display:flex;gap:8px;margin-top:12px;align-items:center}
 .controls button,.btn-start{padding:8px 16px;border:none;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:6px;transition:opacity .15s}
 .controls button:hover,.btn-start:hover{opacity:.85}
 .btn-start{background:${esc(cfg.color)};color:#fff;font-size:15px;font-weight:600;padding:12px 24px}
 .btn-mute{background:#334155;color:#e0e0e0}
 .btn-mute.muted{background:#f59e0b;color:#000}
 .btn-stop{background:#ef4444;color:#fff;font-weight:600}
+.mic-selector{margin-top:12px;width:100%;max-width:300px;position:relative}
+.mic-selector select{width:100%;padding:8px 28px 8px 32px;border:1px solid #334155;border-radius:8px;background:#0f172a;color:#e0e0e0;font-size:12px;font-weight:500;cursor:pointer;outline:none;appearance:none;-webkit-appearance:none;transition:border-color .2s,box-shadow .2s;text-overflow:ellipsis}
+.mic-selector select:hover{border-color:${esc(cfg.color)}}
+.mic-selector select:focus{border-color:${esc(cfg.color)};box-shadow:0 0 0 2px ${esc(cfg.color)}33}
+.mic-selector .mic-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;pointer-events:none;color:#64748b}
+.mic-selector .mic-arrow{position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#64748b;font-size:9px;pointer-events:none}
 .upload-area{text-align:center}
 .progress-bar{width:100%;height:6px;background:#334155;border-radius:3px;overflow:hidden;margin:12px 0}
 .progress-fill{height:100%;background:${esc(cfg.color)};border-radius:3px;transition:width .3s}
@@ -93,6 +99,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     <div class="controls">
       <button class="btn-mute" id="btn-mute" title="Toggle microphone">🎤 Mic</button>
       <button class="btn-stop" id="btn-stop">⏹ Stop</button>
+    </div>
+    <div class="mic-selector hidden" id="mic-selector">
+      <span class="mic-icon">🎙</span>
+      <select id="mic-select"></select>
+      <span class="mic-arrow">▾</span>
     </div>
   </div>
   <div id="view-upload" class="status-area hidden">
@@ -142,6 +153,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   var audioCtx = null;
   var audioDest = null;
   var micSource = null;
+  var micStream = null;
   var audioOn = true;
   var elapsed = 0;
   var timerHandle = null;
@@ -163,6 +175,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
   var $errorDetail = document.getElementById('error-detail');
   var $warningSlot = document.getElementById('warning-slot');
   var $closeCountdown = document.getElementById('close-countdown');
+  var $micSelector = document.getElementById('mic-selector');
+  var $micSelect = document.getElementById('mic-select');
 
   /* ---- Helpers ---- */
   function show(el) { el.classList.remove('hidden'); }
@@ -200,23 +214,77 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     return 'video/webm';
   }
 
+  /* ---- Mic selector ---- */
+  async function populateMicSelector() {
+    try {
+      var devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter(function(d) { return d.kind === 'audioinput' && d.deviceId; });
+      $micSelect.innerHTML = '';
+      if (devices.length <= 1) {
+        hide($micSelector);
+        return;
+      }
+      show($micSelector);
+      var activeMicId = micStream
+        ? (micStream.getAudioTracks()[0] && micStream.getAudioTracks()[0].getSettings().deviceId)
+        : '';
+      for (var i = 0; i < devices.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = devices[i].deviceId;
+        opt.textContent = devices[i].label || ('Microphone ' + (i + 1));
+        if (devices[i].deviceId === activeMicId) opt.selected = true;
+        $micSelect.appendChild(opt);
+      }
+    } catch(e) {
+      hide($micSelector);
+    }
+  }
+
+  async function switchMic(deviceId) {
+    if (!audioCtx || !audioDest) return;
+    try {
+      var newStream = await navigator.mediaDevices.getUserMedia({
+        audio: { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true }
+      });
+      if (micSource) micSource.disconnect();
+      if (micStream) micStream.getTracks().forEach(function(t) { t.stop(); });
+      micStream = newStream;
+      micSource = audioCtx.createMediaStreamSource(newStream);
+      micSource.connect(audioDest);
+      // Keep mute state
+      audioDest.stream.getAudioTracks().forEach(function(t) { t.enabled = audioOn; });
+    } catch(e) {
+      console.warn('[Showdesk Popup] Mic switch failed:', e);
+    }
+  }
+
   /* ---- Recording ---- */
   async function startRecording() {
     var isAudioOnly = CFG.mode === 'audio';
     try {
       var tracks = [];
 
+      /* AudioContext mixer — all audio goes through here so MediaRecorder
+         gets a single mixed audio track (system + mic). */
+      audioCtx = new AudioContext();
+      audioDest = audioCtx.createMediaStreamDestination();
+
       if (!isAudioOnly) {
         /* Screen capture */
         var displayStream = await navigator.mediaDevices.getDisplayMedia({
           video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
           audio: true,
-          selfBrowserSurface: 'include',
-          preferCurrentTab: true,
+          selfBrowserSurface: 'exclude',
         });
         streams.push(displayStream);
-        displayStream.getAudioTracks().forEach(function(t) { tracks.push(t); });
         displayStream.getVideoTracks().forEach(function(t) { tracks.push(t); });
+
+        // Route system/tab audio through the mixer
+        var sysAudioTracks = displayStream.getAudioTracks();
+        if (sysAudioTracks.length > 0) {
+          var sysSource = audioCtx.createMediaStreamSource(new MediaStream(sysAudioTracks));
+          sysSource.connect(audioDest);
+        }
 
         // Stop recording if user ends screen share via browser UI
         displayStream.getVideoTracks().forEach(function(t) {
@@ -224,21 +292,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
         });
       }
 
-      /* Microphone via AudioContext (allows mute without stopping recorder) */
+      /* Microphone — routed through the same AudioContext mixer */
       try {
-        var micStream = await navigator.mediaDevices.getUserMedia({
+        micStream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true }
         });
         streams.push(micStream);
-        audioCtx = new AudioContext();
-        audioDest = audioCtx.createMediaStreamDestination();
         micSource = audioCtx.createMediaStreamSource(micStream);
         micSource.connect(audioDest);
-        audioDest.stream.getAudioTracks().forEach(function(t) { tracks.push(t); });
+        // Populate mic selector after permission granted
+        populateMicSelector();
       } catch(e) {
         console.warn('[Showdesk Popup] Mic denied:', e);
+        hide($micSelector);
         if (isAudioOnly) throw new Error('Microphone access denied');
       }
+
+      // Single mixed audio track for MediaRecorder
+      audioDest.stream.getAudioTracks().forEach(function(t) { tracks.push(t); });
 
       if (tracks.length === 0) throw new Error('No media tracks available');
 
@@ -305,6 +376,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     if (micSource) { micSource.disconnect(); micSource = null; }
     if (audioDest) { audioDest.stream.getTracks().forEach(function(t) { t.stop(); }); audioDest = null; }
     if (audioCtx) { audioCtx.close().catch(function(){}); audioCtx = null; }
+    micStream = null;
   }
 
   /* ---- Upload ---- */
@@ -325,6 +397,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     xhr.setRequestHeader('X-Widget-Session', CFG.sessionId);
     xhr.timeout = 600000;
 
+    var uploadDone = false;
+    function finishUpload(ok, detail) {
+      if (uploadDone) return;
+      uploadDone = true;
+      isUploading = false;
+      if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+      if (ok) {
+        showDone();
+      } else {
+        send({ type: 'upload-failed', error: detail });
+        showError(detail);
+      }
+    }
+
+    // Safety timeout: if server hasn't responded 30s after body fully sent
+    var safetyTimer = null;
+
     xhr.upload.onprogress = function(e) {
       if (e.lengthComputable) {
         var pct = Math.round((e.loaded / e.total) * 100);
@@ -334,32 +423,53 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       }
     };
 
+    xhr.upload.onloadend = function() {
+      // Request body fully sent — start safety timer for server response
+      $uploadDetail.textContent = 'Processing…';
+      safetyTimer = setTimeout(function() {
+        console.error('[Showdesk Popup] Server response timeout');
+        xhr.abort();
+        finishUpload(false, 'Server did not respond');
+      }, 30000);
+    };
+
     xhr.onload = function() {
-      isUploading = false;
+      console.log('[Showdesk Popup] Response:', xhr.status, xhr.responseText.substring(0, 200));
       if (xhr.status >= 200 && xhr.status < 300) {
-        var data = JSON.parse(xhr.responseText);
-        send({ type: 'upload-complete', ticketId: data.ticket_id, messageId: data.message_id });
-        showDone();
+        try {
+          var data = JSON.parse(xhr.responseText);
+          send({ type: 'upload-complete', ticketId: data.ticket_id, messageId: data.message_id });
+          finishUpload(true);
+        } catch(e) {
+          console.error('[Showdesk Popup] Bad response:', xhr.responseText);
+          finishUpload(false, 'Invalid server response');
+        }
       } else {
         var errMsg = 'Upload failed (HTTP ' + xhr.status + ')';
-        send({ type: 'upload-failed', error: errMsg });
-        showError(errMsg);
+        try {
+          var body = JSON.parse(xhr.responseText);
+          if (body.error) errMsg += ': ' + body.error;
+        } catch(e) {}
+        console.error('[Showdesk Popup] Upload error:', xhr.status, xhr.responseText);
+        finishUpload(false, errMsg);
       }
     };
 
     xhr.onerror = function() {
-      isUploading = false;
-      send({ type: 'upload-failed', error: 'Network error' });
-      showError('Network error — check your connection');
+      console.error('[Showdesk Popup] XHR network error');
+      finishUpload(false, 'Network error — check your connection');
     };
 
     xhr.ontimeout = function() {
-      isUploading = false;
-      send({ type: 'upload-failed', error: 'Upload timed out' });
-      showError('Upload timed out');
+      finishUpload(false, 'Upload timed out');
     };
 
-    xhr.send(form);
+    try {
+      xhr.send(form);
+    } catch(e) {
+      console.error('[Showdesk Popup] XHR send failed:', e);
+      finishUpload(false, 'Failed to send: ' + (e.message || e));
+    }
   }
 
   function formatBytes(b) {
@@ -378,6 +488,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       $closeCountdown.textContent = count;
       if (count <= 0) {
         clearInterval(h);
+        send({ type: 'popup-closed' });
         window.close();
       }
     }, 1000);
@@ -412,6 +523,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
     $btnMute.classList.toggle('muted', !audioOn);
   };
 
+  $micSelect.onchange = function() {
+    switchMic($micSelect.value);
+  };
+
+  // Hide mic selector initially (shown after mic permission granted)
+  hide($micSelector);
+
   /* ---- BroadcastChannel ---- */
   channel.onmessage = function(e) {
     var msg = e.data;
@@ -437,6 +555,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
       e.preventDefault();
       e.returnValue = 'Recording in progress — are you sure?';
     }
+  });
+  window.addEventListener('unload', function() {
     send({ type: 'popup-closed' });
   });
 })();
