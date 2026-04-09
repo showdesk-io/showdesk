@@ -37,6 +37,9 @@ export class ScreenRecorder {
   private streams: MediaStream[] = [];
   private _compositor: PipCompositor | null = null;
   private _micDeviceId: string | undefined;
+  private _audioCtx: AudioContext | null = null;
+  private _audioDest: MediaStreamAudioDestinationNode | null = null;
+  private _micSource: MediaStreamAudioSourceNode | null = null;
 
   /** Callback invoked when recording stops with the final blob. */
   public onStop: ((blob: Blob) => void) | null = null;
@@ -241,7 +244,14 @@ export class ScreenRecorder {
         audio: audioConstraints,
       });
       this.streams.push(audioStream);
-      tracks.push(...audioStream.getAudioTracks());
+
+      // Route mic through AudioContext so we can switch devices
+      // without modifying the MediaRecorder's stream (which would stop it).
+      this._audioCtx = new AudioContext();
+      this._audioDest = this._audioCtx.createMediaStreamDestination();
+      this._micSource = this._audioCtx.createMediaStreamSource(audioStream);
+      this._micSource.connect(this._audioDest);
+      tracks.push(...this._audioDest.stream.getAudioTracks());
     } catch (err) {
       console.warn("[Showdesk] Microphone access denied:", err);
     }
@@ -286,7 +296,7 @@ export class ScreenRecorder {
    * Replaces the current mic track in the MediaRecorder stream.
    */
   async switchMicrophone(deviceId: string): Promise<void> {
-    if (!this.mediaRecorder || this.mediaRecorder.state === "inactive") return;
+    if (!this._audioCtx || !this._audioDest) return;
     this._micDeviceId = deviceId;
 
     try {
@@ -299,18 +309,13 @@ export class ScreenRecorder {
       });
       this.streams.push(newStream);
 
-      const newTrack = newStream.getAudioTracks()[0];
-      if (!newTrack) return;
-
-      // Mute existing mic tracks (don't remove — removing triggers
-      // MediaRecorder to stop). System audio tracks are kept enabled.
-      const stream = this.mediaRecorder.stream;
-      for (const t of stream.getAudioTracks()) {
-        if (t.label !== "System Audio" && !t.label.includes("tab")) {
-          t.enabled = false;
-        }
+      // Disconnect old source and connect new one to the same destination.
+      // The MediaRecorder's track (from audioDest) never changes.
+      if (this._micSource) {
+        this._micSource.disconnect();
       }
-      stream.addTrack(newTrack);
+      this._micSource = this._audioCtx.createMediaStreamSource(newStream);
+      this._micSource.connect(this._audioDest);
     } catch (err) {
       console.warn("[Showdesk] Failed to switch microphone:", err);
     }
@@ -323,6 +328,15 @@ export class ScreenRecorder {
     if (this._compositor) {
       this._compositor.destroy();
       this._compositor = null;
+    }
+    if (this._micSource) {
+      this._micSource.disconnect();
+      this._micSource = null;
+    }
+    if (this._audioCtx) {
+      this._audioCtx.close().catch(() => {});
+      this._audioCtx = null;
+      this._audioDest = null;
     }
     this.streams.forEach((stream) => {
       stream.getTracks().forEach((track) => track.stop());

@@ -97,6 +97,7 @@ export type BodyType =
   | "image"
   | "video"
   | "screenshot"
+  | "file"
   | "system";
 
 export type SenderType = "user" | "agent" | "system";

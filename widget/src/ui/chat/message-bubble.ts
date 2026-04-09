@@ -37,6 +37,9 @@ export function renderMessageBubble(msg: ChatMessage): HTMLElement {
     case "video":
       bubble.appendChild(renderVideo(msg));
       break;
+    case "file":
+      bubble.appendChild(renderFile(msg));
+      break;
     default:
       bubble.appendChild(renderText(msg));
   }
@@ -148,6 +151,37 @@ function renderVideo(msg: ChatMessage): HTMLElement {
   } else {
     el.textContent = "🎬 Screen capture";
   }
+  return el;
+}
+
+function renderFile(msg: ChatMessage): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "sd-msg-file";
+  const url = getMediaUrl(msg);
+  const filename = msg.attachments[0]?.filename || msg.body || "File";
+
+  const icon = document.createElement("span");
+  icon.className = "sd-msg-file-icon";
+  icon.textContent = "📄";
+
+  const name = document.createElement("span");
+  name.className = "sd-msg-file-name";
+  name.textContent = filename;
+
+  if (url) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.className = "sd-msg-file-link";
+    link.appendChild(icon);
+    link.appendChild(name);
+    el.appendChild(link);
+  } else {
+    el.appendChild(icon);
+    el.appendChild(name);
+  }
+
   return el;
 }
 

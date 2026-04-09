@@ -153,13 +153,21 @@ export function createModal(config: ShowdeskConfig): void {
   // Render active tab
   renderTab(content, s, config);
 
-  // Subscribe to tab changes
+  // Subscribe to tab changes — re-render content when tab switches programmatically
+  let lastTab = s.state.activeTab;
   unsubscribe = s.subscribe(() => {
     chatTab.classList.toggle("sd-tab-active", s.state.activeTab === "chat");
     historyTab.classList.toggle(
       "sd-tab-active",
       s.state.activeTab === "history",
     );
+    if (s.state.activeTab !== lastTab) {
+      lastTab = s.state.activeTab;
+      const c = currentPanel?.querySelector(
+        ".sd-panel-content",
+      ) as HTMLElement | null;
+      if (c) renderTab(c, s, config);
+    }
   });
 
   // Close on Escape

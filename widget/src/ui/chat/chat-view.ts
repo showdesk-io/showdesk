@@ -57,15 +57,17 @@ export function renderChatView(
     scrollToBottom();
   }
 
+  const openPanel = onOpenPanel ?? (() => {});
   // Message input
   const input = renderMessageInput({
     onSendText: (text) => handleSendText(text, store, config),
-    onSendAudio: (blob) =>
-      handleSendAttachment(blob, "audio", "audio.webm", store, config),
+    onSendAudio: () => handleAudioCapture(store, config, openPanel),
     onScreenshot: () => handleScreenshotCapture(store, config),
-    onFile: (file) =>
-      handleSendAttachment(file, "image", file.name, store, config),
-    onVideo: () => handleVideoCapture(store, config, onOpenPanel ?? (() => {})),
+    onFile: (file) => {
+      const bodyType = file.type.startsWith("image/") ? "image" : "file";
+      handleSendAttachment(file, bodyType, file.name, store, config);
+    },
+    onVideo: () => handleVideoCapture(store, config, openPanel),
   });
   container.appendChild(input);
 
@@ -300,6 +302,89 @@ async function handleScreenshotCapture(
     await handleSendAttachment(blob, "screenshot", "screenshot.png", store, config);
   } catch {
     // User cancelled or API not available
+    const panel = document.getElementById("sd-panel");
+    if (panel) panel.style.display = "";
+  }
+}
+
+async function handleAudioCapture(
+  store: WidgetStore,
+  config: ShowdeskConfig,
+  onOpenPanel: () => void,
+): Promise<void> {
+  try {
+    // Hide panel so it doesn't block the page
+    const panel = document.getElementById("sd-panel");
+    if (panel) panel.style.display = "none";
+
+    // Acquire mic
+    const micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : "audio/webm";
+
+    const chunks: Blob[] = [];
+    const recorder = new MediaRecorder(micStream, { mimeType });
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+
+    recorder.onstop = () => {
+      micStream.getTracks().forEach((t) => t.stop());
+      hideRecordingController(onOpenPanel);
+      if (panel) panel.style.display = "";
+      if (chunks.length > 0) {
+        const blob = new Blob(chunks, { type: mimeType });
+        handleSendAttachment(blob, "audio", "audio.webm", store, config);
+      }
+    };
+
+    recorder.start(100);
+
+    // Show FAB controller with mic selection
+    showRecordingController({
+      onStop: () => recorder.stop(),
+      onToggleAudio: () => {
+        const track = micStream.getAudioTracks()[0];
+        if (track) {
+          track.enabled = !track.enabled;
+          return track.enabled;
+        }
+        return false;
+      },
+      onSwitchMic: async (deviceId) => {
+        // For audio-only, we need to stop and restart with new device
+        // since there's no AudioContext routing here
+        try {
+          const newStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              deviceId: { exact: deviceId },
+              echoCancellation: true,
+              noiseSuppression: true,
+            },
+          });
+          // Replace track in micStream
+          const oldTrack = micStream.getAudioTracks()[0];
+          if (oldTrack) {
+            micStream.removeTrack(oldTrack);
+            oldTrack.stop();
+          }
+          const newTrack = newStream.getAudioTracks()[0];
+          if (newTrack) {
+            micStream.addTrack(newTrack);
+          }
+        } catch (err) {
+          console.warn("[Showdesk] Failed to switch mic:", err);
+        }
+      },
+      audioEnabled: true,
+    });
+  } catch {
+    // Permission denied
     const panel = document.getElementById("sd-panel");
     if (panel) panel.style.display = "";
   }

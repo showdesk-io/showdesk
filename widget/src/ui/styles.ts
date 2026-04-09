@@ -1207,6 +1207,31 @@ export function injectStyles(primaryColor: string): void {
       opacity: 1;
     }
 
+    .sd-msg-file {
+      padding: 4px 0;
+    }
+    .sd-msg-file-link {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: inherit;
+      text-decoration: none;
+      padding: 6px 4px;
+      border-radius: 6px;
+      transition: background 0.15s;
+    }
+    .sd-msg-file-link:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+    .sd-msg-file-icon {
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+    .sd-msg-file-name {
+      font-size: 13px;
+      word-break: break-all;
+    }
+
     /* ---------------------------------------------------------------- */
     /* Media lightbox                                                     */
     /* ---------------------------------------------------------------- */
