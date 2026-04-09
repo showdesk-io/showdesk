@@ -152,14 +152,16 @@ async function showMicSelector(
     menu.appendChild(btn);
   }
 
-  // Position above the anchor
-  menu.style.position = "absolute";
-  menu.style.bottom = `${anchor.offsetHeight + 8}px`;
-  menu.style.left = "0";
-  menu.style.right = "0";
+  // Position above the FAB using fixed positioning
+  const rect = anchor.getBoundingClientRect();
+  menu.style.position = "fixed";
+  menu.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+  menu.style.left = `${rect.left}px`;
+  menu.style.width = `${rect.width}px`;
 
-  anchor.style.position = "relative";
-  anchor.appendChild(menu);
+  // Add to widget container (not the FAB itself, to avoid position: relative)
+  const widgetContainer = document.getElementById("showdesk-widget-container");
+  (widgetContainer || document.body).appendChild(menu);
 
   // Close on outside click
   const closeHandler = (e: MouseEvent) => {

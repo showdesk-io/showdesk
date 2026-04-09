@@ -302,14 +302,13 @@ export class ScreenRecorder {
       const newTrack = newStream.getAudioTracks()[0];
       if (!newTrack) return;
 
-      // Find and replace existing mic track (not system audio)
+      // Mute existing mic tracks (don't remove — removing triggers
+      // MediaRecorder to stop). System audio tracks are kept enabled.
       const stream = this.mediaRecorder.stream;
-      const oldMicTracks = stream.getAudioTracks().filter(
-        (t) => t.label !== "System Audio" && !t.label.includes("tab"),
-      );
-      for (const old of oldMicTracks) {
-        stream.removeTrack(old);
-        old.stop();
+      for (const t of stream.getAudioTracks()) {
+        if (t.label !== "System Audio" && !t.label.includes("tab")) {
+          t.enabled = false;
+        }
       }
       stream.addTrack(newTrack);
     } catch (err) {
