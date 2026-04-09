@@ -956,7 +956,10 @@ class TicketViewSet(viewsets.ModelViewSet):
         try:
             notify_message_deleted(ticket, deleted_message_id)
         except Exception:
-            logger.exception("WebSocket notification failed for deleted message %s", deleted_message_id)
+            logger.exception(
+                "WebSocket notification failed for deleted message %s",
+                deleted_message_id,
+            )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
