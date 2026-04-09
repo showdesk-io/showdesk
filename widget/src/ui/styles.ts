@@ -693,6 +693,7 @@ export function injectStyles(primaryColor: string): void {
       background: var(--sd-primary);
       color: white;
       border-bottom-right-radius: 4px;
+      position: relative;
     }
 
     .sd-msg-agent .sd-msg-bubble {
@@ -717,6 +718,34 @@ export function injectStyles(primaryColor: string): void {
 
     .sd-msg-user .sd-msg-time {
       text-align: right;
+    }
+
+    .sd-msg-delete {
+      display: none;
+      position: absolute;
+      top: 4px;
+      left: -28px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: none;
+      background: #f1f5f9;
+      color: #94a3b8;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      transition: all 0.15s;
+      padding: 0;
+    }
+
+    .sd-msg-delete:hover {
+      background: #fee2e2;
+      color: #ef4444;
+    }
+
+    .sd-msg-user:hover .sd-msg-delete {
+      display: flex;
     }
 
     .sd-msg-status {
@@ -1158,6 +1187,11 @@ export function injectStyles(primaryColor: string): void {
     .sd-rec-dot-waiting {
       background: #f59e0b;
       animation: sd-pulse 1.5s ease-in-out infinite;
+    }
+
+    .sd-rec-dot-uploading {
+      background: #3b82f6;
+      animation: sd-pulse 1s ease-in-out infinite;
     }
 
     .sd-rec-timer {

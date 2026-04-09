@@ -8,6 +8,7 @@
 import {
   sendMessage,
   sendAttachmentMessage,
+  deleteMessage,
   fetchConversation,
   updateSessionContact,
 } from "../../api/chat-api";
@@ -18,6 +19,8 @@ import {
   showRecordingController,
   showPopupWaitingController,
   showPopupRecordingController,
+  showPopupUploadingController,
+  updatePopupUploadProgress,
   hideRecordingController,
 } from "../button";
 import { renderContactNudge } from "./contact-nudge";
@@ -46,7 +49,7 @@ export function renderChatView(
   messageListEl.className = "sd-message-list";
   container.appendChild(messageListEl);
 
-  renderMessages(store);
+  renderMessages(store, config);
 
   // Contact nudge (after first message, if anonymous and not dismissed)
   if (shouldShowNudge(store, config)) {
@@ -82,12 +85,12 @@ export function renderChatView(
 
   // Subscribe to state changes
   store.subscribe(() => {
-    renderMessages(store);
+    renderMessages(store, config);
     scrollToBottom();
   });
 }
 
-function renderMessages(store: WidgetStore): void {
+function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
   if (!messageListEl) return;
 
   const emptyState = messageListEl.querySelector(".sd-empty-state");
@@ -100,6 +103,8 @@ function renderMessages(store: WidgetStore): void {
     return;
   }
   if (emptyState) emptyState.remove();
+
+  const onDelete = (messageId: string) => handleDeleteMessage(messageId, store, config);
 
   // Build set of current message IDs in state
   const stateIds = new Set(store.state.messages.map((m) => m.id));
@@ -132,7 +137,7 @@ function renderMessages(store: WidgetStore): void {
       }
       continue;
     }
-    const bubble = renderMessageBubble(msg);
+    const bubble = renderMessageBubble(msg, onDelete);
     messageListEl.appendChild(bubble);
   }
 
@@ -173,6 +178,29 @@ function buildEmptyState(): HTMLElement {
     </div>
   `;
   return el;
+}
+
+async function handleDeleteMessage(
+  messageId: string,
+  store: WidgetStore,
+  config: ShowdeskConfig,
+): Promise<void> {
+  const session = store.state.session;
+  if (!session) return;
+
+  // Optimistic removal from UI
+  const previousMessages = store.state.messages;
+  store.update({
+    messages: previousMessages.filter((m) => m.id !== messageId),
+  });
+
+  try {
+    await deleteMessage(config, session.sessionId, messageId);
+  } catch {
+    // Restore on failure
+    store.update({ messages: previousMessages });
+    console.error("[Showdesk] Failed to delete message:", messageId);
+  }
 }
 
 function scrollToBottom(): void {
@@ -631,15 +659,26 @@ function handlePopupMessage(
           onStop: () => activePopupHandle?.stop(),
           initialElapsed: msg.elapsed,
         });
+      } else if (msg.isUploading) {
+        showPopupUploadingController();
       } else {
-        // Popup is alive (start screen or uploading) — show waiting state
+        // Popup is alive (start screen) — show waiting state
         showPopupWaitingController();
       }
       break;
     }
 
-    // duration-warning, upload-started, upload-progress, recording-stopped:
-    // informational — no action needed on the main page
+    case "recording-stopped":
+    case "upload-started":
+      // Transition FAB from recording timer to uploading indicator
+      showPopupUploadingController();
+      break;
+
+    case "upload-progress":
+      updatePopupUploadProgress(msg.percent);
+      break;
+
+    // duration-warning: informational — no action needed
   }
 }
 

@@ -239,6 +239,42 @@ export function showPopupRecordingController(callbacks: {
   };
 }
 
+/**
+ * Transform the FAB into an uploading indicator for popup recordings.
+ * Shows: [spinner] [Uploading... X%]
+ */
+export function showPopupUploadingController(): void {
+  if (!buttonEl) return;
+
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+
+  const newButton = buttonEl.cloneNode(false) as HTMLButtonElement;
+  buttonEl.replaceWith(newButton);
+  buttonEl = newButton;
+
+  buttonEl.className = buttonEl.className.replace("sd-button", "sd-button sd-button-recording");
+  buttonEl.innerHTML = `
+    <span class="sd-rec-dot sd-rec-dot-uploading"></span>
+    <span class="sd-rec-timer sd-rec-upload-label">Uploading…</span>
+  `;
+
+  buttonEl.onclick = (e) => e.preventDefault();
+}
+
+/**
+ * Update the upload progress percentage on the FAB.
+ */
+export function updatePopupUploadProgress(percent: number): void {
+  if (!buttonEl) return;
+  const label = buttonEl.querySelector(".sd-rec-upload-label");
+  if (label) {
+    label.textContent = percent < 100 ? `Uploading… ${percent}%` : "Processing…";
+  }
+}
+
 function formatElapsed(seconds: number): string {
   const min = Math.floor(seconds / 60);
   const sec = seconds % 60;
