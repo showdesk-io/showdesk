@@ -87,7 +87,18 @@ export function renderChatView(
 function renderMessages(store: WidgetStore): void {
   if (!messageListEl) return;
 
-  // Preserve non-message elements (suggestion, nudge)
+  // Build set of current message IDs in state
+  const stateIds = new Set(store.state.messages.map((m) => m.id));
+
+  // Remove orphaned DOM elements (e.g. optimistic messages whose ID changed)
+  messageListEl.querySelectorAll("[data-message-id]").forEach((el) => {
+    const domId = (el as HTMLElement).dataset.messageId!;
+    if (!stateIds.has(domId)) {
+      el.remove();
+    }
+  });
+
+  // Collect remaining DOM message IDs
   const existingIds = new Set<string>();
   messageListEl
     .querySelectorAll("[data-message-id]")

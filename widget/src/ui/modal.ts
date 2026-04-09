@@ -62,9 +62,11 @@ export async function initSession(config: ShowdeskConfig): Promise<void> {
     // Connect WebSocket
     const socket = getWebSocket();
     socket.onMessage = (msg: ChatMessage) => {
-      // Only add if it's for the active conversation
+      // Skip user's own messages — already handled by optimistic UI
+      if (msg.senderType === "user") return;
+
       if (msg.ticketId === s.state.activeTicketId) {
-        // Don't add duplicates (optimistic messages)
+        // Don't add duplicates
         const exists = s.state.messages.some((m) => m.id === msg.id);
         if (!exists) {
           s.update({ messages: [...s.state.messages, msg] });
