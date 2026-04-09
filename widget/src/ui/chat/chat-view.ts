@@ -318,7 +318,7 @@ async function handleAudioCapture(
     if (panel) panel.style.display = "none";
 
     // Acquire mic
-    const micStream = await navigator.mediaDevices.getUserMedia({
+    let micStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true },
     });
 
@@ -344,8 +344,9 @@ async function handleAudioCapture(
 
     recorder.onstop = () => {
       micSource.disconnect();
-      audioCtx.close().catch(() => {});
+      audioDest.stream.getTracks().forEach((t) => t.stop());
       micStream.getTracks().forEach((t) => t.stop());
+      audioCtx.close().catch(() => {});
       hideRecordingController(onOpenPanel);
       if (panel) panel.style.display = "";
       if (chunks.length > 0) {
@@ -379,6 +380,7 @@ async function handleAudioCapture(
           // MediaRecorder's track (from audioDest) never changes.
           micSource.disconnect();
           micStream.getTracks().forEach((t) => t.stop());
+          micStream = newStream;
           micSource = audioCtx.createMediaStreamSource(newStream);
           micSource.connect(audioDest);
         } catch (err) {

@@ -340,10 +340,13 @@ export class ScreenRecorder {
       this._micSource.disconnect();
       this._micSource = null;
     }
+    if (this._audioDest) {
+      this._audioDest.stream.getTracks().forEach((t) => t.stop());
+      this._audioDest = null;
+    }
     if (this._audioCtx) {
       this._audioCtx.close().catch(() => {});
       this._audioCtx = null;
-      this._audioDest = null;
     }
     this.streams.forEach((stream) => {
       stream.getTracks().forEach((track) => track.stop());
