@@ -900,6 +900,56 @@ class TicketViewSet(viewsets.ModelViewSet):
         serializer = WidgetConversationListSerializer(tickets, many=True)
         return Response(serializer.data)
 
+    @action(
+        detail=False,
+        methods=["delete"],
+        permission_classes=[AllowAny],
+        url_path="widget_message_delete",
+    )
+    def widget_message_delete(self, request):  # noqa: ANN001, ANN201
+        """Delete a user message from the widget.
+
+        Only the session that created the message can delete it.
+        Only user-sent messages can be deleted (not agent replies).
+        """
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+
+        message_id = request.query_params.get("message_id")
+        if not message_id:
+            return Response(
+                {"error": "message_id query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            message = TicketMessage.objects.get(
+                id=message_id,
+                widget_session=session,
+                ticket__organization=org,
+            )
+        except (TicketMessage.DoesNotExist, ValueError):
+            return Response(
+                {"error": "Message not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if message.sender_type != TicketMessage.SenderType.USER:
+            return Response(
+                {"error": "Only user messages can be deleted."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Delete associated attachments (files on storage) and the message
+        message.attachments.all().delete()
+        message.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class TicketMessageViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ticket messages."""

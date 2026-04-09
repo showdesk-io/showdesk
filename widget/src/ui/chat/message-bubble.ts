@@ -9,7 +9,10 @@
 import type { ChatMessage } from "../../types";
 import { openLightbox } from "../media-lightbox";
 
-export function renderMessageBubble(msg: ChatMessage): HTMLElement {
+export function renderMessageBubble(
+  msg: ChatMessage,
+  onDelete?: (messageId: string) => void,
+): HTMLElement {
   const isUser = msg.senderType === "user";
   const isSystem = msg.senderType === "system";
 
@@ -42,6 +45,19 @@ export function renderMessageBubble(msg: ChatMessage): HTMLElement {
       break;
     default:
       bubble.appendChild(renderText(msg));
+  }
+
+  // Delete button for sent user messages
+  if (isUser && onDelete && msg._status !== "sending") {
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "sd-msg-delete";
+    deleteBtn.title = "Delete message";
+    deleteBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>`;
+    deleteBtn.onclick = (e) => {
+      e.stopPropagation();
+      onDelete(msg.id);
+    };
+    bubble.appendChild(deleteBtn);
   }
 
   // Status indicator for user messages

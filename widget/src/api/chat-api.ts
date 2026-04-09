@@ -194,6 +194,22 @@ export async function fetchHistory(
   );
 }
 
+/** Delete a user message. */
+export async function deleteMessage(
+  config: ShowdeskConfig,
+  sessionId: string,
+  messageId: string,
+): Promise<void> {
+  const res = await fetch(
+    `${config.apiUrl}/tickets/widget_message_delete/?message_id=${messageId}`,
+    {
+      method: "DELETE",
+      headers: headers(config, sessionId),
+    },
+  );
+  if (!res.ok) throw new Error(`Delete message error: ${res.status}`);
+}
+
 function mapMessage(raw: Record<string, unknown>): ChatMessage {
   return {
     id: raw.id as string,
