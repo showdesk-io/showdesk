@@ -16,7 +16,7 @@ import { renderCaptureStep } from "./wizard/step-capture";
 import { renderContactStep } from "./wizard/step-contact";
 import { renderConfirmationStep } from "./wizard/step-confirmation";
 import { captureContext } from "../api/context";
-import { submitTicket, uploadVideo } from "../api/submit";
+import { submitTicket, uploadAttachment, uploadVideo } from "../api/submit";
 import { clearConsoleEntries } from "../collectors/console-collector";
 import { clearNetworkEntries } from "../collectors/network-collector";
 import type { ScreenRecorder } from "../recorder/screen-recorder";
@@ -97,6 +97,9 @@ export function createModal(config: ShowdeskConfig): void {
       // Remove the floating recording bar if present
       const floatingBar = document.getElementById("sd-floating-recording-bar");
       if (floatingBar) floatingBar.remove();
+      // Restore the original FAB button (hidden during recording)
+      const fab = document.querySelector<HTMLElement>("#showdesk-widget-container .sd-button");
+      if (fab) fab.style.display = "";
       activeRecorder = null;
     }
     document.removeEventListener("keydown", onKeyDown);
@@ -221,6 +224,16 @@ export function createModal(config: ShowdeskConfig): void {
             statusText.textContent = `Uploading video... ${Math.round(percent)}%`;
           },
         });
+      }
+
+      // Upload file attachments (screenshots, etc.)
+      if (state.attachments.length > 0 && ticket.id) {
+        for (let i = 0; i < state.attachments.length; i++) {
+          const file = state.attachments[i];
+          if (!file) continue;
+          statusText.textContent = `Uploading attachment ${i + 1}/${state.attachments.length}...`;
+          await uploadAttachment(config, ticket.id, file);
+        }
       }
 
       goToConfirmation(ticket.reference ?? "");

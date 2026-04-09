@@ -18,6 +18,7 @@ export class PipCompositor {
   private _position: BubblePosition = "bottom-right";
   private _size: BubbleSize = "large";
   private _cameraEnabled = true;
+  private _stream: MediaStream | null = null;
 
   constructor(
     screenStream: MediaStream,
@@ -43,7 +44,10 @@ export class PipCompositor {
 
   /** The composited stream (screen + camera bubble) at 30fps. */
   get stream(): MediaStream {
-    return this.canvas.captureStream(30);
+    if (!this._stream) {
+      this._stream = this.canvas.captureStream(30);
+    }
+    return this._stream;
   }
 
   set position(pos: BubblePosition) {
@@ -89,6 +93,7 @@ export class PipCompositor {
   /** Stop rendering and release video element references. */
   destroy(): void {
     this.stop();
+    this._stream = null;
     this.screenVideo.srcObject = null;
     this.cameraVideo.srcObject = null;
   }

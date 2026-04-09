@@ -76,6 +76,14 @@ function renderRecap(
     card.appendChild(captureInfo);
   }
 
+  if (state.attachments.length > 0) {
+    const attachInfo = document.createElement("div");
+    attachInfo.className = "sd-recap-row";
+    const count = state.attachments.length;
+    attachInfo.textContent = `${count} screenshot${count > 1 ? "s" : ""} attached`;
+    card.appendChild(attachInfo);
+  }
+
   // Technical context mention
   const contextInfo = document.createElement("div");
   contextInfo.className = "sd-recap-row sd-recap-context";

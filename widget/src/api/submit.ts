@@ -37,6 +37,33 @@ export async function submitTicket(
 }
 
 /**
+ * Upload a file attachment (e.g. screenshot) for a ticket.
+ */
+export async function uploadAttachment(
+  config: ShowdeskConfig,
+  ticketId: string,
+  file: File,
+): Promise<void> {
+  const formData = new FormData();
+  formData.append("ticket", ticketId);
+  formData.append("file", file, file.name);
+
+  const response = await fetch(
+    `${config.apiUrl}/tickets/widget_upload_attachment/`,
+    {
+      method: "POST",
+      headers: { "X-Widget-Token": config.token },
+      body: formData,
+    },
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to upload attachment: ${response.status} ${errorText}`);
+  }
+}
+
+/**
  * Upload a video recording for a ticket.
  *
  * Uses XMLHttpRequest instead of fetch to support upload progress

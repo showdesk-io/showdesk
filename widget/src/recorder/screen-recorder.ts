@@ -65,6 +65,12 @@ export class ScreenRecorder {
       await this.startScreen(options, tracks);
     }
 
+    // Ensure we have at least one video track
+    if (!tracks.some((t) => t.kind === "video")) {
+      this.cleanup();
+      throw new Error("No video track available. Recording cannot start.");
+    }
+
     // Create combined stream
     const combinedStream = new MediaStream(tracks);
 
@@ -100,6 +106,10 @@ export class ScreenRecorder {
     options: RecorderOptions,
     tracks: MediaStreamTrack[],
   ): Promise<void> {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      throw new Error("Screen capture is not supported in this browser.");
+    }
+
     // Request screen capture
     const displayStream = await navigator.mediaDevices.getDisplayMedia({
       video: {
@@ -108,7 +118,8 @@ export class ScreenRecorder {
         frameRate: { ideal: 30 },
       },
       audio: options.audio,
-      // Include the current tab in the picker (Chrome excludes it by default)
+      // Chrome-specific: include current tab in picker and prefer it.
+      // Browsers that don't recognize these properties ignore them per spec.
       selfBrowserSurface: "include",
       preferCurrentTab: true,
     } as DisplayMediaStreamOptions);

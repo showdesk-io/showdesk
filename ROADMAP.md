@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-04-08
+> Last updated: 2026-04-09
 
 ---
 
@@ -88,9 +88,9 @@ Everything needed before writing real feature code. **All done.**
 
 - [x] **Auth: stale user after re-login** -- logging out then logging in with a different email shows the previous user's data (cached in Zustand/localStorage). Eventually switches to the correct user. The auth store should be fully cleared on logout and refreshed on login.
 - [x] **Team page: cross-org user visibility** -- non-superuser agents can see users from other organizations and superusers with no organization. The team list API should filter out users without an organization and scope to the current user's org only.
-- [ ] **WebSocket fails on dev.showdesk.io** -- WSS connection to `/ws/tickets/` fails when accessed via Cloudflare proxy. Likely Cloudflare or Caddy reverse proxy WebSocket forwarding issue. Works on localhost:40080.
-- [ ] **Widget: screen capture fails** -- clicking the screen record button does not start capture. Likely a permissions or getDisplayMedia issue to investigate.
-- [ ] **Widget: modal overlay blocks recording** -- when recording the current tab, the widget modal stays visible in the middle of the page, preventing the user from interacting with the site/app to demonstrate the issue. Clicking outside the modal ends the capture. Fix: once recording starts, collapse the widget to a small red recording indicator on the FAB button. Clicking the FAB again opens a minimal panel to stop/finalize or continue (re-collapse) the recording.
+- [ ] **WebSocket fails on dev.showdesk.io** -- WSS connection to `/ws/tickets/` fails when accessed via Cloudflare proxy. **Root cause: Cloudflare tunnel configuration** -- the frontend code correctly derives WSS URL from `window.location` and Caddy handles WebSocket upgrades natively. Fix requires enabling WebSocket support in Cloudflare Zero Trust tunnel config (not a code issue). Note: `VITE_WS_BASE_URL` env var is defined but unused (can be cleaned up).
+- [x] **Widget: screen capture fails** -- screenshot button was disabled ("Coming soon"). Implemented full screenshot capture via getDisplayMedia single-frame, with overlay hiding, thumbnail previews, and backend widget attachment upload endpoint. Also fixed PipCompositor captureStream caching and added video track validation.
+- [x] **Widget: modal overlay blocks recording** -- when recording starts, the overlay and modal are now hidden and the FAB is replaced by a compact recording bar (dot + timer + PiP controls + stop) at the FAB position. User can interact freely with the page. On stop, the modal reappears with the recording preview.
 
 ---
 
@@ -157,7 +157,7 @@ Everything needed before writing real feature code. **All done.**
 - [x] Form validation + error handling + loading states
 - [x] Upload progress indicator
 - [x] E2E browser tests (Playwright, 19 tests)
-- [ ] Screenshot capture button
+- [x] Screenshot capture button (getDisplayMedia single-frame capture, hides overlay during capture, thumbnail previews with remove, uploaded as ticket attachment)
 - [ ] Retry on upload failure
 - [ ] Configurable max recording duration
 - [ ] Custom trigger button -- allow the host app to use its own help button instead of the auto-created FAB. `Showdesk.init({ hideButton: true })` already exists; add `Showdesk.open()` / `Showdesk.startRecording()` / `Showdesk.close()` so the host app can drive the full flow programmatically.
@@ -283,6 +283,59 @@ Lightweight replay of user interactions leading up to the bug report.
 
 ## Phase 3 -- Admin Console
 
+### Agent Groups & Management
+
+- [ ] P1: Agent groups -- create named groups of agents (e.g. "Support L1", "Billing", "Technical")
+- [ ] P1: Group managers -- one or more agents designated as manager of a group (can manage members, view group stats, receive escalations)
+- [ ] P1: Assign tickets to groups (in addition to individual agents/teams)
+- [ ] P2: Group-based routing rules (auto-assign tickets to groups based on type/tags)
+- [ ] P2: Group dashboards (manager view: group workload, SLA compliance, agent activity)
+
+### Notification System
+
+Full brainstorm on notifications: who gets notified, when, and via which channel.
+
+**Recipients:**
+- Agents (assigned agent, group members, all agents)
+- Group managers
+- Ticket requester (end-user who created the ticket)
+- Organization admins
+
+**Trigger events:**
+- [ ] Ticket created (new ticket submitted via widget, email, or API)
+- [ ] Ticket assigned / reassigned (to agent, team, or group)
+- [ ] Agent reply (public response added to ticket)
+- [ ] Requester reply (end-user responds to ticket)
+- [ ] Internal note added
+- [ ] Ticket status change (open → in_progress, resolved, closed, reopened)
+- [ ] Ticket priority change (especially escalation to urgent)
+- [ ] SLA breach warning (approaching SLA deadline)
+- [ ] SLA breach (SLA deadline exceeded)
+- [ ] Ticket escalated (to manager or higher-tier group)
+- [ ] Report generated (scheduled or on-demand analytics report)
+- [ ] Agent invited / deactivated
+- [ ] CSAT response received
+- [ ] Ticket merged
+- [ ] Bulk action performed (mass close, mass reassign)
+
+**Channels:**
+- [ ] Email (default, always available)
+- [ ] In-app (WebSocket real-time notifications, already partially implemented)
+- [ ] Webhook (HTTP POST to customer-configured URL, for custom integrations)
+- [ ] Slack (native integration: post to channel or DM)
+- [ ] Discord (webhook-based integration)
+- [ ] Microsoft Teams (webhook or app integration)
+- [ ] SMS (via Twilio or similar, for urgent/on-call notifications)
+- [ ] Mobile push notifications (future, requires mobile app)
+
+**Configuration:**
+- [ ] Per-agent notification preferences (opt-in/out per event type × channel)
+- [ ] Per-organization defaults (admin sets baseline, agents can override)
+- [ ] Quiet hours / Do Not Disturb schedules
+- [ ] Notification frequency control (instant, digest: hourly/daily)
+- [ ] Channel-specific templates (customizable email/Slack message format)
+- [ ] Escalation chains (if no response in X minutes, notify next level)
+
 ### Org Admin (per-organization settings)
 
 - [x] P0: Agent management (invite, deactivate, roles)
@@ -351,9 +404,9 @@ Lightweight replay of user interactions leading up to the bug report.
 | Scaffolding | **100%** | All infra, Docker, CI, docs | -- |
 | Backend API | **~99%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type, widget_tickets endpoint, platform admin API, impersonation | Video duration validation |
 | Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation, technical context panel, issue type badge, platform admin page, org switcher, fixed embed snippet, widget preview button | Shortcuts, bulk actions, agent video reply, SLA editor |
-| Widget | **~97%** | Full form, recording, upload, e2e tests, guided wizard, camera PiP (compositing + camera-only + preview), console/network collectors, user identity (API + data-user-*), adaptive steps, API URL auto-detect, /cdn/widget.js distribution | Screenshot, retry, i18n, accessibility |
+| Widget | **~98%** | Full form, recording, upload, e2e tests, guided wizard, camera PiP (compositing + camera-only + preview), console/network collectors, user identity (API + data-user-*), adaptive steps, API URL auto-detect, /cdn/widget.js distribution, screenshot capture, recording overlay fix | Retry, i18n, accessibility |
 | Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright, including wizard flow + identity + context tests) | Video API tests, more frontend tests |
-| Widget UX (Phase 2) | **~75%** | P0: widget distribution/API URL (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). Code written for camera-only + preview + data-user-* + widget_tickets endpoint. | P2-P3: ticket history, screenshot+annotation, multi-attach, session replay, video markers |
+| Widget UX (Phase 2) | **~80%** | P0: widget distribution/API URL (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). Screenshot capture (basic, no annotation). Bug fixes: recording overlay, captureStream caching. | P2-P3: ticket history, screenshot annotation, multi-attach, session replay, video markers |
 | Admin (org) | **~55%** | Agent/team CRUD, widget config, tags, custom priorities | Branding, canned responses, SLA, audit log |
 | Admin (platform) | **~40%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar | Usage/quotas dashboard, billing, feature flags, monitoring |
 | Post-MVP | **0%** | -- | Everything |
@@ -362,11 +415,12 @@ Lightweight replay of user interactions leading up to the bug report.
 ### Next priorities
 
 1. ~~Widget distribution & API URL~~ -- **Done**
-2. **Phase 2 P2** : ticket history in widget, screenshot + annotation
-3. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
-4. Canned responses / macros
-5. Keyboard shortcuts + bulk actions
+2. ~~Widget bugs (screenshot, recording overlay, captureStream)~~ -- **Done**
+3. **Phase 2 P2** : ticket history in widget, screenshot annotation overlay
+4. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
+5. Canned responses / macros
+6. Keyboard shortcuts + bulk actions
 
 ---
 
-*This roadmap is a living document. Last updated: 2026-04-08.*
+*This roadmap is a living document. Last updated: 2026-04-09.*

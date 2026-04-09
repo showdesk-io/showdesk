@@ -10,7 +10,8 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from apps.core.permissions import get_active_org
-from apps.core.throttling import WidgetSubmitThrottle
+from rest_framework.parsers import FormParser, MultiPartParser
+from apps.core.throttling import WidgetSubmitThrottle, WidgetUploadThrottle
 from apps.notifications.signals import (
     notify_new_message,
     notify_new_ticket,
@@ -210,6 +211,65 @@ class TicketViewSet(viewsets.ModelViewSet):
             TicketSerializer(ticket).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[AllowAny],
+        throttle_classes=[WidgetUploadThrottle],
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def widget_upload_attachment(self, request):  # noqa: ANN001, ANN201
+        """Upload a file attachment from the widget.
+
+        Authenticates via X-Widget-Token header.
+        Expects multipart form data with `ticket` (UUID) and `file`.
+        """
+        token = request.headers.get("X-Widget-Token")
+        if not token:
+            return Response(
+                {"error": "Missing X-Widget-Token header."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            organization = Organization.objects.get(api_token=token, is_active=True)
+        except Organization.DoesNotExist:
+            return Response(
+                {"error": "Invalid or inactive organization token."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        ticket_id = request.data.get("ticket")
+        uploaded_file = request.FILES.get("file")
+
+        if not ticket_id or not uploaded_file:
+            return Response(
+                {"error": "Both 'ticket' and 'file' fields are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            ticket = Ticket.objects.get(id=ticket_id, organization=organization)
+        except Ticket.DoesNotExist:
+            return Response(
+                {"error": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = TicketAttachmentSerializer(
+            data={
+                "ticket": str(ticket.id),
+                "file": uploaded_file,
+                "filename": uploaded_file.name,
+                "content_type": uploaded_file.content_type or "application/octet-stream",
+                "file_size": uploaded_file.size,
+            }
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(uploaded_by=None)
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(
         detail=False,

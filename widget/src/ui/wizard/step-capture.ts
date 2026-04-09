@@ -16,7 +16,7 @@ import type { BubblePosition } from "../../recorder/pip-compositor";
 export function renderCaptureStep(
   container: HTMLElement,
   state: WizardState,
-  _config: ShowdeskConfig,
+  config: ShowdeskConfig,
   onComplete: (updates: Partial<WizardState>) => void,
   onBack: () => void,
   onRecorderChange?: (recorder: ScreenRecorder | null) => void,
@@ -78,9 +78,10 @@ export function renderCaptureStep(
   if (options.showScreenshot) {
     const screenshotBtn = document.createElement("button");
     screenshotBtn.className = "sd-recorder-btn";
-    screenshotBtn.disabled = true;
     screenshotBtn.innerHTML = `<span>\uD83D\uDCF7</span> Screenshot`;
-    screenshotBtn.title = "Coming soon";
+    screenshotBtn.addEventListener("click", () => {
+      void captureScreenshot();
+    });
     toolsDiv.appendChild(screenshotBtn);
   }
 
@@ -126,6 +127,7 @@ export function renderCaptureStep(
       recordedBlob: currentBlob,
       hasAudio: audioEnabled,
       hasCamera: cameraEnabled,
+      attachments: state.attachments,
     });
   });
 
@@ -140,6 +142,162 @@ export function renderCaptureStep(
 
   function updateContinueButton(): void {
     continueBtn.disabled = textarea.value.trim().length === 0;
+  }
+
+  async function captureScreenshot(): Promise<void> {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      showScreenshotError("Screenshots are not supported in this browser.");
+      return;
+    }
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+        preferCurrentTab: true,
+      } as DisplayMediaStreamOptions);
+    } catch (err) {
+      if (err instanceof Error && err.name === "NotAllowedError") return; // User cancelled
+      showScreenshotError("Could not capture screen.");
+      return;
+    }
+
+    try {
+      // Hide the widget overlay so it's not in the screenshot
+      const overlay = document.getElementById("showdesk-modal-overlay");
+      if (overlay) overlay.style.display = "none";
+
+      // Wait for the overlay to disappear from rendering
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      // Create video element to extract a frame
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => { video.play().then(resolve).catch(reject); };
+        video.onerror = () => reject(new Error("Video load failed"));
+      });
+
+      // Wait one more frame so the video actually renders
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+
+      // Draw frame on canvas
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth || 1920;
+      canvas.height = video.videoHeight || 1080;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas context unavailable");
+      ctx.drawImage(video, 0, 0);
+
+      // Stop stream immediately
+      stream.getTracks().forEach((t) => t.stop());
+      video.srcObject = null;
+
+      // Show overlay again
+      if (overlay) overlay.style.display = "";
+
+      // Convert to PNG blob
+      const blob: Blob | null = await new Promise((resolve) => {
+        canvas.toBlob((b) => resolve(b), "image/png");
+      });
+
+      if (!blob) {
+        showScreenshotError("Failed to create screenshot image.");
+        return;
+      }
+
+      const file = new File([blob], `screenshot-${Date.now()}.png`, { type: "image/png" });
+      state.attachments = [...state.attachments, file];
+      renderScreenshotPreviews();
+    } catch (err) {
+      // Clean up stream on error
+      stream.getTracks().forEach((t) => t.stop());
+      const overlay = document.getElementById("showdesk-modal-overlay");
+      if (overlay) overlay.style.display = "";
+      showScreenshotError(err instanceof Error ? err.message : "Screenshot failed.");
+    }
+  }
+
+  function showScreenshotError(message: string): void {
+    // Remove existing error
+    const existing = wrapper.querySelector(".sd-screenshot-error");
+    if (existing) existing.remove();
+
+    const errorDiv = document.createElement("div");
+    errorDiv.className = "sd-error sd-screenshot-error";
+    errorDiv.textContent = message;
+    toolsDiv.after(errorDiv);
+
+    setTimeout(() => errorDiv.remove(), 5000);
+  }
+
+  function renderScreenshotPreviews(): void {
+    // Remove existing screenshot previews
+    const existing = wrapper.querySelector(".sd-screenshot-previews");
+    if (existing) existing.remove();
+
+    if (state.attachments.length === 0) return;
+
+    const container = document.createElement("div");
+    container.className = "sd-screenshot-previews";
+    container.style.cssText = "display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;";
+
+    for (let i = 0; i < state.attachments.length; i++) {
+      const file = state.attachments[i];
+      if (!file || !file.type.startsWith("image/")) continue;
+
+      const card = document.createElement("div");
+      card.style.cssText = `
+        position: relative;
+        border: 1px solid var(--sd-border);
+        border-radius: 8px;
+        overflow: hidden;
+        width: 120px;
+        height: 80px;
+      `;
+
+      const img = document.createElement("img");
+      img.src = URL.createObjectURL(file);
+      img.style.cssText = "width: 100%; height: 100%; object-fit: cover;";
+      img.onload = () => URL.revokeObjectURL(img.src);
+      card.appendChild(img);
+
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "\u00D7";
+      removeBtn.title = "Remove";
+      removeBtn.style.cssText = `
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: none;
+        background: rgba(0,0,0,0.6);
+        color: white;
+        font-size: 14px;
+        line-height: 1;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+      `;
+      const idx = i;
+      removeBtn.addEventListener("click", () => {
+        state.attachments = state.attachments.filter((_, j) => j !== idx);
+        renderScreenshotPreviews();
+      });
+      card.appendChild(removeBtn);
+
+      container.appendChild(card);
+    }
+
+    // Insert after the recording controls
+    toolsDiv.after(container);
   }
 
   function stopCameraPreview(): void {
@@ -318,13 +476,22 @@ export function renderCaptureStep(
   }
 
   function showFloatingBar(): void {
+    // Hide the modal overlay so the user can interact with the page
+    const overlay = document.getElementById("showdesk-modal-overlay");
+    if (overlay) overlay.style.display = "none";
+
+    // Hide the original FAB button
+    const fab = document.querySelector<HTMLElement>("#showdesk-widget-container .sd-button");
+    if (fab) fab.style.display = "none";
+
+    // Create recording bar at the FAB position (not center-screen)
+    const positionSide = config.position === "bottom-left" ? "left" : "right";
     const bar = document.createElement("div");
     bar.id = "sd-floating-recording-bar";
     bar.style.cssText = `
       position: fixed;
       bottom: 24px;
-      left: 50%;
-      transform: translateX(-50%);
+      ${positionSide}: 24px;
       display: flex;
       align-items: center;
       gap: 12px;
@@ -470,6 +637,12 @@ export function renderCaptureStep(
     if (bar) {
       bar.remove();
     }
+    // Restore the original FAB button
+    const fab = document.querySelector<HTMLElement>("#showdesk-widget-container .sd-button");
+    if (fab) fab.style.display = "";
+    // Show the modal overlay again
+    const overlay = document.getElementById("showdesk-modal-overlay");
+    if (overlay) overlay.style.display = "";
   }
 
   function renderPreview(): void {
