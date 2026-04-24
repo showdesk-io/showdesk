@@ -56,6 +56,13 @@ def notify_new_message(message) -> None:  # noqa: ANN001
     """
     channel_layer = get_channel_layer()
     group_name = f"org_{message.ticket.organization_id}"
+    logger.info(
+        "notify_new_message: publishing to %s (message=%s sender=%s type=%s)",
+        group_name,
+        message.id,
+        message.sender_type,
+        message.message_type,
+    )
 
     async_to_sync(channel_layer.group_send)(
         group_name,

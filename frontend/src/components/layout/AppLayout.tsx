@@ -56,7 +56,7 @@ export function AppLayout() {
   const { data: user } = useCurrentUser();
 
   // Maintain WebSocket connection for real-time updates
-  useWebSocket();
+  const wsStatus = useWebSocket();
 
   // Mount the in-app Showdesk widget (dogfooding — feedback to showdesk-internal org)
   useInternalWidget();
@@ -79,6 +79,15 @@ export function AppLayout() {
         <div className="flex h-16 items-center gap-2 border-b border-gray-200 px-6">
           <div className="h-8 w-8 rounded-lg bg-primary-500" />
           <span className="text-lg font-bold text-gray-900">Showdesk</span>
+          <span
+            className={clsx(
+              "ml-auto h-2 w-2 rounded-full",
+              wsStatus === "open" && "bg-green-500",
+              wsStatus === "connecting" && "bg-yellow-400 animate-pulse",
+              wsStatus === "closed" && "bg-red-500",
+            )}
+            title={`Real-time: ${wsStatus}`}
+          />
         </div>
 
         {/* Org switcher — superusers only */}

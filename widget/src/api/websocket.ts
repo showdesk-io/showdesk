@@ -2,7 +2,8 @@
  * Widget WebSocket Client — Real-time agent replies.
  *
  * Connects to ws/widget/?token=<api_token>&session=<session_id>.
- * Handles reconnect with exponential backoff.
+ * Handles reconnect with exponential backoff, app-level ping/pong
+ * heartbeat, dead-link detection and resume-on-visibility.
  */
 
 import type { ChatMessage } from "../types";
@@ -10,9 +11,36 @@ import type { ChatMessage } from "../types";
 export type MessageHandler = (msg: ChatMessage) => void;
 export type ConnectionHandler = (connected: boolean) => void;
 
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const HEARTBEAT_TIMEOUT_MS = 10_000;
+
+/**
+ * Close a socket we no longer want. Defers the close until the socket has
+ * actually connected, otherwise the browser logs "WebSocket is closed before
+ * the connection is established."
+ */
+function retire(ws: WebSocket & { _retired?: boolean }): void {
+  ws._retired = true;
+  const closeNow = () => {
+    try {
+      ws.close(1000, "Retired");
+    } catch {
+      // ignore
+    }
+  };
+  if (ws.readyState === WebSocket.CONNECTING) {
+    ws.addEventListener("open", closeNow, { once: true });
+    ws.addEventListener("error", closeNow, { once: true });
+  } else if (ws.readyState === WebSocket.OPEN) {
+    closeNow();
+  }
+}
+
 export class WidgetWebSocket {
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1000;
   private maxReconnectDelay = 30000;
   private intentionalClose = false;
@@ -21,6 +49,7 @@ export class WidgetWebSocket {
   public onConnectionChange: ConnectionHandler | null = null;
 
   private wsUrl: string | null = null;
+  private visibilityHandlerBound = false;
 
   connect(apiUrl: string, token: string, sessionId: string): void {
     this.intentionalClose = false;
@@ -30,6 +59,7 @@ export class WidgetWebSocket {
     const protocol = url.protocol === "https:" ? "wss:" : "ws:";
     this.wsUrl =
       `${protocol}//${url.host}/ws/widget/?token=${token}&session=${sessionId}`;
+    this._bindVisibility();
     this._connect();
   }
 
@@ -39,30 +69,94 @@ export class WidgetWebSocket {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this._clearHeartbeat();
     if (this.ws) {
-      this.ws.close();
+      retire(this.ws as WebSocket & { _retired?: boolean });
       this.ws = null;
+    }
+  }
+
+  private _bindVisibility(): void {
+    if (this.visibilityHandlerBound) return;
+    this.visibilityHandlerBound = true;
+    const onWake = () => {
+      if (document.visibilityState !== "visible") return;
+      if (this.intentionalClose) return;
+      if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
+        this.reconnectDelay = 1000;
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        this._connect();
+      }
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("online", onWake);
+  }
+
+  private _clearHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    if (this.heartbeatTimeout) {
+      clearTimeout(this.heartbeatTimeout);
+      this.heartbeatTimeout = null;
     }
   }
 
   private _connect(): void {
     if (!this.wsUrl) return;
 
+    // Retire any socket that's still lingering so its onclose won't trigger
+    // a second reconnect cycle or clear the new socket's heartbeat.
+    const prev = this.ws as (WebSocket & { _retired?: boolean }) | null;
+    if (prev) {
+      retire(prev);
+      this.ws = null;
+    }
+
+    this._clearHeartbeat();
+
+    let ws: WebSocket & { _retired?: boolean };
     try {
-      this.ws = new WebSocket(this.wsUrl);
+      ws = new WebSocket(this.wsUrl) as WebSocket & { _retired?: boolean };
     } catch {
       this._scheduleReconnect();
       return;
     }
+    this.ws = ws;
 
-    this.ws.onopen = () => {
+    ws.onopen = () => {
       this.reconnectDelay = 1000;
       this.onConnectionChange?.(true);
+
+      this.heartbeatInterval = setInterval(() => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        try {
+          ws.send(JSON.stringify({ type: "ping" }));
+        } catch {
+          return;
+        }
+        if (this.heartbeatTimeout) clearTimeout(this.heartbeatTimeout);
+        this.heartbeatTimeout = setTimeout(() => {
+          if (this.ws === ws && ws.readyState === WebSocket.OPEN) {
+            ws.close(4000, "Heartbeat timeout");
+          }
+        }, HEARTBEAT_TIMEOUT_MS);
+      }, HEARTBEAT_INTERVAL_MS);
     };
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
+      if (this.heartbeatTimeout) {
+        clearTimeout(this.heartbeatTimeout);
+        this.heartbeatTimeout = null;
+      }
+
       try {
         const data = JSON.parse(event.data);
+        if (data.type === "pong") return;
         if (data.event === "message.created" && this.onMessage) {
           this.onMessage({
             id: data.message_id,
@@ -81,14 +175,19 @@ export class WidgetWebSocket {
       }
     };
 
-    this.ws.onclose = () => {
+    ws.onclose = () => {
+      if (ws._retired) return;
+      if (this.ws === ws) {
+        this._clearHeartbeat();
+        this.ws = null;
+      }
       this.onConnectionChange?.(false);
       if (!this.intentionalClose) {
         this._scheduleReconnect();
       }
     };
 
-    this.ws.onerror = () => {
+    ws.onerror = () => {
       // onclose will fire after this
     };
   }

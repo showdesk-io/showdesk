@@ -5,6 +5,7 @@ WidgetConsumer — widget chat users (token + session-authenticated).
 """
 
 import logging
+from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -23,16 +24,34 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
         """Handle WebSocket connection."""
         user = self.scope.get("user")
         if not user or user.is_anonymous:
+            logger.warning("TicketConsumer: rejecting anonymous connection")
             await self.close()
             return
 
-        # Join organization-specific group
-        org_id = await self._get_organization_id(user)
+        # Superusers may impersonate an org via ?org=<uuid>, matching the
+        # X-Showdesk-Org header used on HTTP requests. Otherwise fall back
+        # to the user's own organization.
+        query_string = self.scope.get("query_string", b"").decode("utf-8")
+        requested_org = (parse_qs(query_string).get("org") or [None])[0]
+        if requested_org and getattr(user, "is_superuser", False):
+            org_id = requested_org
+        else:
+            org_id = await self._get_organization_id(user)
+
         if org_id:
             self.group_name = f"org_{org_id}"
             await self.channel_layer.group_add(self.group_name, self.channel_name)
             await self.accept()
+            logger.info(
+                "TicketConsumer connected: user=%s group=%s",
+                getattr(user, "email", user.pk),
+                self.group_name,
+            )
         else:
+            logger.warning(
+                "TicketConsumer: rejecting user %s — no organization_id",
+                getattr(user, "email", user.pk),
+            )
             await self.close()
 
     async def disconnect(self, close_code: int) -> None:
@@ -41,9 +60,14 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive_json(self, content: dict) -> None:
-        """Handle incoming WebSocket messages."""
-        # Currently read-only, but extensible for future features
-        pass
+        """Handle incoming WebSocket messages.
+
+        Currently only handles app-level heartbeat: client sends {"type": "ping"},
+        server replies with {"type": "pong"}. This keeps proxies (Cloudflare, Caddy)
+        from closing the connection on idle and lets the client detect dead links.
+        """
+        if content.get("type") == "ping":
+            await self.send_json({"type": "pong"})
 
     async def ticket_update(self, event: dict) -> None:
         """Send ticket update to the WebSocket client."""
@@ -94,8 +118,12 @@ class WidgetConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive_json(self, content: dict) -> None:
-        """Handle incoming messages — currently unused."""
-        pass
+        """Handle incoming messages.
+
+        Supports app-level heartbeat: {"type": "ping"} → {"type": "pong"}.
+        """
+        if content.get("type") == "ping":
+            await self.send_json({"type": "pong"})
 
     async def widget_message(self, event: dict) -> None:
         """Send a new message (agent reply) to the widget client."""
