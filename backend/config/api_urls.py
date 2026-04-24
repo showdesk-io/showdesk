@@ -19,6 +19,7 @@ from apps.tickets.views import (
     TicketMessageViewSet,
     TicketViewSet,
 )
+from apps.tickets.widget_views import InternalWidgetIdentityView
 from apps.videos.views import VideoRecordingViewSet
 from apps.knowledge_base.views import ArticleViewSet, CategoryViewSet
 from apps.core.views import HealthCheckView
@@ -61,6 +62,13 @@ urlpatterns = [
     # JWT refresh (still needed for token rotation)
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("health/", HealthCheckView.as_view(), name="health-check"),
+    # In-app widget bootstrap (dogfooding): returns the internal org token
+    # and an HMAC hash for the authenticated user.
+    path(
+        "widget/identity-hash/",
+        InternalWidgetIdentityView.as_view(),
+        name="widget-identity-hash",
+    ),
     # Instance setup (first-time initialization)
     path("setup/status/", SetupStatusView.as_view(), name="setup-status"),
     path("setup/initialize/", SetupInitializeView.as_view(), name="setup-initialize"),
