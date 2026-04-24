@@ -35,7 +35,7 @@ installConsoleCollector();
 installNetworkCollector();
 
 import { createButton, updateBadge } from "./ui/button";
-import { createModal, destroyModal, getStore } from "./ui/modal";
+import { createModal, destroyModal, getStore, initSession } from "./ui/modal";
 import { reattachPopupIfNeeded } from "./ui/chat/chat-view";
 import { injectStyles } from "./ui/styles";
 import type { NavigationMode, ShowdeskConfig, ShowdeskUserIdentity } from "./types";
@@ -141,6 +141,10 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
 
   isInitialized = true;
   console.info("[Showdesk] Widget initialized.");
+
+  // Eagerly bootstrap the session + conversation history so the FAB badge
+  // can show unread replies before the user opens the panel. No-op on retry.
+  void initSession(config);
 
   // MPA mode: probe for an existing popup recorder from a previous page load
   if (config.navigationMode === "mpa") {

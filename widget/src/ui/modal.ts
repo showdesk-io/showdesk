@@ -8,7 +8,12 @@
  *   Content area (chat view or history view)
  */
 
-import { createOrResumeSession } from "../api/chat-api";
+import {
+  createOrResumeSession,
+  fetchConversation,
+  fetchHistory,
+  markConversationRead,
+} from "../api/chat-api";
 import { WidgetWebSocket } from "../api/websocket";
 import {
   getStoredSessionId,
@@ -16,14 +21,49 @@ import {
 } from "../session/session-manager";
 import { createWidgetStore } from "../state/widget-state";
 import type { WidgetStore } from "../state/widget-state";
-import type { ChatMessage, ShowdeskConfig, WidgetTab } from "../types";
+import type {
+  ChatMessage,
+  ConversationSummary,
+  ShowdeskConfig,
+  WidgetTab,
+} from "../types";
 import { renderChatView, reattachPopupIfNeeded } from "./chat/chat-view";
 import { renderHistoryView } from "./history/history-view";
+
+/** Statuses that mean a conversation is still live (not resolved/closed). */
+const OPEN_STATUSES = new Set(["open", "in_progress", "waiting"]);
+
+/** Sum of unread replies across conversations still considered open. */
+function countOpenUnread(conversations: ConversationSummary[]): number {
+  return conversations
+    .filter((c) => OPEN_STATUSES.has(c.status))
+    .reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+}
+
+/** Pick the open conversation with the freshest unread reply, if any. */
+function pickConversationToResume(
+  conversations: ConversationSummary[],
+): ConversationSummary | null {
+  const candidates = conversations
+    .filter((c) => OPEN_STATUSES.has(c.status) && c.unreadCount > 0)
+    .sort((a, b) => {
+      const ta = a.lastMessageAt ? Date.parse(a.lastMessageAt) : 0;
+      const tb = b.lastMessageAt ? Date.parse(b.lastMessageAt) : 0;
+      return tb - ta;
+    });
+  return candidates[0] ?? null;
+}
 
 let currentPanel: HTMLElement | null = null;
 let store: WidgetStore | null = null;
 let ws: WidgetWebSocket | null = null;
 let unsubscribe: (() => void) | null = null;
+
+/** True only when the panel is mounted AND visible. Drives whether
+ *  incoming messages are treated as "seen" or bumped to the unread badge. */
+function isPanelVisible(): boolean {
+  return currentPanel != null && currentPanel.style.display !== "none";
+}
 
 /**
  * Get or create the shared widget store.
@@ -47,7 +87,8 @@ export function getWebSocket(): WidgetWebSocket {
 
 /**
  * Initialize the session and WebSocket connection.
- * Called once on first widget open.
+ * Called eagerly on widget init so the FAB badge reflects unread replies
+ * even before the panel is opened.
  */
 export async function initSession(config: ShowdeskConfig): Promise<void> {
   const s = getStore();
@@ -65,40 +106,123 @@ export async function initSession(config: ShowdeskConfig): Promise<void> {
       // Skip user's own messages — already handled by optimistic UI
       if (msg.senderType === "user") return;
 
-      if (msg.ticketId === s.state.activeTicketId) {
+      // The user is actively looking at this ticket only if the panel is
+      // open AND the ticket is the currently-displayed one. Otherwise the
+      // message counts as unread, even on the "last active" ticket.
+      const isViewing =
+        isPanelVisible() && msg.ticketId === s.state.activeTicketId;
+
+      if (isViewing) {
         // Don't add duplicates
         const exists = s.state.messages.some((m) => m.id === msg.id);
         if (!exists) {
           s.update({ messages: [...s.state.messages, msg] });
+          // Keep the server-side read marker current so a refresh doesn't
+          // re-raise the badge for this reply.
+          void markConversationRead(config, session.sessionId, msg.ticketId);
         }
       } else {
-        // Agent replied on a different conversation — increment unread
-        s.update({ unreadCount: s.state.unreadCount + 1 });
+        // Widget is closed or the reply is on another ticket — bump the
+        // badge and keep the conversations list in sync so
+        // pickConversationToResume picks the right ticket next open.
+        const nextConversations = s.state.conversations.map((c) =>
+          c.id === msg.ticketId
+            ? {
+                ...c,
+                unreadCount: c.unreadCount + 1,
+                lastMessageAt: msg.createdAt,
+                lastMessagePreview: msg.body || c.lastMessagePreview,
+              }
+            : c,
+        );
+        s.update({
+          unreadCount: s.state.unreadCount + 1,
+          conversations: nextConversations,
+        });
       }
     };
     socket.onConnectionChange = (connected: boolean) => {
       s.update({ isConnected: connected });
     };
     socket.connect(config.apiUrl, config.token, session.sessionId);
+
+    // Prefetch conversation list so the FAB badge is accurate on page load
+    // and the panel can auto-open the most recent unread reply.
+    try {
+      const conversations = await fetchHistory(config, session.sessionId);
+      s.update({
+        conversations,
+        unreadCount: countOpenUnread(conversations),
+      });
+    } catch {
+      // Silent — history is a nice-to-have on boot; user can still open the panel.
+    }
   } catch (err) {
     console.error("[Showdesk] Session initialization failed:", err);
   }
 }
 
 /**
+ * Bring the panel into the "just opened" state: if there's a ticket with
+ * unread replies, jump to it and refetch its messages. Otherwise leave the
+ * existing active conversation in place. Always resets the FAB badge.
+ *
+ * Called from both first-open (panel creation) and re-show (panel was
+ * hidden) so a close/reopen cycle behaves like a fresh open.
+ */
+function resumeActiveConversation(config: ShowdeskConfig): void {
+  const s = getStore();
+  const resume = pickConversationToResume(s.state.conversations);
+
+  if (resume) {
+    const switchingTicket = resume.id !== s.state.activeTicketId;
+    s.update({
+      activeTab: "chat",
+      activeTicketId: resume.id,
+      activeTicketReference: resume.reference,
+      // Only wipe messages when we're jumping to a different ticket —
+      // otherwise keep them visible while we refetch.
+      messages: switchingTicket ? [] : s.state.messages,
+      isLoading: true,
+      conversations: s.state.conversations.map((c) =>
+        c.id === resume.id ? { ...c, unreadCount: 0 } : c,
+      ),
+    });
+    const session = s.state.session;
+    if (session) {
+      fetchConversation(config, session.sessionId, resume.id)
+        .then((data) => {
+          s.update({
+            activeTicketId: data.ticketId,
+            activeTicketReference: data.reference,
+            messages: data.messages,
+            isLoading: false,
+          });
+          void markConversationRead(config, session.sessionId, resume.id);
+        })
+        .catch(() => s.update({ isLoading: false }));
+    }
+  }
+
+  // Reset unread count — the user is now looking at the panel.
+  s.update({ unreadCount: 0 });
+}
+
+/**
  * Open the messaging panel.
  */
 export function createModal(config: ShowdeskConfig): void {
-  // If already open, just bring to front
+  // If already open, just bring to front — but still refresh resume state
+  // so fresh replies don't sit behind a stale active conversation.
   if (currentPanel) {
     currentPanel.style.display = "";
+    resumeActiveConversation(config);
     return;
   }
 
   const s = getStore();
 
-  // Reset unread count when opening
-  s.update({ unreadCount: 0 });
+  resumeActiveConversation(config);
 
   // Create panel
   const panel = document.createElement("div");

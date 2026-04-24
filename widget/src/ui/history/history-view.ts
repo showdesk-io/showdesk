@@ -5,7 +5,11 @@
  * "New conversation" button starts a fresh thread.
  */
 
-import { fetchHistory, fetchConversation } from "../../api/chat-api";
+import {
+  fetchHistory,
+  fetchConversation,
+  markConversationRead,
+} from "../../api/chat-api";
 import type { WidgetStore } from "../../state/widget-state";
 import type { ShowdeskConfig, ConversationSummary } from "../../types";
 
@@ -145,7 +149,12 @@ async function openConversation(
       activeTicketReference: data.reference,
       messages: data.messages,
       isLoading: false,
+      conversations: store.state.conversations.map((c) =>
+        c.id === conv.id ? { ...c, unreadCount: 0 } : c,
+      ),
+      unreadCount: Math.max(0, store.state.unreadCount - conv.unreadCount),
     });
+    void markConversationRead(config, session.sessionId, conv.id);
   } catch {
     store.update({ isLoading: false });
   }

@@ -305,6 +305,12 @@ class Ticket(TimestampedModel):
         related_name="tickets",
         help_text="Widget session that created this ticket (messaging mode).",
     )
+    widget_last_read_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last time the widget end-user viewed this conversation. "
+        "Replies after this timestamp count as unread.",
+    )
 
     # SLA tracking
     sla_policy = models.ForeignKey(

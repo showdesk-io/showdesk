@@ -454,7 +454,18 @@ class WidgetConversationListSerializer(serializers.ModelSerializer):
         return last_msg.isoformat() if last_msg else None
 
     def get_unread_count(self, obj: Ticket) -> int:
-        """Count agent replies since last user message."""
+        """Count agent replies the end-user hasn't seen yet.
+
+        Prefers the explicit `widget_last_read_at` marker (set when the user
+        opens the conversation in the widget). Falls back to "replies after
+        the last user message" so history stays sensible for tickets that
+        pre-date the marker.
+        """
+        if obj.widget_last_read_at:
+            return obj.messages.filter(
+                sender_type="agent",
+                created_at__gt=obj.widget_last_read_at,
+            ).count()
         last_user_msg = (
             obj.messages.filter(sender_type="user")
             .order_by("-created_at")

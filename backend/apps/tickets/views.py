@@ -903,6 +903,48 @@ class TicketViewSet(viewsets.ModelViewSet):
 
     @action(
         detail=False,
+        methods=["post"],
+        permission_classes=[AllowAny],
+        url_path="widget_mark_read",
+    )
+    def widget_mark_read(self, request):  # noqa: ANN001, ANN201
+        """Mark a widget conversation as read up to `now`.
+
+        The end-user has just opened this ticket in the widget, so agent
+        replies up to this moment are no longer unread.
+        """
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+
+        ticket_id = request.data.get("ticket_id")
+        if not ticket_id:
+            return Response(
+                {"error": "ticket_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            ticket = Ticket.objects.get(
+                id=ticket_id,
+                organization=org,
+                widget_session=session,
+            )
+        except (Ticket.DoesNotExist, ValueError):
+            return Response(
+                {"error": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        ticket.widget_last_read_at = timezone.now()
+        ticket.save(update_fields=["widget_last_read_at"])
+        return Response({"ticket_id": str(ticket.id), "status": "ok"})
+
+    @action(
+        detail=False,
         methods=["delete"],
         permission_classes=[AllowAny],
         url_path="widget_message_delete",

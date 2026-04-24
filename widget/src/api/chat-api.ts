@@ -169,6 +169,23 @@ export async function fetchConversation(
   };
 }
 
+/** Mark a conversation as read (resets unread_count on the server). */
+export async function markConversationRead(
+  config: ShowdeskConfig,
+  sessionId: string,
+  ticketId: string,
+): Promise<void> {
+  try {
+    await fetch(`${config.apiUrl}/tickets/widget_mark_read/`, {
+      method: "POST",
+      headers: { ...headers(config, sessionId), "Content-Type": "application/json" },
+      body: JSON.stringify({ ticket_id: ticketId }),
+    });
+  } catch {
+    // Non-critical: if the network blip loses the mark, user can reopen.
+  }
+}
+
 /** Fetch conversation history list. */
 export async function fetchHistory(
   config: ShowdeskConfig,
