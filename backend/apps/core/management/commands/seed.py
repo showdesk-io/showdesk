@@ -14,7 +14,7 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from apps.organizations.models import Organization, Team, User
+from apps.organizations.models import SHOWDESK_INTERNAL_ORG_SLUG, Organization, Team, User
 from apps.tickets.models import SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
 from apps.knowledge_base.models import Article, Category
 
@@ -49,6 +49,9 @@ class Command(BaseCommand):
         tickets = self._create_tickets(org, agents, end_users, tags, team)
         self._create_messages(tickets, agents, end_users)
         self._create_knowledge_base(org, agents[0])
+
+        internal_org = self._create_internal_organization()
+        self._create_internal_staff(internal_org)
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -514,6 +517,42 @@ class Command(BaseCommand):
             )
 
         self.stdout.write(f"  Created {len(messages_data)} messages")
+
+    def _create_internal_organization(self) -> Organization:
+        """Get or create the Showdesk internal organization (dogfooding)."""
+        org, created = Organization.objects.get_or_create(
+            slug=SHOWDESK_INTERNAL_ORG_SLUG,
+            defaults={
+                "name": "Showdesk Internal",
+                "domain": "showdesk.local",
+                "widget_color": "#6366F1",
+                "widget_position": "bottom-right",
+                "widget_greeting": "Found a bug? Got an idea? Tell us.",
+                "video_expiration_days": 90,
+                "video_max_duration_seconds": 600,
+            },
+        )
+        if created:
+            self.stdout.write(f"  Created internal organization: {org.name}")
+        return org
+
+    def _create_internal_staff(self, internal_org: Organization) -> User:
+        """Create a dev staff agent attached to the internal organization."""
+        user, created = User.objects.get_or_create(
+            email="staff@showdesk.local",
+            defaults={
+                "first_name": "Showdesk",
+                "last_name": "Staff",
+                "role": User.Role.AGENT,
+                "organization": internal_org,
+                "is_available": True,
+            },
+        )
+        if created:
+            user.set_unusable_password()
+            user.save()
+            self.stdout.write(f"  Created internal staff: {user.email}")
+        return user
 
     def _create_knowledge_base(self, org: Organization, author: User) -> None:
         """Create demo knowledge base content."""

@@ -13,6 +13,10 @@ from django.utils import timezone
 
 from apps.core.models import TimestampedModel
 
+# Slug of the internal organization used for dogfooding — tickets submitted
+# by Showdesk staff via the in-app widget are scoped here.
+SHOWDESK_INTERNAL_ORG_SLUG = "showdesk-internal"
+
 
 class Organization(TimestampedModel):
     """A company or entity that uses Showdesk to manage support tickets.
