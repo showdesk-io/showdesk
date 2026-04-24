@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-04-09
+> Last updated: 2026-04-24
 
 ---
 
@@ -88,7 +88,7 @@ Everything needed before writing real feature code. **All done.**
 
 - [x] **Auth: stale user after re-login** -- logging out then logging in with a different email shows the previous user's data (cached in Zustand/localStorage). Eventually switches to the correct user. The auth store should be fully cleared on logout and refreshed on login.
 - [x] **Team page: cross-org user visibility** -- non-superuser agents can see users from other organizations and superusers with no organization. The team list API should filter out users without an organization and scope to the current user's org only.
-- [ ] **WebSocket fails on dev.showdesk.io** -- WSS connection to `/ws/tickets/` fails when accessed via Cloudflare proxy. **Root cause: Cloudflare tunnel configuration** -- the frontend code correctly derives WSS URL from `window.location` and Caddy handles WebSocket upgrades natively. Fix requires enabling WebSocket support in Cloudflare Zero Trust tunnel config (not a code issue). Note: `VITE_WS_BASE_URL` env var is defined but unused (can be cleaned up).
+- [~] **WebSocket fails on dev.showdesk.io** -- WSS connection to `/ws/tickets/` fails when accessed via Cloudflare proxy. **Root cause: Cloudflare tunnel configuration** -- the frontend code correctly derives WSS URL from `window.location` and Caddy handles WebSocket upgrades natively. Fix requires enabling WebSocket support in Cloudflare Zero Trust tunnel config (not a code issue). **Mitigated in-app**: ticket detail has 10 s polling fallback (`refetchInterval` on `useTicket`). Note: `VITE_WS_BASE_URL` env var is defined but unused (can be cleaned up).
 - [x] **Widget: screen capture fails** -- screenshot button was disabled ("Coming soon"). Implemented full screenshot capture via getDisplayMedia single-frame, with overlay hiding, thumbnail previews, and backend widget attachment upload endpoint. Also fixed PipCompositor captureStream caching and added video track validation.
 - [x] **Widget: modal overlay blocks recording** -- when recording starts, the overlay and modal are now hidden and the FAB is replaced by a compact recording bar (dot + timer + PiP controls + stop) at the FAB position. User can interact freely with the page. On stop, the modal reappears with the recording preview.
 - [x] **Agent dashboard: no real-time updates** -- WebSocket `refetchQueries()` fix applied. Added 10s polling fallback on ticket detail view (`refetchInterval: 10_000` in `useTicket` hook) so updates work even when WebSocket connection fails (e.g. behind Cloudflare proxy).
@@ -191,6 +191,26 @@ Everything needed before writing real feature code. **All done.**
 
 Transforming the widget from a simple form into a guided, context-rich support experience.
 
+### Widget: Messaging Refactor (Priority 0 -- 2026-04)
+
+Major UX pivot from the multi-step wizard to a WhatsApp-style messaging interface. The wizard (qualification → capture → contact → send) was replaced with a persistent chat where users compose messages freely, attach media, and read agent replies in real time. Implementation: `widget/src/ui/chat/`, `widget/src/ui/history/`, `widget/src/session/session-manager.ts`, `WidgetSession` model + migration `0007_widget_session_and_messaging`.
+
+- [x] Anonymous session system (`WidgetSession`, UUID in localStorage, `X-Widget-Session` header, session-scoped ticket access)
+- [x] Session linked to `external_user_id` when HMAC identity is provided
+- [x] Bottom tabs: Chat / History (News / Ideas reserved for later)
+- [x] Ticket created on first message sent (no empty tickets on widget open)
+- [x] Real-time agent replies via Django Channels WebSocket (widget ↔ backend)
+- [x] Message bubbles with inline image/video/audio/screenshot rendering
+- [x] Audio messages: tap-to-record / tap-to-stop, sent as individual messages
+- [x] Attachment menu (screen recording, camera, screenshot, file upload, audio)
+- [x] Message deletion by user with undo toast, synced to agent dashboard
+- [x] Contact nudge: gentle prompt for anonymous users after first send (non-blocking)
+- [x] Agent-side chat-style ticket detail: message thread, inline media, lightbox, inline title/description edit
+- [x] Internal notes filtered out of widget broadcasts
+- [ ] News tab (product updates / changelog surfaced in widget)
+- [ ] Ideas tab (feature voting / roadmap feedback)
+- [ ] AI topic-change detection to suggest starting a new conversation
+
 ### Widget: Distribution & API URL (Priority 0 -- prerequisite)
 
 The widget runs on external customer websites and must communicate with the correct Showdesk instance. Each instance (cloud, on-premise, dev) serves its own widget version.
@@ -255,16 +275,16 @@ On traditional multi-page sites, page navigation destroys the JS context and any
 - [x] Popup FAB controller: lightweight stop + timer on the main page FAB
 - [x] Graceful fallback: if popup is blocked, falls back to in-page recording (SPA mode)
 - [x] Stop from main widget closes popup and triggers upload
-- [ ] Audio recording MPA mode (mic-only popup variant)
+- [x] Audio recording MPA mode (mic-only popup variant)
 
 ### Widget: Ticket History in Widget (Priority 2)
 
-When user identity is known, show previous tickets and agent replies directly in widget.
+Previous tickets and agent replies are visible directly in the widget via the History tab (session-scoped for anonymous users, external-user-scoped for HMAC-identified users).
 
-- [ ] On widget open: check for open/recent tickets with pending agent replies
+- [x] Ticket list view in widget (History tab, user's own tickets)
+- [x] Ticket detail view in widget (messages thread with inline media)
+- [x] On widget open: session resume fetches conversations + unread counts (`WidgetSessionSerializer.unread_count`)
 - [ ] Notification badge on widget FAB when unread replies exist
-- [ ] Ticket list view in widget (user's own tickets)
-- [ ] Ticket detail view in widget (messages thread, read-only)
 - [ ] Mark replies as read when viewed in widget
 
 ### Widget: Screenshot + Annotation (Priority 2)
@@ -381,6 +401,7 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 - [ ] P2: Global monitoring dashboard
 - [x] P1: Impersonation -- org switcher in sidebar, X-Showdesk-Org header, middleware + get_active_org helper
 - [x] P1: Conditional sidebar -- superusers without an organization only see Admin; superusers attached to an org (or impersonating) see both Admin and the standard nav
+- [x] P1: In-app dogfooding -- `showdesk-internal` org auto-provisioned via migration `0006_showdesk_internal_org`, `/api/v1/widget/identity-hash/` endpoint returns the internal token + HMAC identity, widget mounted in `AppLayout` via `useInternalWidget` so staff file tickets from the UI they are using
 - [ ] P3: Platform-wide announcements
 - [ ] P3: Tenant data migration tools
 
@@ -420,25 +441,27 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 | Area | Progress | What's done | What's left |
 |------|----------|-------------|-------------|
 | Scaffolding | **100%** | All infra, Docker, CI, docs | -- |
-| Backend API | **~99%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type, widget_tickets endpoint, platform admin API, impersonation | Video duration validation |
-| Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation, technical context panel, issue type badge, platform admin page, org switcher, fixed embed snippet, widget preview button | Shortcuts, bulk actions, agent video reply, SLA editor |
-| Widget | **~98%** | Full form, recording, upload, e2e tests, guided wizard, camera PiP (compositing + camera-only + preview), console/network collectors, user identity (API + data-user-*), adaptive steps, API URL auto-detect, /cdn/widget.js distribution, screenshot capture, recording overlay fix, MPA popup recording | Retry, i18n, accessibility |
-| Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright, including wizard flow + identity + context tests) | Video API tests, more frontend tests |
-| Widget UX (Phase 2) | **~85%** | P0: widget distribution/API URL (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). P2: MPA recording persistence (100%). Screenshot capture (basic, no annotation). Bug fixes: recording overlay, captureStream caching. | P2-P3: ticket history, screenshot annotation, multi-attach, session replay, video markers |
+| Backend API | **~99%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type, widget_tickets endpoint, platform admin API, impersonation, **WidgetSession + messaging migration, message-delete notify, internal-org provisioning + identity-hash endpoint** | Video duration validation |
+| Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation, technical context panel, issue type badge, platform admin page, org switcher, fixed embed snippet, widget preview button, **chat-style ticket detail (inline media + lightbox + inline edit), delete-message mutation, 10 s polling fallback, in-app widget dogfooding** | Shortcuts, bulk actions, agent video reply, SLA editor |
+| Widget | **~99%** | Full messaging UI (chat + history tabs, session system, audio messages, message deletion with undo, attachment menu), recording (screen + camera PiP + screenshot), upload, e2e tests, console/network collectors, user identity (API + data-user-*), API URL auto-detect, /cdn/widget.js distribution, MPA popup recording incl. audio, contact nudge | Retry, i18n, accessibility, FAB unread badge |
+| Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright) incl. identity-hash endpoint (7 cases), wizard flow, identity, context tests | Widget messaging tests, video API tests, more frontend tests |
+| Widget UX (Phase 2) | **~90%** | P0: distribution/API URL + **messaging refactor (WhatsApp-style chat, session system, tabs, audio, message deletion)** (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). P2: MPA recording persistence incl. audio (100%), ticket history in widget (core done, unread badge left). Screenshot capture (basic, no annotation). | Screenshot annotation, multi-attach, session replay, video markers, News/Ideas tabs |
 | Admin (org) | **~55%** | Agent/team CRUD, widget config, tags, custom priorities | Branding, canned responses, SLA, audit log |
-| Admin (platform) | **~40%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar | Usage/quotas dashboard, billing, feature flags, monitoring |
+| Admin (platform) | **~45%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar, in-app dogfooding (internal org + identity-hash) | Usage/quotas dashboard, billing, feature flags, monitoring |
 | Post-MVP | **0%** | -- | Everything |
-| AI | **0%** | Models/flags ready | All implementation |
+| AI | **0%** | Models/flags ready | All implementation (auto-categorization, topic-change detection, title/description generation) |
 
 ### Next priorities
 
 1. ~~Widget distribution & API URL~~ -- **Done**
 2. ~~Widget bugs (screenshot, recording overlay, captureStream)~~ -- **Done**
-3. **Phase 2 P2** : ticket history in widget, screenshot annotation overlay
-4. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
-5. Canned responses / macros
-6. Keyboard shortcuts + bulk actions
+3. ~~Widget messaging refactor (chat + history + session + audio)~~ -- **Done**
+4. **Phase 2 P2 remaining**: FAB unread badge + read-receipts, screenshot annotation overlay
+5. **AI layer kickoff**: ticket auto-categorization, AI title/description generation (Phase 5, behind feature flag)
+6. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
+7. Canned responses / macros
+8. Keyboard shortcuts + bulk actions
 
 ---
 
-*This roadmap is a living document. Last updated: 2026-04-09.*
+*This roadmap is a living document. Last updated: 2026-04-24.*
