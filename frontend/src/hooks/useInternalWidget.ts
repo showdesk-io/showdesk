@@ -9,7 +9,6 @@ import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/authStore";
 import { fetchInternalWidgetIdentity } from "@/api/widget";
-import "@/types/showdesk-global";
 
 export function useInternalWidget(): void {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
