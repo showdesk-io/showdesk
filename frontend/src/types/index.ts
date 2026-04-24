@@ -147,6 +147,8 @@ export interface TicketAttachment {
 }
 
 export type MessageType = "reply" | "internal_note";
+export type SenderType = "user" | "agent" | "system";
+export type BodyType = "text" | "audio" | "image" | "video" | "screenshot" | "system";
 
 export interface TicketMessage {
   id: string;
@@ -155,6 +157,9 @@ export interface TicketMessage {
   author_detail: User | null;
   body: string;
   message_type: MessageType;
+  sender_type: SenderType;
+  body_type: BodyType;
+  sender_name: string;
   attachments: TicketAttachment[];
   created_at: string;
   updated_at: string;

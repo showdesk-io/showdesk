@@ -57,7 +57,7 @@ export async function createTicket(data: CreateTicketData): Promise<Ticket> {
 
 export async function updateTicket(
   ticketId: string,
-  data: Partial<CreateTicketData>,
+  data: Record<string, unknown>,
 ): Promise<Ticket> {
   const response = await apiClient.patch<Ticket>(`/tickets/${ticketId}/`, data);
   return response.data;
@@ -104,6 +104,10 @@ export async function reopenTicket(ticketId: string): Promise<Ticket> {
     `/tickets/${ticketId}/reopen/`,
   );
   return response.data;
+}
+
+export async function deleteMessage(messageId: string): Promise<void> {
+  await apiClient.delete(`/messages/${messageId}/`);
 }
 
 // ── Filtered Stats ───────────────────────────────────────────────────

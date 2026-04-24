@@ -8,6 +8,7 @@ import {
   closeTicket,
   createMessage,
   createTicket,
+  deleteMessage,
   fetchTicket,
   fetchTickets,
   reopenTicket,
@@ -29,6 +30,7 @@ export function useTicket(id: string) {
     queryKey: ["ticket", id],
     queryFn: () => fetchTicket(id),
     enabled: !!id,
+    refetchInterval: 10_000,
   });
 }
 
@@ -53,9 +55,8 @@ export function useUpdateTicket() {
       ...data
     }: {
       ticketId: string;
-      priority?: string;
-      assigned_agent?: string | null;
-    }) => updateTicket(ticketId, data),
+      [key: string]: unknown;
+    }) => updateTicket(ticketId, data as Record<string, unknown>),
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({
         queryKey: ["ticket", variables.ticketId],
@@ -132,6 +133,18 @@ export function useReopenTicket() {
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
       void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
+    },
+  });
+}
+
+export function useDeleteMessage(ticketId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: deleteMessage,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
     },
   });
 }
