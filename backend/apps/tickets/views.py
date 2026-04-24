@@ -990,6 +990,16 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         # Email notification (async via Celery)
         send_ticket_reply_email.delay(str(message.id))
 
+    def perform_destroy(self, instance) -> None:  # noqa: ANN001
+        """Delete message and send WebSocket notification."""
+        ticket = instance.ticket
+        message_id = str(instance.id)
+        instance.delete()
+        try:
+            notify_message_deleted(ticket, message_id)
+        except Exception:
+            logger.exception("WebSocket notification failed for deleted message %s", message_id)
+
 
 class TicketAttachmentViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ticket attachments."""

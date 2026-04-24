@@ -71,9 +71,9 @@ def notify_new_message(message) -> None:  # noqa: ANN001
         },
     )
 
-    # Broadcast to widget session for real-time chat
+    # Broadcast to widget session for real-time chat (never send internal notes)
     widget_session_id = message.ticket.widget_session_id
-    if widget_session_id:
+    if widget_session_id and message.message_type != "internal_note":
         async_to_sync(channel_layer.group_send)(
             f"widget_session_{widget_session_id}",
             {
