@@ -91,7 +91,7 @@ Everything needed before writing real feature code. **All done.**
 - [ ] **WebSocket fails on dev.showdesk.io** -- WSS connection to `/ws/tickets/` fails when accessed via Cloudflare proxy. **Root cause: Cloudflare tunnel configuration** -- the frontend code correctly derives WSS URL from `window.location` and Caddy handles WebSocket upgrades natively. Fix requires enabling WebSocket support in Cloudflare Zero Trust tunnel config (not a code issue). Note: `VITE_WS_BASE_URL` env var is defined but unused (can be cleaned up).
 - [x] **Widget: screen capture fails** -- screenshot button was disabled ("Coming soon"). Implemented full screenshot capture via getDisplayMedia single-frame, with overlay hiding, thumbnail previews, and backend widget attachment upload endpoint. Also fixed PipCompositor captureStream caching and added video track validation.
 - [x] **Widget: modal overlay blocks recording** -- when recording starts, the overlay and modal are now hidden and the FAB is replaced by a compact recording bar (dot + timer + PiP controls + stop) at the FAB position. User can interact freely with the page. On stop, the modal reappears with the recording preview.
-- [ ] **Agent dashboard: no real-time updates** -- when viewing a ticket detail, new messages (from widget users) and message deletions do not appear until the page is manually refreshed or the agent navigates away and back. **Root cause:** the WebSocket hook used `invalidateQueries()` which only marks the React Query cache as stale, but with `staleTime: 60s` and `refetchOnWindowFocus: false` (in `main.tsx`), no refetch is triggered while the component is mounted. **Partial fix applied:** switched to `refetchQueries()` in `useWebSocket.ts` (commit `97bd6a6`). **To verify:** confirm WebSocket connection is established, events are received, and `refetchQueries` triggers visible re-renders. If still broken, check: (1) WebSocket not connecting (auth/infra issue), (2) backend not sending notifications (missing `notify_*` calls), (3) React Query `refetchQueries` still not triggering for active observers.
+- [x] **Agent dashboard: no real-time updates** -- WebSocket `refetchQueries()` fix applied. Added 10s polling fallback on ticket detail view (`refetchInterval: 10_000` in `useTicket` hook) so updates work even when WebSocket connection fails (e.g. behind Cloudflare proxy).
 
 ---
 
@@ -405,6 +405,7 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 
 - [ ] Whisper transcription (self-hosted or managed API)
 - [ ] AI ticket summary generation
+- [ ] AI-generated ticket title & description from conversation context (auto-suggest when AI API is configured)
 - [ ] AI triage / auto-categorization
 - [ ] Smart video redaction (PII detection)
 - [ ] Sentiment analysis
