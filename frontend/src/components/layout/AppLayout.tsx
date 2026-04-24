@@ -13,6 +13,7 @@ import { useAuthStore } from "@/store/authStore";
 import { useOrgStore } from "@/store/orgStore";
 import { useCurrentUser } from "@/hooks/useAuth";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useInternalWidget } from "@/hooks/useInternalWidget";
 import { fetchPlatformOrganizations } from "@/api/admin";
 
 const navItems = [
@@ -56,6 +57,9 @@ export function AppLayout() {
 
   // Maintain WebSocket connection for real-time updates
   useWebSocket();
+
+  // Mount the in-app Showdesk widget (dogfooding — feedback to showdesk-internal org)
+  useInternalWidget();
 
   const isSuperuser = user?.is_superuser ?? false;
   const hasOrg = !!(user?.organization || activeOrgId);
