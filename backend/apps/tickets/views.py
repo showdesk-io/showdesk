@@ -1040,7 +1040,9 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         try:
             notify_message_deleted(ticket, message_id)
         except Exception:
-            logger.exception("WebSocket notification failed for deleted message %s", message_id)
+            logger.exception(
+                "WebSocket notification failed for deleted message %s", message_id
+            )
 
 
 class TicketAttachmentViewSet(viewsets.ModelViewSet):

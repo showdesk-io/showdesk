@@ -4,15 +4,18 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('tickets', '0007_widget_session_and_messaging'),
+        ("tickets", "0007_widget_session_and_messaging"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='ticket',
-            name='widget_last_read_at',
-            field=models.DateTimeField(blank=True, help_text='Last time the widget end-user viewed this conversation. Replies after this timestamp count as unread.', null=True),
+            model_name="ticket",
+            name="widget_last_read_at",
+            field=models.DateTimeField(
+                blank=True,
+                help_text="Last time the widget end-user viewed this conversation. Replies after this timestamp count as unread.",
+                null=True,
+            ),
         ),
     ]

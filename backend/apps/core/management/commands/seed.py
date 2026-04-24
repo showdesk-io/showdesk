@@ -14,7 +14,12 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from apps.organizations.models import SHOWDESK_INTERNAL_ORG_SLUG, Organization, Team, User
+from apps.organizations.models import (
+    SHOWDESK_INTERNAL_ORG_SLUG,
+    Organization,
+    Team,
+    User,
+)
 from apps.tickets.models import SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
 from apps.knowledge_base.models import Article, Category
 
