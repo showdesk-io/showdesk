@@ -5,6 +5,7 @@ from rest_framework import serializers
 from apps.organizations.serializers import UserSerializer
 
 from .models import (
+    CannedResponse,
     PriorityLevel,
     SavedView,
     SLAPolicy,
@@ -347,6 +348,55 @@ class SavedViewSerializer(serializers.ModelSerializer):
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():
             raise serializers.ValidationError("A view with this name already exists.")
+        return value
+
+
+class CannedResponseSerializer(serializers.ModelSerializer):
+    """Serializer for reusable reply templates."""
+
+    created_by_detail = UserSerializer(source="created_by", read_only=True)
+
+    class Meta:
+        model = CannedResponse
+        fields = [
+            "id",
+            "organization",
+            "created_by",
+            "created_by_detail",
+            "name",
+            "shortcut",
+            "body",
+            "is_shared",
+            "position",
+            "usage_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "organization",
+            "created_by",
+            "usage_count",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate_name(self, value):  # noqa: ANN001, ANN201
+        request = self.context.get("request")
+        if not request:
+            return value
+        from apps.core.permissions import get_active_org
+
+        org = get_active_org(request)
+        if not org:
+            return value
+        qs = CannedResponse.objects.filter(organization=org, name=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                "A canned response with this name already exists.",
+            )
         return value
 
 

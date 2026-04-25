@@ -2,7 +2,7 @@
  * Settings page with tabs: Agents, Widget, Organization.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { clsx } from "clsx";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -23,10 +23,25 @@ import {
   useUpdatePriority,
   useDeletePriority,
 } from "@/hooks/usePriorities";
+import {
+  useCannedResponses,
+  useCreateCannedResponse,
+  useUpdateCannedResponse,
+  useDeleteCannedResponse,
+} from "@/hooks/useCannedResponses";
 import type { PriorityLevel } from "@/api/priorities";
+import type { CannedResponse } from "@/api/cannedResponses";
+import { AVAILABLE_VARIABLES } from "@/lib/cannedResponseVars";
 import type { Organization, Tag, User, UserRole } from "@/types";
 
-const tabs = ["Agents", "Tags", "Priorities", "Widget", "Organization"] as const;
+const tabs = [
+  "Agents",
+  "Tags",
+  "Priorities",
+  "Canned Responses",
+  "Widget",
+  "Organization",
+] as const;
 type Tab = (typeof tabs)[number];
 
 export function SettingsPage() {
@@ -61,6 +76,9 @@ export function SettingsPage() {
         {activeTab === "Agents" && <AgentsTab isAdmin={isAdmin} />}
         {activeTab === "Tags" && <TagsTab isAdmin={isAdmin} />}
         {activeTab === "Priorities" && <PrioritiesTab isAdmin={isAdmin} />}
+        {activeTab === "Canned Responses" && (
+          <CannedResponsesTab currentUser={currentUser} />
+        )}
         {activeTab === "Widget" && <WidgetTab isAdmin={isAdmin} />}
         {activeTab === "Organization" && (
           <OrganizationTab isAdmin={isAdmin} />
@@ -795,6 +813,322 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Canned Responses Tab ──────────────────────────────────────────────
+
+function CannedResponsesTab({ currentUser }: { currentUser: User | undefined }) {
+  const { data: responses, isLoading } = useCannedResponses();
+  const createResponse = useCreateCannedResponse();
+  const updateResponse = useUpdateCannedResponse();
+  const deleteResponse = useDeleteCannedResponse();
+
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<CannedResponse | null>(null);
+  const [name, setName] = useState("");
+  const [shortcut, setShortcut] = useState("");
+  const [body, setBody] = useState("");
+  const [isShared, setIsShared] = useState(false);
+  const [search, setSearch] = useState("");
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const resetForm = () => {
+    setShowForm(false);
+    setEditing(null);
+    setName("");
+    setShortcut("");
+    setBody("");
+    setIsShared(false);
+  };
+
+  const handleEdit = (cr: CannedResponse) => {
+    setEditing(cr);
+    setName(cr.name);
+    setShortcut(cr.shortcut);
+    setBody(cr.body);
+    setIsShared(cr.is_shared);
+    setShowForm(true);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !body.trim()) return;
+    const payload = {
+      name: name.trim(),
+      shortcut: shortcut.trim(),
+      body,
+      is_shared: isShared,
+    };
+    if (editing) {
+      updateResponse.mutate(
+        { id: editing.id, ...payload },
+        {
+          onSuccess: () => {
+            toast.success("Template updated.");
+            resetForm();
+          },
+          onError: () => toast.error("Failed to update template."),
+        },
+      );
+    } else {
+      createResponse.mutate(payload, {
+        onSuccess: () => {
+          toast.success("Template created.");
+          resetForm();
+        },
+        onError: () => toast.error("Failed to create template."),
+      });
+    }
+  };
+
+  const handleDelete = (cr: CannedResponse) => {
+    deleteResponse.mutate(cr.id, {
+      onSuccess: () => toast.success(`"${cr.name}" deleted.`),
+      onError: () => toast.error("Failed to delete template."),
+    });
+  };
+
+  const insertVariable = (key: string) => {
+    const textarea = bodyRef.current;
+    if (!textarea) {
+      setBody((b) => `${b}{{${key}}}`);
+      return;
+    }
+    const start = textarea.selectionStart ?? body.length;
+    const end = textarea.selectionEnd ?? body.length;
+    const next = `${body.slice(0, start)}{{${key}}}${body.slice(end)}`;
+    setBody(next);
+    requestAnimationFrame(() => {
+      const pos = start + `{{${key}}}`.length;
+      textarea.focus();
+      textarea.setSelectionRange(pos, pos);
+    });
+  };
+
+  const visible = (responses ?? []).filter((cr) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (
+      cr.name.toLowerCase().includes(q) ||
+      cr.shortcut.toLowerCase().includes(q) ||
+      cr.body.toLowerCase().includes(q)
+    );
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-12">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-3xl">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-gray-900">
+          Canned Responses ({responses?.length ?? 0})
+        </h2>
+        <div className="flex items-center gap-2">
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search…"
+            className="w-48 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+          />
+          <button
+            onClick={() => {
+              resetForm();
+              setShowForm(true);
+            }}
+            className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600"
+          >
+            + New Template
+          </button>
+        </div>
+      </div>
+
+      <p className="mb-4 text-xs text-gray-500">
+        Use <code className="rounded bg-gray-100 px-1">{"{{variable}}"}</code>{" "}
+        placeholders in the body — they will be expanded when the template is
+        inserted into a reply. Shared templates are visible to all agents.
+      </p>
+
+      {showForm && (
+        <form
+          onSubmit={handleSubmit}
+          className="mb-6 rounded-xl border border-gray-200 bg-white p-4"
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600">
+                Name *
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+                placeholder="e.g. Greeting, Resolved, Need more info..."
+                required
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600">
+                Shortcut
+              </label>
+              <input
+                type="text"
+                value={shortcut}
+                onChange={(e) =>
+                  setShortcut(
+                    e.target.value
+                      .toLowerCase()
+                      .replace(/[^a-z0-9_-]/g, ""),
+                  )
+                }
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+                placeholder="e.g. hello"
+              />
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <label className="mb-1 block text-xs font-medium text-gray-600">
+              Body *
+            </label>
+            <textarea
+              ref={bodyRef}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={6}
+              className="w-full resize-y rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:outline-none"
+              placeholder={"Hi {{requester_name}}, thanks for reaching out!"}
+              required
+            />
+            <div className="mt-2 flex flex-wrap gap-1">
+              {AVAILABLE_VARIABLES.map((v) => (
+                <button
+                  key={v.key}
+                  type="button"
+                  onClick={() => insertVariable(v.key)}
+                  title={v.description}
+                  className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-gray-700 hover:border-primary-300 hover:bg-primary-50"
+                >
+                  {`{{${v.key}}}`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between">
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={isShared}
+                onChange={(e) => setIsShared(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300"
+              />
+              Share with the whole organization
+            </label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={resetForm}
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={
+                  createResponse.isPending ||
+                  updateResponse.isPending ||
+                  !name.trim() ||
+                  !body.trim()
+                }
+                className="rounded-lg bg-primary-500 px-4 py-1.5 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+              >
+                {editing ? "Update" : "Create"}
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
+
+      {visible.length === 0 ? (
+        <div className="rounded-xl border border-gray-200 bg-white px-6 py-12 text-center text-gray-500">
+          {search
+            ? "No templates match your search."
+            : "No templates yet. Create your first reusable reply."}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-gray-200 bg-white">
+          <div className="divide-y divide-gray-100">
+            {visible.map((cr) => {
+              const canEdit = cr.created_by === currentUser?.id;
+              return (
+                <div key={cr.id} className="flex items-start gap-4 px-6 py-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-gray-900">
+                        {cr.name}
+                      </span>
+                      {cr.shortcut && (
+                        <span className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-600">
+                          /{cr.shortcut}
+                        </span>
+                      )}
+                      {cr.is_shared ? (
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
+                          Shared
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-gray-50 px-2 py-0.5 text-xs text-gray-500">
+                          Personal
+                        </span>
+                      )}
+                      {cr.usage_count > 0 && (
+                        <span className="text-xs text-gray-400">
+                          {cr.usage_count} use{cr.usage_count > 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-sm text-gray-600">
+                      {cr.body}
+                    </p>
+                  </div>
+                  {canEdit ? (
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        onClick={() => handleEdit(cr)}
+                        className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDelete(cr)}
+                        disabled={deleteResponse.isPending}
+                        className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 hover:text-red-700"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="shrink-0 text-xs text-gray-400">
+                      {cr.created_by_detail?.first_name || "Shared"}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

@@ -12,6 +12,7 @@ from apps.organizations.views import (
     UserViewSet,
 )
 from apps.tickets.views import (
+    CannedResponseViewSet,
     PriorityLevelViewSet,
     SavedViewViewSet,
     TagViewSet,
@@ -39,6 +40,11 @@ router.register(r"attachments", TicketAttachmentViewSet, basename="attachment")
 router.register(r"tags", TagViewSet, basename="tag")
 router.register(r"priorities", PriorityLevelViewSet, basename="priority")
 router.register(r"saved-views", SavedViewViewSet, basename="saved-view")
+router.register(
+    r"canned-responses",
+    CannedResponseViewSet,
+    basename="canned-response",
+)
 
 # Videos
 router.register(r"videos", VideoRecordingViewSet, basename="video")

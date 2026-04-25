@@ -26,6 +26,7 @@ from apps.notifications.signals import (
 from apps.organizations.models import Organization
 
 from .models import (
+    CannedResponse,
     PriorityLevel,
     SavedView,
     Tag,
@@ -35,6 +36,7 @@ from .models import (
     WidgetSession,
 )
 from .serializers import (
+    CannedResponseSerializer,
     PriorityLevelSerializer,
     SavedViewSerializer,
     TagSerializer,
@@ -1143,3 +1145,66 @@ class SavedViewViewSet(viewsets.ModelViewSet):
 
             raise PermissionDenied("You can only delete your own saved views.")
         instance.delete()
+
+
+class CannedResponseViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing reusable reply templates.
+
+    Returns templates owned by the current user plus shared templates from
+    the same organization. Only the creator can update or delete a template.
+    """
+
+    serializer_class = CannedResponseSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ["name", "shortcut", "body"]
+
+    def get_queryset(self):  # noqa: ANN201
+        """Return personal templates + shared templates from the active org."""
+        user = self.request.user
+        org = get_active_org(self.request)
+        if org:
+            return CannedResponse.objects.filter(
+                organization=org,
+            ).filter(
+                models.Q(created_by=user) | models.Q(is_shared=True),
+            )
+        return CannedResponse.objects.none()
+
+    def perform_create(self, serializer) -> None:  # noqa: ANN001
+        """Set organization and creator."""
+        serializer.save(
+            organization=get_active_org(self.request),
+            created_by=self.request.user,
+        )
+
+    def perform_update(self, serializer) -> None:  # noqa: ANN001
+        """Only the creator can update a canned response."""
+        if serializer.instance.created_by != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied(
+                "You can only edit your own canned responses.",
+            )
+        serializer.save()
+
+    def perform_destroy(self, instance) -> None:  # noqa: ANN001
+        """Only the creator can delete a canned response."""
+        if instance.created_by != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied(
+                "You can only delete your own canned responses.",
+            )
+        instance.delete()
+
+    @action(detail=True, methods=["post"], url_path="record-use")
+    def record_use(self, request, pk=None):  # noqa: ANN001, ANN201, ARG002
+        """Increment usage_count when a template is inserted."""
+        instance = self.get_object()
+        CannedResponse.objects.filter(pk=instance.pk).update(
+            usage_count=models.F("usage_count") + 1,
+        )
+        instance.refresh_from_db()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)

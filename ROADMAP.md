@@ -284,8 +284,8 @@ Previous tickets and agent replies are visible directly in the widget via the Hi
 - [x] Ticket list view in widget (History tab, user's own tickets)
 - [x] Ticket detail view in widget (messages thread with inline media)
 - [x] On widget open: session resume fetches conversations + unread counts (`WidgetSessionSerializer.unread_count`)
-- [ ] Notification badge on widget FAB when unread replies exist
-- [ ] Mark replies as read when viewed in widget
+- [x] Notification badge on widget FAB when unread replies exist (`updateBadge()` in `widget/src/ui/button.ts`, live-updated over WebSocket)
+- [x] Mark replies as read when viewed in widget (`widget_mark_read` endpoint + `Ticket.widget_last_read_at`, called on resume / history click / live message)
 
 ### Widget: Screenshot + Annotation (Priority 2)
 
@@ -383,7 +383,7 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 - [ ] P1: Custom domain for widget/portal
 - [x] P1: Tags & categories management
 - [x] P1: Custom priority management (CRUD, custom colors, per-org)
-- [ ] P1: Canned responses / macros
+- [x] P1: Canned responses / macros (CRUD in Settings, slash-trigger picker in reply composer, `{{variable}}` substitution, personal/shared scope, usage counter)
 - [ ] P2: SLA policy editor
 - [ ] P2: Notification preferences (per-agent, webhooks)
 - [ ] P2: Audit log
@@ -443,10 +443,10 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 | Scaffolding | **100%** | All infra, Docker, CI, docs | -- |
 | Backend API | **~99%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type, widget_tickets endpoint, platform admin API, impersonation, **WidgetSession + messaging migration, message-delete notify, internal-org provisioning + identity-hash endpoint** | Video duration validation |
 | Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation, technical context panel, issue type badge, platform admin page, org switcher, fixed embed snippet, widget preview button, **chat-style ticket detail (inline media + lightbox + inline edit), delete-message mutation, 10 s polling fallback, in-app widget dogfooding** | Shortcuts, bulk actions, agent video reply, SLA editor |
-| Widget | **~99%** | Full messaging UI (chat + history tabs, session system, audio messages, message deletion with undo, attachment menu), recording (screen + camera PiP + screenshot), upload, e2e tests, console/network collectors, user identity (API + data-user-*), API URL auto-detect, /cdn/widget.js distribution, MPA popup recording incl. audio, contact nudge | Retry, i18n, accessibility, FAB unread badge |
+| Widget | **~99%** | Full messaging UI (chat + history tabs, session system, audio messages, message deletion with undo, attachment menu), recording (screen + camera PiP + screenshot), upload, e2e tests, console/network collectors, user identity (API + data-user-*), API URL auto-detect, /cdn/widget.js distribution, MPA popup recording incl. audio, contact nudge, FAB unread badge + mark-as-read | Retry, i18n, accessibility |
 | Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright) incl. identity-hash endpoint (7 cases), wizard flow, identity, context tests | Widget messaging tests, video API tests, more frontend tests |
-| Widget UX (Phase 2) | **~90%** | P0: distribution/API URL + **messaging refactor (WhatsApp-style chat, session system, tabs, audio, message deletion)** (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). P2: MPA recording persistence incl. audio (100%), ticket history in widget (core done, unread badge left). Screenshot capture (basic, no annotation). | Screenshot annotation, multi-attach, session replay, video markers, News/Ideas tabs |
-| Admin (org) | **~55%** | Agent/team CRUD, widget config, tags, custom priorities | Branding, canned responses, SLA, audit log |
+| Widget UX (Phase 2) | **~92%** | P0: distribution/API URL + **messaging refactor (WhatsApp-style chat, session system, tabs, audio, message deletion)** (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). P2: MPA recording persistence incl. audio (100%), ticket history in widget incl. FAB unread badge + mark-as-read (100%). Screenshot capture (basic, no annotation). | Screenshot annotation, multi-attach, session replay, video markers, News/Ideas tabs |
+| Admin (org) | **~60%** | Agent/team CRUD, widget config, tags, custom priorities, canned responses (templates + slash picker + variables) | Branding, SLA, audit log |
 | Admin (platform) | **~45%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar, in-app dogfooding (internal org + identity-hash) | Usage/quotas dashboard, billing, feature flags, monitoring |
 | Post-MVP | **0%** | -- | Everything |
 | AI | **0%** | Models/flags ready | All implementation (auto-categorization, topic-change detection, title/description generation) |
@@ -456,11 +456,12 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 1. ~~Widget distribution & API URL~~ -- **Done**
 2. ~~Widget bugs (screenshot, recording overlay, captureStream)~~ -- **Done**
 3. ~~Widget messaging refactor (chat + history + session + audio)~~ -- **Done**
-4. **Phase 2 P2 remaining**: FAB unread badge + read-receipts, screenshot annotation overlay
-5. **AI layer kickoff**: ticket auto-categorization, AI title/description generation (Phase 5, behind feature flag)
-6. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
-7. Canned responses / macros
-8. Keyboard shortcuts + bulk actions
+4. ~~FAB unread badge + read-receipts~~ -- **Done**
+5. **Phase 2 P2 remaining**: screenshot annotation overlay, multi-attachments
+6. **AI layer kickoff**: ticket auto-categorization, AI title/description generation (Phase 5, behind feature flag)
+7. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
+8. ~~Canned responses / macros~~ -- **Done**
+9. Keyboard shortcuts + bulk actions
 
 ---
 

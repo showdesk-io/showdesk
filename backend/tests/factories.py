@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from apps.organizations.models import Organization, Team, User
 from apps.tickets.models import (
+    CannedResponse,
     PriorityLevel,
     SavedView,
     SLAPolicy,
@@ -112,6 +113,21 @@ class SavedViewFactory(factory.django.DjangoModelFactory):
     created_by = factory.SubFactory(UserFactory)
     name = factory.Sequence(lambda n: f"View {n}")
     filters = factory.LazyFunction(lambda: {"status": "open"})
+    is_shared = False
+    position = factory.Sequence(lambda n: n)
+
+
+class CannedResponseFactory(factory.django.DjangoModelFactory):
+    """Factory for creating CannedResponse instances."""
+
+    class Meta:
+        model = CannedResponse
+
+    organization = factory.SubFactory(OrganizationFactory)
+    created_by = factory.SubFactory(UserFactory)
+    name = factory.Sequence(lambda n: f"Template {n}")
+    shortcut = factory.Sequence(lambda n: f"tpl{n}")
+    body = factory.Faker("paragraph")
     is_shared = False
     position = factory.Sequence(lambda n: n)
 

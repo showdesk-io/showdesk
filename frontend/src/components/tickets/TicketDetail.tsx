@@ -27,6 +27,11 @@ import {
   useDeleteMessage,
 } from "@/hooks/useTickets";
 import { useTags, useCreateTag, useSetTicketTags } from "@/hooks/useTags";
+import { useRecordCannedResponseUse } from "@/hooks/useCannedResponses";
+import { useCurrentUser } from "@/hooks/useAuth";
+import { applyTemplateVariables } from "@/lib/cannedResponseVars";
+import type { CannedResponse } from "@/api/cannedResponses";
+import { CannedResponsePicker } from "./CannedResponsePicker";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -61,9 +66,43 @@ export function TicketDetail({
   const threadRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const descInputRef = useRef<HTMLTextAreaElement>(null);
+  const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
   const queryClient = useQueryClient();
   const deleteMutation = useDeleteMessage(ticket.id);
   const updateTicketMutation = useUpdateTicket();
+  const recordUseMutation = useRecordCannedResponseUse();
+  const { data: currentUser } = useCurrentUser();
+
+  const insertCannedResponse = (cr: CannedResponse) => {
+    const expanded = applyTemplateVariables(cr.body, {
+      ticket,
+      agent: currentUser ?? null,
+    });
+    const textarea = replyTextareaRef.current;
+    if (!textarea) {
+      setMessageBody((prev) => (prev ? `${prev}\n${expanded}` : expanded));
+    } else {
+      const start = textarea.selectionStart ?? messageBody.length;
+      const end = textarea.selectionEnd ?? messageBody.length;
+      // If a `/query` token preceded the cursor, replace it with the template.
+      const before = messageBody.slice(0, start);
+      const slashMatch = before.match(/\/[\w-]*$/);
+      const replaceFrom = slashMatch ? start - slashMatch[0].length : start;
+      const next =
+        messageBody.slice(0, replaceFrom) + expanded + messageBody.slice(end);
+      setMessageBody(next);
+      requestAnimationFrame(() => {
+        const pos = replaceFrom + expanded.length;
+        textarea.focus();
+        textarea.setSelectionRange(pos, pos);
+      });
+    }
+    setShowPicker(false);
+    setPickerQuery("");
+    recordUseMutation.mutate(cr.id);
+  };
 
   // Sync drafts when ticket data changes externally
   useEffect(() => { setTitleDraft(ticket.title); }, [ticket.title]);
@@ -286,23 +325,51 @@ export function TicketDetail({
               Internal Note
             </button>
           </div>
-          <textarea
-            value={messageBody}
-            onChange={(e) => setMessageBody(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                e.preventDefault();
-                void handleSubmit(e);
+          <div className="relative">
+            <CannedResponsePicker
+              open={showPicker}
+              initialQuery={pickerQuery}
+              onSelect={insertCannedResponse}
+              onClose={() => {
+                setShowPicker(false);
+                setPickerQuery("");
+              }}
+            />
+            <textarea
+              ref={replyTextareaRef}
+              value={messageBody}
+              onChange={(e) => {
+                const next = e.target.value;
+                setMessageBody(next);
+                // Auto-open picker when the textarea contains only "/query"
+                const trimmed = next.trimStart();
+                if (
+                  !isInternalNote &&
+                  trimmed.startsWith("/") &&
+                  !trimmed.includes("\n") &&
+                  trimmed.length <= 30
+                ) {
+                  setPickerQuery(trimmed.slice(1));
+                  setShowPicker(true);
+                } else if (showPicker && !trimmed.startsWith("/")) {
+                  setShowPicker(false);
+                }
+              }}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  void handleSubmit(e);
+                }
+              }}
+              placeholder={
+                isInternalNote
+                  ? "Write an internal note..."
+                  : "Write a reply, or type / to insert a template..."
               }
-            }}
-            placeholder={
-              isInternalNote
-                ? "Write an internal note..."
-                : "Write a reply..."
-            }
-            className="w-full resize-none rounded-lg border border-gray-300 px-4 py-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-            rows={3}
-          />
+              className="w-full resize-none rounded-lg border border-gray-300 px-4 py-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              rows={3}
+            />
+          </div>
 
           {/* Attached files preview */}
           {attachedFiles.length > 0 && (
@@ -330,7 +397,7 @@ export function TicketDetail({
           )}
 
           <div className="mt-2 flex items-center justify-between">
-            <div>
+            <div className="flex items-center gap-2">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -347,6 +414,20 @@ export function TicketDetail({
                 <PaperclipIcon />
                 Attach
               </button>
+              {!isInternalNote && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPickerQuery("");
+                    setShowPicker((s) => !s);
+                  }}
+                  className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+                  title="Insert a canned response (or type /)"
+                >
+                  <span aria-hidden>⚡</span>
+                  Templates
+                </button>
+              )}
             </div>
             <button
               type="submit"

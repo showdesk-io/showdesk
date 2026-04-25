@@ -466,6 +466,48 @@ class SavedView(TimestampedModel):
         return f"{self.name} ({scope}, {self.organization})"
 
 
+class CannedResponse(TimestampedModel):
+    """Reusable reply template available to agents in the reply composer.
+
+    Templates can be personal (visible only to the creator) or shared with
+    the entire organization. The body supports `{{variable}}` placeholders
+    (e.g. ``{{requester_name}}``) substituted client-side at insertion time.
+    """
+
+    organization = models.ForeignKey(
+        "organizations.Organization",
+        on_delete=models.CASCADE,
+        related_name="canned_responses",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="canned_responses",
+    )
+    name = models.CharField(max_length=100)
+    shortcut = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        help_text="Short slash command (e.g. 'merci') for quick filtering.",
+    )
+    body = models.TextField()
+    is_shared = models.BooleanField(
+        default=False,
+        help_text="If true, visible to all agents in the organization.",
+    )
+    position = models.PositiveIntegerField(default=0)
+    usage_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["position", "name"]
+        unique_together = [("organization", "name")]
+
+    def __str__(self) -> str:
+        scope = "shared" if self.is_shared else "personal"
+        return f"{self.name} ({scope}, {self.organization})"
+
+
 class TicketAttachment(TimestampedModel):
     """A file attached to a ticket or message.
 
