@@ -420,6 +420,10 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 - [ ] SSO / SAML / OAuth
 - [ ] Webhook integrations (Slack, Discord)
 
+### Developer Experience / Tech Debt
+
+- [ ] Migrate backend dependencies from `requirements.txt` to `pyproject.toml` (PEP 621). Pick a tool (`uv`, Poetry, or `pip-tools`), generate a lockfile for reproducible builds, separate prod / dev / test dependency groups, update `backend/Dockerfile` to install from the new manifest, and adapt CI. Goal: deterministic builds + cleaner dev/prod split (e.g. `watchdog` only in dev).
+
 ---
 
 ## Phase 5 -- AI Layer (Cloud-only, behind feature flags)

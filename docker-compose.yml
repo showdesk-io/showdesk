@@ -126,7 +126,16 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     entrypoint: []
-    command: celery -A config worker -l info -Q celery,default,video_processing
+    # Wrapped with watchmedo (watchdog) so the worker auto-restarts on *.py changes.
+    # --pool=solo keeps signals simple in dev; do not port to prod.
+    command: >
+      watchmedo auto-restart
+      --directory=/app
+      --pattern=*.py
+      --recursive
+      --signal SIGTERM
+      --
+      celery -A config worker -l info -Q celery,default,video_processing --pool=solo
     volumes:
       - ./backend:/app
     env_file:
