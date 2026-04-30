@@ -11,7 +11,8 @@ import logging
 
 from celery import shared_task
 from django.conf import settings
-from django.core.mail import send_mail
+
+from apps.core.email import send_branded_email
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,26 @@ SITE_URL = getattr(settings, "SITE_URL", "http://localhost")
 def _ticket_url(ticket) -> str:  # noqa: ANN001
     """Build the frontend URL for a ticket."""
     return f"{SITE_URL}/tickets/{ticket.id}"
+
+
+def _priority_label(ticket) -> str:  # noqa: ANN001
+    """Resolve the human-readable priority name.
+
+    Custom per-org priorities live in ``PriorityLevel``; built-in slugs map
+    to ``Ticket.Priority`` labels; unknown slugs fall back to title case.
+    """
+    from apps.tickets.models import PriorityLevel, Ticket
+
+    slug = ticket.priority or ""
+    level = PriorityLevel.objects.filter(
+        organization=ticket.organization_id, slug=slug
+    ).first()
+    if level:
+        return level.name
+    try:
+        return Ticket.Priority(slug).label
+    except ValueError:
+        return slug.replace("_", " ").title() or "—"
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -41,7 +62,6 @@ def send_ticket_created_email(self, ticket_id: str) -> None:  # noqa: ANN001
         logger.warning("Ticket %s not found, skipping email.", ticket_id)
         return
 
-    # Determine recipients
     if ticket.assigned_agent and ticket.assigned_agent.email:
         recipients = [ticket.assigned_agent.email]
     else:
@@ -57,25 +77,34 @@ def send_ticket_created_email(self, ticket_id: str) -> None:  # noqa: ANN001
         logger.info("No agents to notify for ticket %s.", ticket.reference)
         return
 
-    subject = f"[{ticket.reference}] New ticket: {ticket.title}"
-    body = (
-        f"A new ticket has been submitted.\n\n"
-        f"Reference: {ticket.reference}\n"
-        f"Title: {ticket.title}\n"
-        f"Priority: {ticket.get_priority_display()}\n"
-        f"Source: {ticket.get_source_display()}\n"
-        f"Requester: {ticket.requester_name} ({ticket.requester_email})\n\n"
-        f"Description:\n{ticket.description[:500]}\n\n"
-        f"View ticket: {_ticket_url(ticket)}\n"
-    )
+    description = (ticket.description or "").strip()
+    if len(description) > 500:
+        description = description[:500].rstrip() + "…"
+
+    priority_label = _priority_label(ticket)
+    meta_rows = [
+        {"label": "Reference", "value": ticket.reference},
+        {"label": "Priority", "value": priority_label},
+        {"label": "Source", "value": ticket.get_source_display()},
+        {
+            "label": "Requester",
+            "value": f"{ticket.requester_name} ({ticket.requester_email})",
+        },
+    ]
 
     try:
-        send_mail(
-            subject=subject,
-            message=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=recipients,
-            fail_silently=False,
+        send_branded_email(
+            template="ticket_created",
+            subject=f"[{ticket.reference}] New ticket: {ticket.title}",
+            to=recipients,
+            organization=ticket.organization,
+            context={
+                "ticket": ticket,
+                "ticket_url": _ticket_url(ticket),
+                "description": description,
+                "meta_rows": meta_rows,
+                "priority_label": priority_label,
+            },
         )
         logger.info(
             "Sent new ticket email for %s to %d recipients.",
@@ -106,34 +135,26 @@ def send_ticket_reply_email(self, message_id: str) -> None:  # noqa: ANN001
         logger.warning("Message %s not found, skipping email.", message_id)
         return
 
-    # Never email internal notes
     if message.message_type == TicketMessage.MessageType.INTERNAL_NOTE:
         logger.debug("Skipping email for internal note %s.", message_id)
         return
 
     ticket = message.ticket
     author = message.author
-
-    # Determine if author is an agent or the requester
     is_agent_reply = author and author.role in (User.Role.AGENT, User.Role.ADMIN)
 
     if is_agent_reply:
-        # Agent replied -> notify requester
         if not ticket.requester_email:
             logger.info("No requester email for ticket %s.", ticket.reference)
             return
         recipients = [ticket.requester_email]
-        subject = f"Re: [{ticket.reference}] {ticket.title}"
-        body = (
-            f"You have a new reply on your support ticket.\n\n"
-            f"Reference: {ticket.reference}\n"
-            f"Subject: {ticket.title}\n\n"
-            f"Reply from {author.first_name or 'Support'}:\n"
-            f"---\n{message.body}\n---\n\n"
-            f"To reply, visit: {_ticket_url(ticket)}\n"
+        author_label = (
+            (author.first_name or "").strip()
+            or (author.email.split("@")[0] if author.email else "Support")
         )
+        intro = f"{author_label} replied to your support ticket."
+        cta_label = "View conversation"
     else:
-        # Requester replied -> notify assigned agent or all agents
         if ticket.assigned_agent and ticket.assigned_agent.email:
             recipients = [ticket.assigned_agent.email]
         else:
@@ -144,25 +165,29 @@ def send_ticket_reply_email(self, message_id: str) -> None:  # noqa: ANN001
                     is_active=True,
                 ).values_list("email", flat=True)
             )
-
         if not recipients:
             return
+        author_label = ticket.requester_name or ticket.requester_email or "Requester"
+        intro = f"{author_label} replied on ticket {ticket.reference}."
+        cta_label = "Open ticket"
 
-        requester_name = ticket.requester_name or ticket.requester_email
-        subject = f"Re: [{ticket.reference}] {ticket.title}"
-        body = (
-            f"New reply from {requester_name} on ticket {ticket.reference}.\n\n"
-            f"---\n{message.body}\n---\n\n"
-            f"View ticket: {_ticket_url(ticket)}\n"
-        )
+    initial = (author_label[:1] or "?").upper()
 
     try:
-        send_mail(
-            subject=subject,
-            message=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=recipients,
-            fail_silently=False,
+        send_branded_email(
+            template="ticket_reply",
+            subject=f"Re: [{ticket.reference}] {ticket.title}",
+            to=recipients,
+            organization=ticket.organization,
+            context={
+                "ticket": ticket,
+                "ticket_url": _ticket_url(ticket),
+                "message_body": message.body,
+                "author_label": author_label,
+                "author_initial": initial,
+                "intro": intro,
+                "cta_label": cta_label,
+            },
         )
         logger.info(
             "Sent reply email for %s to %d recipients.",
@@ -189,23 +214,28 @@ def send_ticket_assigned_email(self, ticket_id: str) -> None:  # noqa: ANN001
     if not ticket.assigned_agent or not ticket.assigned_agent.email:
         return
 
-    subject = f"[{ticket.reference}] Ticket assigned to you: {ticket.title}"
-    body = (
-        f"A ticket has been assigned to you.\n\n"
-        f"Reference: {ticket.reference}\n"
-        f"Title: {ticket.title}\n"
-        f"Priority: {ticket.get_priority_display()}\n"
-        f"Requester: {ticket.requester_name} ({ticket.requester_email})\n\n"
-        f"View ticket: {_ticket_url(ticket)}\n"
-    )
+    priority_label = _priority_label(ticket)
+    meta_rows = [
+        {"label": "Reference", "value": ticket.reference},
+        {"label": "Priority", "value": priority_label},
+        {
+            "label": "Requester",
+            "value": f"{ticket.requester_name} ({ticket.requester_email})",
+        },
+    ]
 
     try:
-        send_mail(
-            subject=subject,
-            message=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[ticket.assigned_agent.email],
-            fail_silently=False,
+        send_branded_email(
+            template="ticket_assigned",
+            subject=f"[{ticket.reference}] Ticket assigned to you: {ticket.title}",
+            to=[ticket.assigned_agent.email],
+            organization=ticket.organization,
+            context={
+                "ticket": ticket,
+                "ticket_url": _ticket_url(ticket),
+                "meta_rows": meta_rows,
+                "priority_label": priority_label,
+            },
         )
     except Exception as exc:
         logger.error(
@@ -227,22 +257,16 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:  # noqa: ANN001
     if not ticket.requester_email:
         return
 
-    subject = f"[{ticket.reference}] Your ticket has been resolved"
-    body = (
-        f"Good news! Your support ticket has been resolved.\n\n"
-        f"Reference: {ticket.reference}\n"
-        f"Subject: {ticket.title}\n\n"
-        f"If you still need help, you can reopen the ticket by replying.\n\n"
-        f"-- The {ticket.organization.name} team\n"
-    )
-
     try:
-        send_mail(
-            subject=subject,
-            message=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[ticket.requester_email],
-            fail_silently=False,
+        send_branded_email(
+            template="ticket_resolved",
+            subject=f"[{ticket.reference}] Your ticket has been resolved",
+            to=[ticket.requester_email],
+            organization=ticket.organization,
+            context={
+                "ticket": ticket,
+                "requester_name": ticket.requester_name,
+            },
         )
     except Exception as exc:
         logger.error("Failed to send resolved email for %s: %s", ticket.reference, exc)

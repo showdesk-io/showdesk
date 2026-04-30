@@ -8,10 +8,10 @@ import logging
 
 from django.conf import settings
 from django.contrib import auth
-from django.core.mail import send_mail
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 
+from apps.core.email import send_branded_email
 from apps.organizations.models import OTPCode, User
 
 logger = logging.getLogger(__name__)
@@ -36,16 +36,17 @@ def admin_otp_login(request: HttpRequest) -> HttpResponse:
             if user:
                 otp = OTPCode.generate(email)
                 expiry_minutes = getattr(settings, "OTP_EXPIRY_SECONDS", 600) // 60
-                send_mail(
+                send_branded_email(
+                    template="otp_code",
                     subject=f"Showdesk admin login code: {otp.code}",
-                    message=(
-                        f"Your Showdesk admin login code is: {otp.code}\n\n"
-                        f"This code expires in {expiry_minutes} minutes.\n"
-                        f"If you didn't request this, you can safely ignore this email."
-                    ),
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[email],
-                    fail_silently=False,
+                    to=[email],
+                    context={
+                        "kicker": "Admin sign-in",
+                        "heading": "Your Showdesk admin code",
+                        "intro": "Use the code below to access the Showdesk admin.",
+                        "code": otp.code,
+                        "expiry_minutes": expiry_minutes,
+                    },
                 )
                 logger.info("Admin OTP sent to %s", email)
 

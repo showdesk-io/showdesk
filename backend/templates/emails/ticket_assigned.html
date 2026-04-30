@@ -1,0 +1,15 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}Ticket {{ ticket.reference }} assigned to you{% endblock %}
+
+{% block content %}
+<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">Assigned to you</div>
+<h1 class="sd-text sd-h1" style="margin:0 0 8px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">{{ ticket.title }}</h1>
+<p class="sd-muted" style="margin:0 0 20px 0;font-size:14px;line-height:22px;color:{{ brand.muted_color }};">A ticket has just landed in your queue.</p>
+
+{% include "emails/_meta.html" with rows=meta_rows %}
+
+<div style="margin-top:24px;">
+  {% include "emails/_button.html" with url=ticket_url label="Open ticket" %}
+</div>
+{% endblock %}

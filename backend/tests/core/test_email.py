@@ -1,0 +1,161 @@
+"""Tests for the branded email helper and ticket-related email tasks.
+
+Verifies that every transactional email ships an HTML alternative alongside
+the plain-text body and that the key context (reference, code, links) ends
+up in both renderings.
+"""
+
+import pytest
+from django.core import mail
+
+from apps.core.email import send_branded_email
+from apps.tickets.tasks import (
+    send_ticket_assigned_email,
+    send_ticket_created_email,
+    send_ticket_reply_email,
+    send_ticket_resolved_email,
+)
+from tests.factories import (
+    OrganizationFactory,
+    TicketFactory,
+    TicketMessageFactory,
+    UserFactory,
+)
+
+
+pytestmark = pytest.mark.django_db
+
+
+def _alt(message):
+    """Return the HTML alternative payload of an EmailMultiAlternatives."""
+    assert message.alternatives, "missing HTML alternative"
+    body, mimetype = message.alternatives[0]
+    assert mimetype == "text/html"
+    return body
+
+
+def test_send_branded_email_attaches_html_alternative():
+    send_branded_email(
+        template="otp_code",
+        subject="Showdesk login code",
+        to=["user@example.com"],
+        context={
+            "kicker": "Sign in",
+            "heading": "Your code",
+            "intro": "Use it to log in.",
+            "code": "123456",
+            "expiry_minutes": 10,
+        },
+    )
+    assert len(mail.outbox) == 1
+    msg = mail.outbox[0]
+    assert msg.subject == "Showdesk login code"
+    assert msg.to == ["user@example.com"]
+    # Plain text body
+    assert "123456" in msg.body
+    assert "<html" not in msg.body
+    # HTML alternative
+    html = _alt(msg)
+    assert html.startswith("<!DOCTYPE html>")
+    assert "123456" in html
+
+
+def test_send_branded_email_skips_when_no_recipients():
+    send_branded_email(
+        template="otp_code",
+        subject="No-op",
+        to=[None, ""],
+        context={
+            "kicker": "x", "heading": "x", "intro": "x",
+            "code": "0", "expiry_minutes": 1,
+        },
+    )
+    assert mail.outbox == []
+
+
+def test_ticket_created_email_renders_for_assigned_agent():
+    org = OrganizationFactory()
+    agent = UserFactory(organization=org, role="agent", email="agent@example.com")
+    ticket = TicketFactory(organization=org, assigned_agent=agent)
+
+    send_ticket_created_email(ticket.id)
+
+    assert len(mail.outbox) == 1
+    msg = mail.outbox[0]
+    assert msg.to == ["agent@example.com"]
+    assert ticket.reference in msg.subject
+    assert ticket.reference in msg.body
+    html = _alt(msg)
+    assert ticket.reference in html
+    assert ticket.title in html
+
+
+def test_ticket_reply_email_to_requester_when_agent_replies():
+    org = OrganizationFactory()
+    agent = UserFactory(organization=org, role="agent", first_name="Alice")
+    ticket = TicketFactory(
+        organization=org,
+        assigned_agent=agent,
+        requester_email="end@example.com",
+    )
+    message = TicketMessageFactory(
+        ticket=ticket, author=agent, body="Have you tried X?"
+    )
+
+    send_ticket_reply_email(message.id)
+
+    assert len(mail.outbox) == 1
+    msg = mail.outbox[0]
+    assert msg.to == ["end@example.com"]
+    assert "Have you tried X?" in msg.body
+    html = _alt(msg)
+    assert "Have you tried X?" in html
+    assert "Alice" in html
+
+
+def test_ticket_reply_email_skips_internal_notes():
+    org = OrganizationFactory()
+    agent = UserFactory(organization=org, role="agent")
+    ticket = TicketFactory(organization=org, assigned_agent=agent)
+    note = TicketMessageFactory(
+        ticket=ticket, author=agent, body="not for the customer",
+        message_type="internal_note",
+    )
+
+    send_ticket_reply_email(note.id)
+
+    assert mail.outbox == []
+
+
+def test_ticket_assigned_email_goes_to_assignee():
+    org = OrganizationFactory()
+    agent = UserFactory(organization=org, role="agent", email="me@example.com")
+    ticket = TicketFactory(organization=org, assigned_agent=agent)
+
+    send_ticket_assigned_email(ticket.id)
+
+    assert len(mail.outbox) == 1
+    msg = mail.outbox[0]
+    assert msg.to == ["me@example.com"]
+    assert ticket.reference in msg.subject
+    html = _alt(msg)
+    assert ticket.title in html
+
+
+def test_ticket_resolved_email_addresses_requester():
+    org = OrganizationFactory(name="Acme")
+    ticket = TicketFactory(
+        organization=org,
+        requester_email="end@example.com",
+        requester_name="Jane",
+    )
+
+    send_ticket_resolved_email(ticket.id)
+
+    assert len(mail.outbox) == 1
+    msg = mail.outbox[0]
+    assert msg.to == ["end@example.com"]
+    assert "resolved" in msg.subject.lower()
+    html = _alt(msg)
+    assert "Acme" in html
+    assert "Jane" in html

@@ -1,0 +1,9 @@
+{% extends "emails/base.txt" %}
+{% block content %}{{ heading }}
+
+{{ intro }}
+
+Your code: {{ code }}
+
+This code expires in {{ expiry_minutes }} minutes.
+If you didn't request it, you can safely ignore this email.{% endblock %}

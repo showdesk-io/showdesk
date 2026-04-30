@@ -1,0 +1,15 @@
+{% comment %}Metadata block (key/value pairs). Vars: rows = [{label, value}].{% endcomment %}
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="sd-meta" style="background:#F8FAFC;border-radius:8px;margin:16px 0 4px 0;">
+  <tr>
+    <td style="padding:14px 18px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+        {% for row in rows %}
+        <tr>
+          <td class="sd-muted" style="padding:4px 0;font-size:13px;line-height:20px;color:{{ brand.muted_color }};width:110px;vertical-align:top;">{{ row.label }}</td>
+          <td class="sd-text" style="padding:4px 0;font-size:13px;line-height:20px;color:{{ brand.text_color }};font-weight:500;vertical-align:top;">{{ row.value }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </td>
+  </tr>
+</table>

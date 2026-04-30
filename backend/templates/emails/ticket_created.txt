@@ -1,0 +1,11 @@
+{% extends "emails/base.txt" %}
+{% block content %}New ticket: {{ ticket.title }}
+
+Reference: {{ ticket.reference }}
+Priority:  {{ priority_label }}
+Source:    {{ ticket.get_source_display }}
+Requester: {{ ticket.requester_name }} ({{ ticket.requester_email }})
+
+{% if description %}{{ description }}
+
+{% endif %}View ticket: {{ ticket_url }}{% endblock %}

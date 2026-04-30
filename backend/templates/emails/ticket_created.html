@@ -1,0 +1,19 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}New ticket {{ ticket.reference }} from {{ ticket.requester_name|default:ticket.requester_email }}{% endblock %}
+
+{% block content %}
+<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">New ticket</div>
+<h1 class="sd-text sd-h1" style="margin:0 0 8px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">{{ ticket.title }}</h1>
+<p class="sd-muted" style="margin:0 0 20px 0;font-size:14px;line-height:22px;color:{{ brand.muted_color }};">A new ticket has just been submitted to your inbox.</p>
+
+{% include "emails/_meta.html" with rows=meta_rows %}
+
+{% if description %}
+<div class="sd-quote" style="margin:16px 0 4px 0;padding:14px 18px;background:#F8FAFC;border-left:3px solid {{ brand.primary_color }};border-radius:6px;font-size:14px;line-height:22px;color:{{ brand.text_color }};white-space:pre-wrap;">{{ description }}</div>
+{% endif %}
+
+<div style="margin-top:24px;">
+  {% include "emails/_button.html" with url=ticket_url label="View ticket" %}
+</div>
+{% endblock %}

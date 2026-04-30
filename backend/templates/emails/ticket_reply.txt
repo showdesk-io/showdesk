@@ -1,0 +1,11 @@
+{% extends "emails/base.txt" %}
+{% block content %}{{ intro }}
+
+Ticket: {{ ticket.title }} ({{ ticket.reference }})
+
+{{ author_label }} wrote:
+---
+{{ message_body }}
+---
+
+{{ cta_label }}: {{ ticket_url }}{% endblock %}

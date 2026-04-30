@@ -1,0 +1,9 @@
+{% extends "emails/base.txt" %}
+{% block content %}A ticket has been assigned to you.
+
+Reference: {{ ticket.reference }}
+Title:     {{ ticket.title }}
+Priority:  {{ priority_label }}
+Requester: {{ ticket.requester_name }} ({{ ticket.requester_email }})
+
+Open ticket: {{ ticket_url }}{% endblock %}

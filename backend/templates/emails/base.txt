@@ -1,0 +1,3 @@
+{% block content %}{% endblock %}
+--
+{% block footer %}Sent by {{ brand.org_name|default:brand.name }} via Showdesk.{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}{{ author_label }} replied on {{ ticket.reference }}{% endblock %}
+
+{% block content %}
+<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">New reply · {{ ticket.reference }}</div>
+<h1 class="sd-text sd-h1" style="margin:0 0 8px 0;font-size:22px;line-height:30px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">{{ ticket.title }}</h1>
+<p class="sd-muted" style="margin:0 0 20px 0;font-size:14px;line-height:22px;color:{{ brand.muted_color }};">{{ intro }}</p>
+
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:8px 0 4px 0;">
+  <tr>
+    <td style="padding-bottom:8px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="background:{{ brand.primary_color }};color:#FFFFFF;width:36px;height:36px;border-radius:18px;text-align:center;font-size:14px;font-weight:700;line-height:36px;">{{ author_initial }}</td>
+          <td style="padding-left:12px;vertical-align:middle;">
+            <div class="sd-text" style="font-size:14px;font-weight:600;color:{{ brand.text_color }};line-height:18px;">{{ author_label }}</div>
+            <div class="sd-muted" style="font-size:12px;color:{{ brand.muted_color }};line-height:16px;">just replied</div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+
+<div class="sd-quote" style="margin:8px 0 4px 0;padding:14px 18px;background:#F8FAFC;border-left:3px solid {{ brand.primary_color }};border-radius:6px;font-size:14px;line-height:22px;color:{{ brand.text_color }};white-space:pre-wrap;">{{ message_body }}</div>
+
+<div style="margin-top:24px;">
+  {% include "emails/_button.html" with url=ticket_url label=cta_label %}
+</div>
+{% endblock %}

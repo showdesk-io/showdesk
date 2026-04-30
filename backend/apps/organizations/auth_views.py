@@ -13,8 +13,9 @@ the OTP proves the user has access to that inbox.
 import logging
 
 from django.conf import settings
-from django.core.mail import send_mail
 from rest_framework import serializers, status
+
+from apps.core.email import send_branded_email
 from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -74,19 +75,17 @@ class RequestOTPView(APIView):
         """Send the OTP code via email."""
         expiry_minutes = getattr(settings, "OTP_EXPIRY_SECONDS", 600) // 60
 
-        subject = f"Showdesk login code: {code}"
-        message = (
-            f"Your Showdesk login code is: {code}\n\n"
-            f"This code expires in {expiry_minutes} minutes.\n"
-            f"If you didn't request this, you can safely ignore this email."
-        )
-
-        send_mail(
-            subject=subject,
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[email],
-            fail_silently=False,
+        send_branded_email(
+            template="otp_code",
+            subject=f"Showdesk login code: {code}",
+            to=[email],
+            context={
+                "kicker": "Sign in",
+                "heading": "Your Showdesk login code",
+                "intro": "Use the code below to finish signing in to Showdesk.",
+                "code": code,
+                "expiry_minutes": expiry_minutes,
+            },
         )
 
 

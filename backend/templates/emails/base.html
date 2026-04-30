@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="supported-color-schemes" content="light dark" />
+  <title>{{ subject }}</title>
+  <!--[if mso]>
+  <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+  <![endif]-->
+  <style>
+    @media (prefers-color-scheme: dark) {
+      .sd-bg { background: #0F172A !important; }
+      .sd-card { background: #1E293B !important; border-color: #334155 !important; }
+      .sd-text { color: #E2E8F0 !important; }
+      .sd-muted { color: #94A3B8 !important; }
+      .sd-divider { border-color: #334155 !important; }
+      .sd-quote { background: #0F172A !important; border-left-color: {{ brand.primary_color }} !important; color: #CBD5E1 !important; }
+      .sd-meta { background: #0F172A !important; color: #CBD5E1 !important; }
+    }
+    @media only screen and (max-width: 620px) {
+      .sd-container { width: 100% !important; }
+      .sd-px { padding-left: 24px !important; padding-right: 24px !important; }
+      .sd-h1 { font-size: 22px !important; line-height: 30px !important; }
+    }
+  </style>
+</head>
+<body class="sd-bg" style="margin:0;padding:0;background:{{ brand.background }};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+  <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:{{ brand.background }};opacity:0;">
+    {% block preheader %}{{ subject }}{% endblock %}
+  </div>
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="sd-bg" style="background:{{ brand.background }};">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" class="sd-container" style="width:600px;max-width:600px;">
+          <tr>
+            <td align="left" style="padding:0 8px 20px 8px;">
+              {% if brand.logo_url %}
+                <img src="{{ brand.logo_url }}" alt="{{ brand.org_name|default:brand.name }}" height="32" style="height:32px;display:block;border:0;" />
+              {% else %}
+                <div style="font-size:18px;font-weight:700;letter-spacing:-0.01em;color:{{ brand.primary_color }};">{{ brand.org_name|default:brand.name }}</div>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td class="sd-card" style="background:{{ brand.card_background }};border:1px solid {{ brand.border_color }};border-radius:12px;overflow:hidden;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td class="sd-px" style="padding:36px 40px 28px 40px;">
+                    {% block content %}{% endblock %}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" class="sd-muted" style="padding:24px 16px 0 16px;font-size:12px;line-height:18px;color:{{ brand.muted_color }};">
+              {% block footer %}
+                Sent by {{ brand.org_name|default:brand.name }} via Showdesk.
+              {% endblock %}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

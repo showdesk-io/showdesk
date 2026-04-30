@@ -7,7 +7,6 @@ Once any user exists, the initialize endpoint is permanently locked.
 import logging
 
 from django.conf import settings
-from django.core.mail import send_mail
 from django.db import transaction
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
@@ -15,6 +14,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.email import send_branded_email
 from apps.organizations.models import OTPCode, User
 
 logger = logging.getLogger(__name__)
@@ -103,17 +103,15 @@ class SetupInitializeView(APIView):
         """Send the OTP code via email."""
         expiry_minutes = getattr(settings, "OTP_EXPIRY_SECONDS", 600) // 60
 
-        subject = f"Showdesk setup code: {code}"
-        message = (
-            f"Welcome to Showdesk!\n\n"
-            f"Your setup code is: {code}\n\n"
-            f"This code expires in {expiry_minutes} minutes.\n"
-        )
-
-        send_mail(
-            subject=subject,
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[email],
-            fail_silently=False,
+        send_branded_email(
+            template="otp_code",
+            subject=f"Showdesk setup code: {code}",
+            to=[email],
+            context={
+                "kicker": "Welcome",
+                "heading": "Welcome to Showdesk",
+                "intro": "You're almost done. Use the code below to finish setting up your instance.",
+                "code": code,
+                "expiry_minutes": expiry_minutes,
+            },
         )

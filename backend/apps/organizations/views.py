@@ -3,13 +3,13 @@
 import uuid
 
 from django.conf import settings
-from django.core.mail import send_mail
 from django.db.models import Count, Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.core.email import send_branded_email
 from apps.core.permissions import IsPlatformAdmin, get_active_org
 
 from .models import Organization, Team, User
@@ -133,19 +133,18 @@ class UserViewSet(viewsets.ModelViewSet):
         user.set_unusable_password()
         user.save()
 
-        # Send invitation email
         try:
-            send_mail(
+            send_branded_email(
+                template="agent_invitation",
                 subject=f"You've been invited to {org.name} on Showdesk",
-                message=(
-                    f"Hi {user.first_name or user.email},\n\n"
-                    f"You've been invited to join {org.name} on Showdesk.\n\n"
-                    f"Log in with your email ({user.email}) "
-                    f"-- you'll receive an OTP code.\n\n"
-                    f"-- The Showdesk team"
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
+                to=[user.email],
+                organization=org,
+                context={
+                    "first_name": user.first_name,
+                    "email": user.email,
+                    "org_name": org.name,
+                    "login_url": f"{getattr(settings, 'SITE_URL', '')}/login",
+                },
                 fail_silently=True,
             )
         except Exception:  # noqa: BLE001

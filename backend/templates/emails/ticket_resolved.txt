@@ -1,0 +1,10 @@
+{% extends "emails/base.txt" %}
+{% block content %}Good news! Your support ticket has been resolved.
+
+Reference: {{ ticket.reference }}
+Subject:   {{ ticket.title }}
+
+If you still need help, you can reopen the ticket by replying.
+
+-- The {{ ticket.organization.name }} team{% endblock %}
+{% block footer %}Sent by {{ ticket.organization.name }} via Showdesk.{% endblock %}

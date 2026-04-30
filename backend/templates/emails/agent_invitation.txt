@@ -1,0 +1,10 @@
+{% extends "emails/base.txt" %}
+{% block content %}Hi {{ first_name|default:email }},
+
+You've been invited to join {{ org_name }} on Showdesk.
+
+Sign in with your email ({{ email }}) -- you'll receive a one-time code to log in. No password required.
+
+Sign in: {{ login_url }}
+
+-- The Showdesk team{% endblock %}
