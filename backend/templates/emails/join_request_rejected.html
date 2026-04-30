@@ -1,0 +1,10 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}Your request to join {{ org_name }}{% endblock %}
+
+{% block content %}
+<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">Update</div>
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">Your request to join {{ org_name }}</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">Hi {{ requester_name|default:"there" }}, thanks for your interest in joining <strong>{{ org_name }}</strong> on Showdesk. After review, the request was not approved at this time.</p>
+<p class="sd-text" style="margin:0 0 8px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">If you think this was a mistake, please reach out to your team admin directly.</p>
+{% endblock %}

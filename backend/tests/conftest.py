@@ -1,9 +1,23 @@
 """Shared pytest fixtures for Showdesk tests."""
 
 import pytest
+from django.core.cache import cache
 from rest_framework.test import APIClient
 
 from tests.factories import AdminFactory, OrganizationFactory, UserFactory
+
+
+@pytest.fixture(autouse=True)
+def _reset_throttle_cache():
+    """Clear DRF throttle counters between tests so they don't leak.
+
+    DRF's AnonRateThrottle stores hit counts in the default cache, keyed by
+    client IP. Without this fixture, tests that hit the same throttled
+    endpoint (e.g. signup) accumulate across the suite and fail with 429.
+    """
+    cache.clear()
+    yield
+    cache.clear()
 
 
 @pytest.fixture

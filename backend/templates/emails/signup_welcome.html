@@ -1,0 +1,19 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}Welcome to Showdesk -- {{ org_name }} is ready{% endblock %}
+
+{% block content %}
+<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">Welcome</div>
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">Welcome to Showdesk</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">Hi {{ first_name|default:email }}, your organization <strong>{{ org_name }}</strong> is ready.</p>
+<p class="sd-text" style="margin:0 0 24px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">A few quick steps to get you started:</p>
+<ul class="sd-text" style="margin:0 0 24px 0;padding-left:20px;font-size:15px;line-height:24px;color:{{ brand.text_color }};">
+  <li>Configure your widget (color, position, greeting)</li>
+  <li>Invite your teammates</li>
+  <li>Drop the embed snippet into your site</li>
+</ul>
+
+<div style="margin-top:8px;">
+  {% include "emails/_button.html" with url=dashboard_url label="Open dashboard" %}
+</div>
+{% endblock %}

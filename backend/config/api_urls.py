@@ -5,7 +5,13 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from apps.organizations.auth_views import RequestOTPView, VerifyOTPView
+from apps.organizations.signup_views import (
+    CheckDomainView,
+    CheckSlugView,
+    SignupView,
+)
 from apps.organizations.views import (
+    JoinRequestViewSet,
     OrganizationViewSet,
     PlatformOrganizationViewSet,
     TeamViewSet,
@@ -32,6 +38,7 @@ router = DefaultRouter()
 router.register(r"organizations", OrganizationViewSet, basename="organization")
 router.register(r"teams", TeamViewSet, basename="team")
 router.register(r"users", UserViewSet, basename="user")
+router.register(r"join-requests", JoinRequestViewSet, basename="join-request")
 
 # Tickets
 router.register(r"tickets", TicketViewSet, basename="ticket")
@@ -65,6 +72,10 @@ urlpatterns = [
     # OTP authentication (passwordless)
     path("auth/request-otp/", RequestOTPView.as_view(), name="request-otp"),
     path("auth/verify-otp/", VerifyOTPView.as_view(), name="verify-otp"),
+    # Self-service signup (public)
+    path("auth/signup/", SignupView.as_view(), name="signup"),
+    path("auth/check-slug/", CheckSlugView.as_view(), name="check-slug"),
+    path("auth/check-domain/", CheckDomainView.as_view(), name="check-domain"),
     # JWT refresh (still needed for token rotation)
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("health/", HealthCheckView.as_view(), name="health-check"),

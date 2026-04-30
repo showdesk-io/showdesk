@@ -2,7 +2,7 @@
 
 from rest_framework import serializers
 
-from .models import Organization, Team, User
+from .models import Organization, OrgJoinRequest, Team, User
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
@@ -82,7 +82,12 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class InviteAgentSerializer(serializers.Serializer):
-    """Serializer for inviting a new agent via email."""
+    """Serializer for inviting a new agent via email.
+
+    Note: email-already-exists is *not* validated here. The view returns
+    HTTP 409 with a structured error in that case (see UserViewSet.invite),
+    matching the signup endpoint's contract.
+    """
 
     email = serializers.EmailField()
     first_name = serializers.CharField(max_length=150, required=False, default="")
@@ -93,9 +98,7 @@ class InviteAgentSerializer(serializers.Serializer):
     )
 
     def validate_email(self, value: str) -> str:
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
-        return value
+        return value.lower().strip()
 
 
 class PlatformOrganizationListSerializer(serializers.ModelSerializer):
@@ -178,6 +181,29 @@ class PlatformOrganizationCreateSerializer(serializers.ModelSerializer):
             "slug",
             "domain",
         ]
+
+
+class OrgJoinRequestSerializer(serializers.ModelSerializer):
+    """Serializer for OrgJoinRequest (admin-side approval UI)."""
+
+    decided_by_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrgJoinRequest
+        fields = [
+            "id",
+            "email",
+            "full_name",
+            "status",
+            "created_at",
+            "decided_at",
+            "decided_by",
+            "decided_by_email",
+        ]
+        read_only_fields = fields
+
+    def get_decided_by_email(self, obj: OrgJoinRequest) -> str | None:
+        return obj.decided_by.email if obj.decided_by else None
 
 
 class TeamSerializer(serializers.ModelSerializer):

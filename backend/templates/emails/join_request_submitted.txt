@@ -1,0 +1,8 @@
+{% extends "emails/base.txt" %}
+{% block content %}A new request to join {{ org_name }} on Showdesk:
+
+  {{ requester_name|default:requester_email }} <{{ requester_email }}>
+
+Review and approve or reject the request: {{ review_url }}
+
+-- The Showdesk team{% endblock %}

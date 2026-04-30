@@ -112,7 +112,7 @@ class TestUserAPI:
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_invite_duplicate_email_rejected(self, admin_client, agent) -> None:
-        """Inviting an existing email is rejected."""
+        """Inviting an existing email returns 409 with explicit code."""
         response = admin_client.post(
             "/api/v1/users/invite/",
             {
@@ -121,7 +121,8 @@ class TestUserAPI:
                 "last_name": "Agent",
             },
         )
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_409_CONFLICT
+        assert response.data["code"] == "email_taken"
 
     def test_toggle_active_as_admin(
         self, admin_client, organization, admin_user

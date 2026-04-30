@@ -1,0 +1,15 @@
+{% extends "emails/base.txt" %}
+{% block content %}Hi {{ first_name|default:email }},
+
+Welcome to Showdesk! Your organization "{{ org_name }}" is ready.
+
+Open your dashboard: {{ dashboard_url }}
+
+Next steps:
+  - Configure your widget (color, position, greeting)
+  - Invite teammates
+  - Drop the embed snippet into your site
+
+We'll be one tap away if you need anything.
+
+-- The Showdesk team{% endblock %}

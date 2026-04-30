@@ -1,0 +1,8 @@
+{% extends "emails/base.txt" %}
+{% block content %}Hi {{ requester_name|default:"there" }},
+
+Thanks for your interest in joining {{ org_name }} on Showdesk. After review, the request was not approved at this time.
+
+If you think this was a mistake, please reach out to your team admin directly.
+
+-- The Showdesk team{% endblock %}

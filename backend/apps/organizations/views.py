@@ -4,6 +4,7 @@ import uuid
 
 from django.conf import settings
 from django.db.models import Count, Q
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -12,10 +13,11 @@ from rest_framework.response import Response
 from apps.core.email import send_branded_email
 from apps.core.permissions import IsPlatformAdmin, get_active_org
 
-from .models import Organization, Team, User
+from .models import Organization, OrgJoinRequest, OTPCode, Team, User
 from .serializers import (
     InviteAgentSerializer,
     OrganizationSerializer,
+    OrgJoinRequestSerializer,
     PlatformOrganizationCreateSerializer,
     PlatformOrganizationDetailSerializer,
     PlatformOrganizationListSerializer,
@@ -107,6 +109,9 @@ class UserViewSet(viewsets.ModelViewSet):
 
         Creates the user with an unusable password. They log in via OTP.
         Sends an invitation email.
+
+        Returns 409 if the email is already used by any user on the platform
+        (one human = one org rule).
         """
         if request.user.role != User.Role.ADMIN and not request.user.is_superuser:
             return Response(
@@ -123,8 +128,20 @@ class UserViewSet(viewsets.ModelViewSet):
                 {"error": "No active organization."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        email = serializer.validated_data["email"]
+        if User.objects.filter(email__iexact=email).exists():
+            return Response(
+                {
+                    "detail": (
+                        "This email is already used on Showdesk. "
+                        "Ask your teammate to use a different address."
+                    ),
+                    "code": "email_taken",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         user = User.objects.create(
-            email=serializer.validated_data["email"],
+            email=email,
             first_name=serializer.validated_data.get("first_name", ""),
             last_name=serializer.validated_data.get("last_name", ""),
             role=serializer.validated_data.get("role", User.Role.AGENT),
@@ -269,3 +286,149 @@ class PlatformOrganizationViewSet(viewsets.ModelViewSet):
                 "tags": org.tags.count(),
             }
         )
+
+
+class JoinRequestViewSet(
+    viewsets.ReadOnlyModelViewSet,
+):
+    """Admin-only management of pending join requests for the active org.
+
+    Listed: GET /api/v1/join-requests/?status=pending
+    Approve: POST /api/v1/join-requests/{id}/approve/
+    Reject:  POST /api/v1/join-requests/{id}/reject/
+
+    Approving creates a User row (role=AGENT, unusable password) and
+    sends OTP + welcome emails. Rejecting just notifies the requester.
+    """
+
+    serializer_class = OrgJoinRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):  # noqa: ANN201
+        org = get_active_org(self.request)
+        if not org:
+            return OrgJoinRequest.objects.none()
+        qs = OrgJoinRequest.objects.filter(organization=org)
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    def _check_admin(self, request) -> Response | None:  # noqa: ANN001
+        if request.user.role != User.Role.ADMIN and not request.user.is_superuser:
+            return Response(
+                {"error": "Only admins can manage join requests."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Approve a pending join request: create the user and notify them."""
+        if (forbidden := self._check_admin(request)) is not None:
+            return forbidden
+
+        join_request = self.get_object()
+        if join_request.status != OrgJoinRequest.Status.PENDING:
+            return Response(
+                {"error": f"Join request is already {join_request.status}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if User.objects.filter(email__iexact=join_request.email).exists():
+            # The requester signed up elsewhere between request and decision.
+            join_request.status = OrgJoinRequest.Status.REJECTED
+            join_request.decided_at = timezone.now()
+            join_request.decided_by = request.user
+            join_request.save(update_fields=["status", "decided_at", "decided_by"])
+            return Response(
+                {
+                    "detail": (
+                        "This email is now used by another account; the request "
+                        "was auto-rejected."
+                    ),
+                    "code": "email_taken",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        org = join_request.organization
+        first_name, _, last_name = (join_request.full_name or "").partition(" ")
+        user = User(
+            email=join_request.email,
+            first_name=first_name,
+            last_name=last_name,
+            role=User.Role.AGENT,
+            organization=org,
+            is_staff=True,
+        )
+        user.set_unusable_password()
+        user.save()
+
+        join_request.status = OrgJoinRequest.Status.APPROVED
+        join_request.decided_at = timezone.now()
+        join_request.decided_by = request.user
+        join_request.save(update_fields=["status", "decided_at", "decided_by"])
+
+        otp = OTPCode.generate(user.email)
+        expiry_minutes = getattr(settings, "OTP_EXPIRY_SECONDS", 600) // 60
+        send_branded_email(
+            template="otp_code",
+            subject=f"Showdesk login code: {otp.code}",
+            to=[user.email],
+            context={
+                "kicker": "Sign in",
+                "heading": "Your Showdesk login code",
+                "intro": (
+                    f"Your request to join {org.name} on Showdesk was approved. "
+                    "Use the code below to finish signing in."
+                ),
+                "code": otp.code,
+                "expiry_minutes": expiry_minutes,
+            },
+            fail_silently=True,
+        )
+        send_branded_email(
+            template="join_request_approved",
+            subject=f"You're in -- welcome to {org.name}",
+            to=[user.email],
+            organization=org,
+            context={
+                "first_name": user.first_name,
+                "email": user.email,
+                "org_name": org.name,
+                "login_url": f"{getattr(settings, 'SITE_URL', '')}/login",
+            },
+            fail_silently=True,
+        )
+        return Response(OrgJoinRequestSerializer(join_request).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Reject a pending join request and notify the requester."""
+        if (forbidden := self._check_admin(request)) is not None:
+            return forbidden
+
+        join_request = self.get_object()
+        if join_request.status != OrgJoinRequest.Status.PENDING:
+            return Response(
+                {"error": f"Join request is already {join_request.status}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        join_request.status = OrgJoinRequest.Status.REJECTED
+        join_request.decided_at = timezone.now()
+        join_request.decided_by = request.user
+        join_request.save(update_fields=["status", "decided_at", "decided_by"])
+
+        send_branded_email(
+            template="join_request_rejected",
+            subject=f"Your request to join {join_request.organization.name}",
+            to=[join_request.email],
+            organization=join_request.organization,
+            context={
+                "requester_name": join_request.full_name,
+                "org_name": join_request.organization.name,
+            },
+            fail_silently=True,
+        )
+        return Response(OrgJoinRequestSerializer(join_request).data)

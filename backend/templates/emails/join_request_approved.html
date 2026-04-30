@@ -1,0 +1,14 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}You're in -- welcome to {{ org_name }}{% endblock %}
+
+{% block content %}
+<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">Approved</div>
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">Welcome to {{ org_name }}</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">Hi {{ first_name|default:email }}, your request to join <strong>{{ org_name }}</strong> on Showdesk was approved.</p>
+<p class="sd-text" style="margin:0 0 24px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">Sign in with your email ({{ email }}) -- you'll receive a one-time code to log in. No password required.</p>
+
+<div style="margin-top:8px;">
+  {% include "emails/_button.html" with url=login_url label="Sign in to Showdesk" %}
+</div>
+{% endblock %}

@@ -18,6 +18,60 @@ from apps.core.models import TimestampedModel
 SHOWDESK_INTERNAL_ORG_SLUG = "showdesk-internal"
 
 
+# Email domains where multiple unrelated companies share inboxes. Signups
+# from these domains never trigger the auto-join flow — each user creates
+# their own organization. Extend by setting SHOWDESK_PUBLIC_EMAIL_DOMAINS
+# in the environment.
+PUBLIC_EMAIL_DOMAINS = frozenset(
+    {
+        "gmail.com",
+        "googlemail.com",
+        "hotmail.com",
+        "hotmail.fr",
+        "outlook.com",
+        "outlook.fr",
+        "live.com",
+        "msn.com",
+        "yahoo.com",
+        "yahoo.fr",
+        "ymail.com",
+        "icloud.com",
+        "me.com",
+        "mac.com",
+        "protonmail.com",
+        "proton.me",
+        "pm.me",
+        "aol.com",
+        "gmx.com",
+        "gmx.de",
+        "mail.com",
+        "mail.ru",
+        "yandex.com",
+        "yandex.ru",
+        "qq.com",
+        "163.com",
+        "126.com",
+        "free.fr",
+        "orange.fr",
+        "wanadoo.fr",
+        "laposte.net",
+        "sfr.fr",
+    }
+)
+
+
+def extract_email_domain(email: str) -> str:
+    """Return the lowercased domain of an email, or '' if invalid."""
+    if not email or "@" not in email:
+        return ""
+    return email.rsplit("@", 1)[-1].strip().lower()
+
+
+def is_public_email_domain(domain: str) -> bool:
+    """Return True if the domain is a shared/public webmail provider."""
+    return domain.lower() in PUBLIC_EMAIL_DOMAINS
+
+
 class Organization(TimestampedModel):
     """A company or entity that uses Showdesk to manage support tickets.
 
@@ -80,6 +134,22 @@ class Organization(TimestampedModel):
     ticket_counter = models.PositiveIntegerField(
         default=0,
         help_text="Auto-incremented counter for generating ticket references.",
+    )
+
+    # Self-service signup
+    email_domain = models.CharField(
+        max_length=255,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "Email domain of the first admin (excluding public webmail providers). "
+            "Used to auto-route signups from the same domain into a join request."
+        ),
+    )
+    onboarding_completed_at = models.DateTimeField(null=True, blank=True)
+    onboarding_step = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Last completed step of the post-signup onboarding wizard.",
     )
 
     class Meta:
@@ -297,3 +367,53 @@ class OTPCode(models.Model):
         length = getattr(settings, "OTP_LENGTH", 6)
         code = "".join(secrets.choice("0123456789") for _ in range(length))
         return cls.objects.create(email=email, code=code)
+
+
+class OrgJoinRequest(TimestampedModel):
+    """A pending request to join an existing organization.
+
+    Created when someone signs up with an email whose domain matches an
+    existing org's `email_domain`. An admin of the target org must
+    approve or reject the request before a User row is provisioned.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="join_requests",
+    )
+    email = models.EmailField(db_index=True)
+    full_name = models.CharField(max_length=255, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="decided_join_requests",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "email"],
+                condition=models.Q(status="pending"),
+                name="unique_pending_join_request_per_email",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.email} -> {self.organization.name} ({self.status})"
