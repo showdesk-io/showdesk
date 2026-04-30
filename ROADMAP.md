@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-04-24
+> Last updated: 2026-04-30
 
 ---
 
@@ -318,7 +318,111 @@ Lightweight replay of user interactions leading up to the bug report.
 
 ---
 
+## Phase 2.5 -- Self-Service Signup & Onboarding
+
+Today, organizations can only be created by a platform admin. To unblock acquisition,
+prospects must sign up, create their org, and invite their team without operator
+intervention. Reuses existing OTP auth -- no password introduced. Target: startups /
+small structures, so we keep it simple: **one email = one org**, no multi-tenancy
+per user.
+
+**Domain auto-join (simplified, no DNS verification):** the first admin's email
+domain is recorded on the org (unless it's a public webmail like gmail.com,
+hotmail.com, etc.). Subsequent signups from the same domain create a *join request*
+that an admin must approve, instead of spawning a duplicate org. Users from
+non-matching domains can still join, but only through explicit invitation.
+
+### Backend
+
+- [ ] P0: Public `POST /api/v1/auth/signup/` endpoint
+      -- payload: `{ email, full_name, org_name, org_slug }`
+      -- **path A** (email domain not matching any org): creates Organization + first
+        User (role=ADMIN, is_staff=True), sets `Organization.email_domain` if domain
+        is not in the public-webmail blocklist, sends OTP email
+      -- **path B** (email domain matches an existing org's `email_domain`): creates
+        an `OrgJoinRequest` (no User yet), notifies org admins by email, returns
+        `{ status: "join_requested", org_name }` so the frontend can show
+        "Your request to join Acme was sent"
+      -- rate-limited per IP and per email (5/hour) to prevent spam
+- [ ] P0: Slug availability endpoint `GET /api/v1/auth/check-slug/?slug=foo`
+- [ ] P0: Domain lookup endpoint `GET /api/v1/auth/check-domain/?email=alice@acme.com`
+      -- returns `{ matches_org: bool, org_name?: str }` so the signup form can
+        switch UI from "Create org" to "Request to join Acme" before submission
+- [ ] P0: Email-uniqueness guard on signup AND on agent invitation
+      -- keep `User.email` globally unique (one human = one org)
+      -- return 409 with explicit message instead of 500/IntegrityError
+      -- applies to existing `POST /api/v1/users/invite/` too (currently crashes)
+- [ ] P0: `Organization.email_domain` field (nullable, indexed) + public-webmail
+      blocklist constant (gmail, hotmail, outlook, yahoo, icloud, proton, aol,
+      gmx, mail, yandex, qq, 163 -- extendable)
+- [ ] P0: `OrgJoinRequest` model
+      -- fields: org, email, full_name, status (pending/approved/rejected),
+        created_at, decided_at, decided_by
+      -- endpoint `POST /api/v1/join-requests/{id}/approve/` (admin-only) -- creates
+        the User with role=AGENT, sends welcome + OTP email
+      -- endpoint `POST /api/v1/join-requests/{id}/reject/` (admin-only) -- sends
+        rejection email
+      -- endpoint `GET /api/v1/join-requests/?status=pending` (admin-only) -- list
+- [ ] P0: Onboarding state on Organization
+      -- `onboarding_completed_at` (nullable datetime), `onboarding_step` (small int)
+- [ ] P0: Welcome email on signup + join-request-submitted/approved/rejected emails
+      (added to the template list in "Email Design & Branding" section)
+
+### Frontend
+
+- [ ] P0: `/signup` public page
+      -- fields: full name, work email
+      -- on email blur: call /check-domain/ -- if match, switch UI to "Join {OrgName}"
+        (single button, no org name/slug fields)
+      -- if no match: show org name + slug fields (live availability via /check-slug/)
+      -- submit path A -> OTP verification screen -> setTokens + redirect to /onboarding
+      -- submit path B -> "Request sent, you'll get an email when approved" screen
+- [ ] P0: Update login page + AuthGuard with "Create an account" CTA
+- [ ] P0: Post-signup onboarding wizard (`/onboarding`)
+      -- step 1: configure widget (color, position, greeting)
+      -- step 2: invite teammates (skippable)
+      -- step 3: copy embed snippet + "Test it" link to `/widget-demo?token=...`
+      -- skippable, resumable (persists `Organization.onboarding_step`)
+      -- completion sets `onboarding_completed_at` and redirects to dashboard
+- [ ] P0: Settings > Team -- "Pending join requests" panel for admins (approve/reject
+      buttons, requester name + email + submitted date)
+- [ ] P1: Empty-state nudges in dashboard until onboarding is completed
+
+### Tests
+
+- [ ] P0: pytest -- signup path A (org created), path B (join request created), slug
+      taken, email taken globally, rate limit, OTP delivery, public-webmail domain
+      does not trigger auto-join
+- [ ] P0: pytest -- slug + domain check endpoints
+- [ ] P0: pytest -- join request approve/reject (creates user / sends emails / role)
+- [ ] P0: pytest -- invitation endpoint returns 409 (not 500) when email exists
+- [ ] P0: Vitest -- signup form: domain-match UI switch, slug live-check, OTP step,
+      join-request confirmation screen, onboarding wizard navigation + resume
+
+### Open questions
+
+- Plan/billing: **deferred** -- trial-by-default, no plan picker at signup;
+  billing belongs to Phase 3.
+- Captcha / disposable-email blocklist: deferred until abuse is observed.
+- Join-request expiration (auto-reject after N days): deferred to v1.1.
+
+---
+
 ## Phase 3 -- Admin Console
+
+### Email Design & Branding (Priority 1)
+
+Today every email goes out as plain text via `send_mail()` (9 call sites: ticket lifecycle x4, OTP login, agent invitation, setup OTP, admin OTP, test command). Goal: a consistent, branded, HTML-rich rendering with a plain-text fallback, shared across all transactional emails.
+
+- [ ] Shared base email template (header with Showdesk logo, body slot, footer with org name + unsubscribe placeholder, dark-mode-friendly inline CSS)
+- [ ] Per-email Django templates (`*.html` + `*.txt`) for: new ticket, agent reply, requester reply, ticket assigned, ticket resolved, OTP login, agent invitation, admin OTP, **signup welcome, join request submitted, join request approved, join request rejected**
+- [ ] `send_branded_email()` helper in `apps/core/email.py` -- renders HTML + text from templates, sets `EmailMultiAlternatives`, handles `Reply-To`
+- [ ] Refactor all 9 call sites (`tickets/tasks.py`, `organizations/auth_views.py`, `organizations/views.py`, `core/setup_views.py`, `core/admin_auth.py`) to use the helper
+- [ ] CTA buttons (e.g. "View ticket", "Reply") rendered as bulletproof button HTML (table-based, Outlook-safe)
+- [ ] Ticket reply email: render the message body as HTML (preserve line breaks, basic formatting, attachment list)
+- [ ] Per-org branding hook: optional logo URL + primary color from `Organization` model (falls back to Showdesk defaults). Pairs with "Organization branding" item in Org Admin below.
+- [ ] Email preview tool in Django admin (render any template with sample data, view in Mailpit during dev)
+- [ ] Tests: snapshot the rendered HTML + text for each template; verify `EmailMultiAlternatives` carries both parts
 
 ### Agent Groups & Management
 
@@ -450,6 +554,7 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 | Widget | **~99%** | Full messaging UI (chat + history tabs, session system, audio messages, message deletion with undo, attachment menu), recording (screen + camera PiP + screenshot), upload, e2e tests, console/network collectors, user identity (API + data-user-*), API URL auto-detect, /cdn/widget.js distribution, MPA popup recording incl. audio, contact nudge, FAB unread badge + mark-as-read | Retry, i18n, accessibility |
 | Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright) incl. identity-hash endpoint (7 cases), wizard flow, identity, context tests | Widget messaging tests, video API tests, more frontend tests |
 | Widget UX (Phase 2) | **~92%** | P0: distribution/API URL + **messaging refactor (WhatsApp-style chat, session system, tabs, audio, message deletion)** (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). P2: MPA recording persistence incl. audio (100%), ticket history in widget incl. FAB unread badge + mark-as-read (100%). Screenshot capture (basic, no annotation). | Screenshot annotation, multi-attach, session replay, video markers, News/Ideas tabs |
+| Signup & Onboarding (Phase 2.5) | **0%** | -- | Public signup endpoint, slug/domain check, email-uniqueness guard, OrgJoinRequest model + admin approval UI, /signup page + onboarding wizard, welcome/join-request emails |
 | Admin (org) | **~60%** | Agent/team CRUD, widget config, tags, custom priorities, canned responses (templates + slash picker + variables) | Branding, SLA, audit log |
 | Admin (platform) | **~45%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar, in-app dogfooding (internal org + identity-hash) | Usage/quotas dashboard, billing, feature flags, monitoring |
 | Post-MVP | **0%** | -- | Everything |
@@ -461,12 +566,13 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 2. ~~Widget bugs (screenshot, recording overlay, captureStream)~~ -- **Done**
 3. ~~Widget messaging refactor (chat + history + session + audio)~~ -- **Done**
 4. ~~FAB unread badge + read-receipts~~ -- **Done**
-5. **Phase 2 P2 remaining**: screenshot annotation overlay, multi-attachments
-6. **AI layer kickoff**: ticket auto-categorization, AI title/description generation (Phase 5, behind feature flag)
-7. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
-8. ~~Canned responses / macros~~ -- **Done**
-9. Keyboard shortcuts + bulk actions
+5. **Phase 2.5 -- Self-service signup & onboarding** (unblocks acquisition: public signup, domain auto-join with admin approval, onboarding wizard)
+6. **Phase 2 P2 remaining**: screenshot annotation overlay, multi-attachments
+7. **AI layer kickoff**: ticket auto-categorization, AI title/description generation (Phase 5, behind feature flag)
+8. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
+9. ~~Canned responses / macros~~ -- **Done**
+10. Keyboard shortcuts + bulk actions
 
 ---
 
-*This roadmap is a living document. Last updated: 2026-04-24.*
+*This roadmap is a living document. Last updated: 2026-04-30.*
