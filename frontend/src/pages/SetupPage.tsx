@@ -71,7 +71,7 @@ export function SetupPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-50">
       <div className="w-full max-w-md rounded-xl bg-white p-8 shadow-lg">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-primary-500" />
+          <img src="/logo.svg" alt="Showdesk" className="mx-auto mb-4 h-12 w-12" />
           <h1 className="text-2xl font-bold text-gray-900">Welcome to Showdesk</h1>
           <p className="mt-1 text-sm text-gray-500">
             {step === "admin"

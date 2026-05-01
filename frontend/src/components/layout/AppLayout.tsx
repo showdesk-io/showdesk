@@ -65,6 +65,20 @@ export function AppLayout() {
   const hasOrg = !!(user?.organization || activeOrgId);
 
   const handleLogout = () => {
+    // Drop the in-app widget's stored session id so the next user who logs
+    // in on this browser does not resume the previous user's conversation.
+    // Wrapped in try/catch + reset-or-destroy fallback because cached older
+    // widget builds may not expose reset() and we must never break logout.
+    try {
+      const w = window.Showdesk;
+      if (typeof w?.reset === "function") {
+        w.reset();
+      } else if (typeof w?.destroy === "function") {
+        w.destroy();
+      }
+    } catch {
+      /* never let widget cleanup break logout */
+    }
     logout();
     clearActiveOrg();
     queryClient.clear();
@@ -77,7 +91,7 @@ export function AppLayout() {
       <aside className="flex w-64 flex-col border-r border-gray-200 bg-white">
         {/* Logo */}
         <div className="flex h-16 items-center gap-2 border-b border-gray-200 px-6">
-          <div className="h-8 w-8 rounded-lg bg-primary-500" />
+          <img src="/logo.svg" alt="" aria-hidden="true" className="h-8 w-8" />
           <span className="text-lg font-bold text-gray-900">Showdesk</span>
           <span
             className={clsx(

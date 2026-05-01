@@ -289,6 +289,26 @@ ANYMAIL = {
 SITE_URL = config("SITE_URL", default="http://localhost")
 
 # =============================================================================
+# Brand
+# =============================================================================
+# Brand identity used in transactional emails and other server-rendered
+# surfaces (Django admin OTP login, etc.). Per-org overrides happen at the
+# Organization level (see apps.organizations.models.Organization). All values
+# are env-overridable so a self-hosted deployment can re-skin without forking.
+BRAND_NAME = config("BRAND_NAME", default="Showdesk")
+BRAND_PRIMARY_COLOR = config("BRAND_PRIMARY_COLOR", default="#6366F1")
+BRAND_PRIMARY_COLOR_DARK = config("BRAND_PRIMARY_COLOR_DARK", default="#4F46E5")
+BRAND_TEXT_COLOR = config("BRAND_TEXT_COLOR", default="#0F172A")
+BRAND_MUTED_COLOR = config("BRAND_MUTED_COLOR", default="#64748B")
+BRAND_BACKGROUND_COLOR = config("BRAND_BACKGROUND_COLOR", default="#F1F5F9")
+BRAND_CARD_BACKGROUND_COLOR = config("BRAND_CARD_BACKGROUND_COLOR", default="#FFFFFF")
+BRAND_BORDER_COLOR = config("BRAND_BORDER_COLOR", default="#E2E8F0")
+# Empty default → email helper falls back to f"{SITE_URL}/logo.png" (served
+# by the frontend's public/ folder). Set BRAND_LOGO_URL explicitly when the
+# app and the asset live on different origins.
+BRAND_LOGO_URL = config("BRAND_LOGO_URL", default="")
+
+# =============================================================================
 # OTP Authentication
 # =============================================================================
 OTP_LENGTH = config("OTP_LENGTH", default=6, cast=int)

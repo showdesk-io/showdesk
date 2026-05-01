@@ -18,22 +18,28 @@ from django.core.mail import EmailMultiAlternatives
 logger = logging.getLogger(__name__)
 
 
-SHOWDESK_BRAND = {
-    "name": "Showdesk",
-    "primary_color": "#5B5BD6",
-    "primary_color_dark": "#4A4AC4",
-    "text_color": "#0F172A",
-    "muted_color": "#64748B",
-    "background": "#F1F5F9",
-    "card_background": "#FFFFFF",
-    "border_color": "#E2E8F0",
-    "logo_url": "",
-}
+def _showdesk_brand() -> dict[str, Any]:
+    """Build the default Showdesk brand dict from Django settings.
+
+    Read at call time (not import time) so tests and runtime overrides of
+    settings take effect without re-importing this module.
+    """
+    return {
+        "name": settings.BRAND_NAME,
+        "primary_color": settings.BRAND_PRIMARY_COLOR,
+        "primary_color_dark": settings.BRAND_PRIMARY_COLOR_DARK,
+        "text_color": settings.BRAND_TEXT_COLOR,
+        "muted_color": settings.BRAND_MUTED_COLOR,
+        "background": settings.BRAND_BACKGROUND_COLOR,
+        "card_background": settings.BRAND_CARD_BACKGROUND_COLOR,
+        "border_color": settings.BRAND_BORDER_COLOR,
+        "logo_url": settings.BRAND_LOGO_URL or f"{settings.SITE_URL}/logo.png",
+    }
 
 
 def _brand_for(organization: Any | None) -> dict[str, Any]:
     """Resolve brand context, allowing per-org overrides when available."""
-    brand = dict(SHOWDESK_BRAND)
+    brand = _showdesk_brand()
     if organization is None:
         return brand
 

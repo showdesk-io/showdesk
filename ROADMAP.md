@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-04-30
+> Last updated: 2026-05-01
 
 ---
 
@@ -549,6 +549,7 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 ### Developer Experience / Tech Debt
 
 - [ ] Migrate backend dependencies from `requirements.txt` to `pyproject.toml` (PEP 621). Pick a tool (`uv`, Poetry, or `pip-tools`), generate a lockfile for reproducible builds, separate prod / dev / test dependency groups, update `backend/Dockerfile` to install from the new manifest, and adapt CI. Goal: deterministic builds + cleaner dev/prod split (e.g. `watchdog` only in dev).
+- [ ] **Unify brand config across runtimes** (single source of truth). Today the Showdesk brand is duplicated in three places: `tailwind.config.js` (front, build-time), `widget/src/ui/styles.ts` `DEFAULT_PRIMARY` (widget, runtime), and Django settings `BRAND_*` (backend, runtime). Changing the primary color requires editing 3 files. Pick a shared source — likely `brand.json` at repo root, consumed by Tailwind via `require()`, by the widget via TS import, and by Django via `json.load()` at startup. Migrate all three runtimes, drop the duplicated constants, document the new workflow. Pairs with the per-org branding work in Phase 3.
 
 ---
 
