@@ -1,0 +1,8 @@
+{% extends "emails/base.txt" %}
+{% block content %}{{ domain }} is now verified on Showdesk.
+
+Teammates with @{{ domain }} email addresses will be auto-routed to {{ org_name }} when they sign up.
+
+Manage your domains: {{ settings_url }}
+
+-- The Showdesk team{% endblock %}

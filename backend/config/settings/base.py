@@ -193,6 +193,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.videos.tasks.cleanup_expired_videos",
         "schedule": 60 * 60 * 6,  # Every 6 hours
     },
+    "recheck-dns-pending-domains": {
+        "task": "apps.organizations.tasks.recheck_dns_pending_domains",
+        "schedule": 60 * 15,  # Every 15 minutes
+    },
 }
 
 # =============================================================================

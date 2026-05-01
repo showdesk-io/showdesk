@@ -1,0 +1,10 @@
+{% extends "emails/base.txt" %}
+{% block content %}{{ losing_org_name }} no longer owns the domain {{ domain }}.
+
+{{ new_owner_name }} just verified ownership via DNS. New signups from @{{ domain }} will be routed to their workspace.
+
+Existing members of {{ losing_org_name }} are not affected — only future signups change destination. If this looks wrong, you can re-verify the domain via DNS TXT in Settings.
+
+{{ settings_url }}
+
+-- The Showdesk team{% endblock %}

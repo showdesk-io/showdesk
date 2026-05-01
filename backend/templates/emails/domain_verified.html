@@ -1,0 +1,15 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}{{ domain }} is now verified on Showdesk{% endblock %}
+
+{% block content %}
+<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">Domain verified</div>
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">{{ domain }} is verified</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">
+  Your team's claim on <strong>{{ domain }}</strong> has been confirmed. Teammates with email addresses on this domain will now be auto-routed to {{ org_name }} when they sign up.
+</p>
+
+<div style="margin-top:8px;">
+  {% include "emails/_button.html" with url=settings_url label="Manage domains" %}
+</div>
+{% endblock %}

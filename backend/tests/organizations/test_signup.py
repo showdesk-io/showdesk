@@ -15,12 +15,30 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.organizations.models import (
+    OrganizationDomain,
     OrgJoinRequest,
     OTPCode,
     Organization,
     User,
 )
 from tests.factories import AdminFactory, OrganizationFactory, UserFactory
+
+
+def _org_with_routing_domain(slug: str, name: str, domain: str) -> Organization:
+    """Build an org wired up for the email-routing flow.
+
+    Sets the legacy `email_domain` field AND the new OrganizationDomain row
+    so signup routing finds it during the deprecation window.
+    """
+    org = OrganizationFactory(slug=slug, name=name, email_domain=domain)
+    OrganizationDomain.objects.create(
+        organization=org,
+        domain=domain,
+        is_email_routing=True,
+        status=OrganizationDomain.Status.VERIFIED,
+        verification_method=OrganizationDomain.VerificationMethod.ADMIN_EMAIL,
+    )
+    return org
 
 
 def _request_and_verify(api_client, email: str, full_name: str = ""):
@@ -132,9 +150,7 @@ class TestSignupVerifyOTP:
     def test_verify_returns_join_request_when_domain_matches(
         self, api_client
     ) -> None:
-        org = OrganizationFactory(
-            slug="acme", name="Acme Inc", email_domain="acme.com"
-        )
+        org = _org_with_routing_domain("acme", "Acme Inc", "acme.com")
         AdminFactory(organization=org, email="founder@acme.com")
         data = _request_and_verify(api_client, "bob@acme.com", "Bob")
         assert data["next_step"] == "join_request"
@@ -278,7 +294,7 @@ class TestSignupCreateOrg:
 @pytest.mark.django_db
 class TestSignupRequestJoin:
     def test_request_join_creates_pending_request(self, api_client) -> None:
-        org = OrganizationFactory(slug="acme", email_domain="acme.com")
+        org = _org_with_routing_domain("acme", "Acme", "acme.com")
         AdminFactory(organization=org, email="founder@acme.com")
         data = _request_and_verify(api_client, "bob@acme.com", "Bob Newhire")
         client = _auth_client(data)
@@ -297,7 +313,7 @@ class TestSignupRequestJoin:
         assert user.organization is None
 
     def test_request_join_notifies_admins(self, api_client) -> None:
-        org = OrganizationFactory(slug="acme", email_domain="acme.com")
+        org = _org_with_routing_domain("acme", "Acme", "acme.com")
         AdminFactory(organization=org, email="admin1@acme.com")
         AdminFactory(organization=org, email="admin2@acme.com")
         data = _request_and_verify(api_client, "bob@acme.com")
@@ -309,7 +325,7 @@ class TestSignupRequestJoin:
         assert "admin2@acme.com" in all_recipients
 
     def test_request_join_idempotent(self, api_client) -> None:
-        org = OrganizationFactory(slug="acme", email_domain="acme.com")
+        org = _org_with_routing_domain("acme", "Acme", "acme.com")
         AdminFactory(organization=org)
         data = _request_and_verify(api_client, "bob@acme.com")
         client = _auth_client(data)
@@ -343,7 +359,7 @@ class TestApproveAttachesLonelyUser:
     auto-rejecting (the old behavior)."""
 
     def test_approve_attaches_lonely_user(self, api_client) -> None:
-        org = OrganizationFactory(slug="acme", email_domain="acme.com")
+        org = _org_with_routing_domain("acme", "Acme", "acme.com")
         admin = AdminFactory(organization=org)
         # Bob signs up via the new flow
         data = _request_and_verify(api_client, "bob@acme.com", "Bob")
@@ -364,7 +380,7 @@ class TestApproveAttachesLonelyUser:
     def test_approve_rejects_when_user_joined_another_org(
         self, api_client
     ) -> None:
-        org_a = OrganizationFactory(slug="a-corp", email_domain="example.com")
+        org_a = _org_with_routing_domain("a-corp", "A Corp", "example.com")
         admin_a = AdminFactory(organization=org_a)
         # Bob asks to join A
         data = _request_and_verify(api_client, "bob@example.com")
@@ -420,7 +436,7 @@ class TestCheckSlug:
 @pytest.mark.django_db
 class TestCheckDomain:
     def test_matches_existing_org(self, api_client) -> None:
-        OrganizationFactory(slug="acme", name="Acme Inc", email_domain="acme.com")
+        _org_with_routing_domain("acme", "Acme Inc", "acme.com")
         response = api_client.get(
             "/api/v1/auth/check-domain/?email=bob@acme.com"
         )

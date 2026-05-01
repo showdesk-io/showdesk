@@ -208,6 +208,11 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
 
     txt_record_name = serializers.CharField(read_only=True)
     txt_record_value = serializers.CharField(read_only=True)
+    # Override the auto-derived field so DRF doesn't attach a global
+    # `unique=True`-style validator pulled from the (organization, domain)
+    # constraint. Per-org uniqueness is checked in the view; cross-org
+    # `pending` rows for the same domain are intentionally allowed.
+    domain = serializers.CharField(max_length=255)
 
     class Meta:
         model = OrganizationDomain
@@ -238,6 +243,13 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        # Drop the auto-generated unique-together validator: `organization`
+        # is not in the serializer (set in perform_create), so DRF falls
+        # back to validating uniqueness on `domain` alone — which is wrong
+        # because we *do* allow the same domain to coexist as pending
+        # claims across orgs. Per-org uniqueness is enforced at the view
+        # layer (and ultimately by the DB constraint).
+        validators = []
 
     def validate_domain(self, value: str) -> str:
         normalized = (value or "").strip().lower()

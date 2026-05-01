@@ -39,7 +39,9 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.core.email import send_branded_email
 from apps.core.throttling import SignupCheckThrottle
 
+from . import services
 from .models import (
+    OrganizationDomain,
     OrgJoinRequest,
     OTPCode,
     Organization,
@@ -197,6 +199,23 @@ def _notify_admins_of_join_request(
     )
 
 
+def _find_matching_routing_org(domain: str) -> Organization | None:
+    """Return the verified-email-routing org that owns `domain`, if any."""
+    if not domain or is_public_email_domain(domain):
+        return None
+    row = (
+        OrganizationDomain.objects.select_related("organization")
+        .filter(
+            domain=domain,
+            is_email_routing=True,
+            status=OrganizationDomain.Status.VERIFIED,
+            organization__is_active=True,
+        )
+        .first()
+    )
+    return row.organization if row else None
+
+
 def _resolve_next_step(user: User) -> dict[str, Any]:
     """Decide what the signup UI should do next for this verified user.
 
@@ -214,19 +233,14 @@ def _resolve_next_step(user: User) -> dict[str, Any]:
         }
 
     domain = extract_email_domain(user.email)
-    if domain and not is_public_email_domain(domain):
-        match = (
-            Organization.objects.filter(email_domain=domain, is_active=True)
-            .order_by("created_at")
-            .first()
-        )
-        if match:
-            return {
-                "next_step": "join_request",
-                "org_id": str(match.id),
-                "org_name": match.name,
-                "domain": domain,
-            }
+    match = _find_matching_routing_org(domain)
+    if match:
+        return {
+            "next_step": "join_request",
+            "org_id": str(match.id),
+            "org_name": match.name,
+            "domain": domain,
+        }
     return {"next_step": "create_org", "domain": domain or ""}
 
 
@@ -475,6 +489,25 @@ class SignupCreateOrgView(APIView):
         user.is_staff = True
         user.save(update_fields=["organization", "role", "is_staff"])
 
+        # Auto-verify the founder's email domain via the new model. Best-
+        # effort: a public email or a domain already verified by another
+        # org just leaves the row out — the legacy `email_domain` field
+        # is still set above for read-back during the deprecation window.
+        if email_domain:
+            try:
+                services.try_admin_email_autoverify(
+                    organization=org,
+                    domain=email_domain,
+                    is_email_routing=True,
+                )
+            except services.DomainVerificationError as exc:
+                logger.info(
+                    "Signup: skipped auto-verify of %s for %s (%s)",
+                    email_domain,
+                    org.slug,
+                    exc,
+                )
+
         _record_signup_success(request)
         _send_welcome_email(user, org)
         logger.info("Signup: created org %s for %s", org.slug, user.email)
@@ -531,13 +564,7 @@ class SignupRequestJoinView(APIView):
             return over
 
         domain = extract_email_domain(user.email)
-        match = None
-        if domain and not is_public_email_domain(domain):
-            match = (
-                Organization.objects.filter(email_domain=domain, is_active=True)
-                .order_by("created_at")
-                .first()
-            )
+        match = _find_matching_routing_org(domain)
         if not match:
             return Response(
                 {
@@ -653,11 +680,7 @@ class CheckDomainView(APIView):
         if is_public_email_domain(domain):
             return Response({"matches_org": False, "reason": "public_domain"})
 
-        org = (
-            Organization.objects.filter(email_domain=domain, is_active=True)
-            .order_by("created_at")
-            .first()
-        )
+        org = _find_matching_routing_org(domain)
         if org:
             return Response(
                 {

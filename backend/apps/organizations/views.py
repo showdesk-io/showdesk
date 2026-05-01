@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from apps.core.email import send_branded_email
 from apps.core.permissions import IsPlatformAdmin, get_active_org
 
+from . import services
 from .models import (
     Organization,
     OrganizationDomain,
@@ -198,11 +199,17 @@ class UserViewSet(viewsets.ModelViewSet):
 
 
 class OrganizationDomainViewSet(viewsets.ModelViewSet):
-    """CRUD for the active org's verified/pending domains (admin-only writes).
+    """CRUD + verification actions for the active org's domains.
 
-    Verification (admin_email auto-verify and DNS challenge) lives in a
-    separate action that lands in PR 3 — this PR only exposes the data
-    model so it can be backfilled and listed.
+    Create routes through one of two verification paths based on the
+    `verification_method` in the request body:
+      - admin_email: synchronous auto-verify (an admin must already
+        have a verified email on the domain). Refused if the domain is
+        already verified by another org.
+      - dns_txt: row created in `pending` state with a fresh token. The
+        admin posts the TXT record and calls POST /verify/.
+      - omitted: legacy "create as pending without method" — the admin
+        can pick a method and trigger verify later.
     """
 
     serializer_class = OrganizationDomainSerializer
@@ -226,7 +233,66 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
         if (forbidden := self._check_admin()) is not None:
             return forbidden
-        return super().create(request, *args, **kwargs)
+
+        org = get_active_org(request)
+        if not org:
+            return Response(
+                {"error": "No active organization."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Default to DNS challenge: it's available to every admin and gives
+        # the row an actionable verification path. admin_email is a
+        # shortcut for the common case where the requester's own email
+        # already proves ownership.
+        method = (request.data.get("verification_method") or "").strip()
+        if method == OrganizationDomain.VerificationMethod.ADMIN_EMAIL:
+            return self._create_with_admin_email(request, org)
+        return self._create_with_dns_challenge(request, org)
+
+    def _create_with_admin_email(self, request, org):  # noqa: ANN001, ANN201
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            row = services.try_admin_email_autoverify(
+                organization=org,
+                domain=serializer.validated_data["domain"],
+                is_branding=serializer.validated_data.get("is_branding", False),
+                is_email_routing=serializer.validated_data.get(
+                    "is_email_routing", True
+                ),
+            )
+        except services.DomainVerificationError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            self.get_serializer(row).data, status=status.HTTP_201_CREATED
+        )
+
+    def _create_with_dns_challenge(self, request, org):  # noqa: ANN001, ANN201
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        domain = serializer.validated_data["domain"]
+        if OrganizationDomain.objects.filter(
+            organization=org, domain=domain
+        ).exists():
+            return Response(
+                {"detail": "Domain already exists for this organization."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        row = services.start_dns_challenge(
+            organization=org,
+            domain=domain,
+            is_branding=serializer.validated_data.get("is_branding", False),
+            is_email_routing=serializer.validated_data.get(
+                "is_email_routing", False
+            ),
+        )
+        return Response(
+            self.get_serializer(row).data, status=status.HTTP_201_CREATED
+        )
 
     def update(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
         if (forbidden := self._check_admin()) is not None:
@@ -246,6 +312,62 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:  # noqa: ANN001
         org = get_active_org(self.request)
         serializer.save(organization=org)
+
+    @action(detail=True, methods=["post"])
+    def verify(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Run a verification check on a pending row.
+
+        For DNS rows, performs a synchronous TXT lookup and either
+        promotes the row to verified (transferring ownership if needed)
+        or returns the still-pending state with refreshed instructions.
+        """
+        if (forbidden := self._check_admin()) is not None:
+            return forbidden
+
+        row = self.get_object()
+        if row.status == OrganizationDomain.Status.VERIFIED:
+            return Response(self.get_serializer(row).data)
+
+        if row.verification_method != OrganizationDomain.VerificationMethod.DNS_TXT:
+            return Response(
+                {
+                    "detail": "Only DNS-challenge rows can be verified here.",
+                    "code": "wrong_method",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if services.perform_dns_check(row):
+            row.refresh_from_db()
+            return Response(self.get_serializer(row).data)
+
+        row.refresh_from_db()
+        return Response(
+            {
+                "detail": "TXT record not found yet. DNS can take a few minutes "
+                "to propagate.",
+                "code": "still_pending",
+                "domain": self.get_serializer(row).data,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=["post"], url_path="regenerate-token")
+    def regenerate_token(self, request, pk=None):  # noqa: ANN001, ANN201
+        """Issue a fresh DNS verification token (invalidates the old one)."""
+        if (forbidden := self._check_admin()) is not None:
+            return forbidden
+        row = self.get_object()
+        if row.status == OrganizationDomain.Status.VERIFIED:
+            return Response(
+                {
+                    "detail": "Cannot regenerate token on a verified row.",
+                    "code": "already_verified",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        services.regenerate_dns_token(row)
+        return Response(self.get_serializer(row).data)
 
 
 class TeamViewSet(viewsets.ModelViewSet):
