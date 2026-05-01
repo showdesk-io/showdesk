@@ -29,7 +29,6 @@ class OrganizationFactory(factory.django.DjangoModelFactory):
 
     name = factory.Sequence(lambda n: f"Test Org {n}")
     slug = factory.Sequence(lambda n: f"test-org-{n}")
-    domain = factory.LazyAttribute(lambda o: f"{o.slug}.example.com")
     is_active = True
     widget_color = "#6366F1"
     widget_position = "bottom-right"

@@ -1416,12 +1416,10 @@ function OrganizationTab({ isAdmin }: { isAdmin: boolean }) {
   });
 
   const [name, setName] = useState("");
-  const [domain, setDomain] = useState("");
   const [initialized, setInitialized] = useState(false);
 
   if (org && !initialized) {
     setName(org.name);
-    setDomain(org.domain);
     setInitialized(true);
   }
 
@@ -1476,24 +1474,6 @@ function OrganizationTab({ isAdmin }: { isAdmin: boolean }) {
             />
           </div>
 
-          <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">
-              Primary domain
-            </label>
-            <input
-              type="text"
-              value={domain}
-              onChange={(e) => setDomain(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              placeholder="example.com"
-              disabled={!isAdmin}
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              Display-only — the verified domains below drive branding and
-              email routing.
-            </p>
-          </div>
-
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">
@@ -1522,7 +1502,7 @@ function OrganizationTab({ isAdmin }: { isAdmin: boolean }) {
 
         {isAdmin && (
           <button
-            onClick={() => updateMutation.mutate({ name, domain })}
+            onClick={() => updateMutation.mutate({ name })}
             disabled={updateMutation.isPending}
             className="mt-6 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50"
           >

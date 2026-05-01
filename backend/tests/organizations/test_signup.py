@@ -25,12 +25,8 @@ from tests.factories import AdminFactory, OrganizationFactory, UserFactory
 
 
 def _org_with_routing_domain(slug: str, name: str, domain: str) -> Organization:
-    """Build an org wired up for the email-routing flow.
-
-    Sets the legacy `email_domain` field AND the new OrganizationDomain row
-    so signup routing finds it during the deprecation window.
-    """
-    org = OrganizationFactory(slug=slug, name=name, email_domain=domain)
+    """Build an org with a verified email-routing domain row."""
+    org = OrganizationFactory(slug=slug, name=name)
     OrganizationDomain.objects.create(
         organization=org,
         domain=domain,
@@ -169,7 +165,9 @@ class TestSignupVerifyOTP:
     def test_verify_with_public_domain_does_not_match_join_request(
         self, api_client
     ) -> None:
-        OrganizationFactory(slug="weird", email_domain="gmail.com")
+        # Even if some org somehow has gmail.com configured, public webmail
+        # is excluded from the routing-domain lookup.
+        OrganizationFactory(slug="weird")
         data = _request_and_verify(api_client, "alice@gmail.com")
         assert data["next_step"] == "create_org"
         assert data["domain"] == "gmail.com"
@@ -215,13 +213,20 @@ class TestSignupCreateOrg:
         )
         assert response.status_code == status.HTTP_201_CREATED, response.data
         org = Organization.objects.get(slug="brand-new")
-        assert org.email_domain == "brand-new.com"
+        assert response.data["email_domain"] == "brand-new.com"
+        assert response.data["email_domain_status"] == "verified"
+        # Founder's domain auto-verified into a routing row.
+        assert org.domains.filter(
+            domain="brand-new.com",
+            is_email_routing=True,
+            status=OrganizationDomain.Status.VERIFIED,
+        ).exists()
         user = User.objects.get(email="alice@brand-new.com")
         assert user.organization == org
         assert user.role == User.Role.ADMIN
         assert user.is_staff is True
 
-    def test_create_org_does_not_set_email_domain_for_public_email(
+    def test_create_org_skips_domain_for_public_email(
         self, api_client
     ) -> None:
         data = _request_and_verify(api_client, "alice@gmail.com")
@@ -232,7 +237,31 @@ class TestSignupCreateOrg:
         )
         assert response.status_code == status.HTTP_201_CREATED
         org = Organization.objects.get(slug="indie")
-        assert org.email_domain == ""
+        # No routing row created for public webmail.
+        assert not org.domains.filter(is_email_routing=True).exists()
+        assert response.data["email_domain"] == ""
+
+    def test_create_org_with_custom_email_domain_starts_dns_challenge(
+        self, api_client
+    ) -> None:
+        data = _request_and_verify(api_client, "alice@personal.io")
+        client = _auth_client(data)
+        response = client.post(
+            "/api/v1/auth/signup/create-org/",
+            {
+                "org_name": "Acme",
+                "org_slug": "acme",
+                "email_domain": "acme-corp.fr",
+            },
+        )
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        assert response.data["email_domain"] == "acme-corp.fr"
+        assert response.data["email_domain_status"] == "pending_dns"
+        org = Organization.objects.get(slug="acme")
+        row = org.domains.get(domain="acme-corp.fr")
+        assert row.status == OrganizationDomain.Status.PENDING
+        assert row.verification_method == OrganizationDomain.VerificationMethod.DNS_TXT
+        assert row.verification_token != ""
 
     def test_create_org_rejects_taken_slug(self, api_client) -> None:
         OrganizationFactory(slug="taken")
@@ -346,7 +375,7 @@ class TestSignupRequestJoin:
         assert response.data["code"] == "no_match"
 
     def test_request_join_public_domain(self, api_client) -> None:
-        OrganizationFactory(slug="weird", email_domain="gmail.com")
+        OrganizationFactory(slug="weird")
         data = _request_and_verify(api_client, "alice@gmail.com")
         client = _auth_client(data)
         response = client.post("/api/v1/auth/signup/request-join/")
@@ -452,7 +481,7 @@ class TestCheckDomain:
         assert response.data["matches_org"] is False
 
     def test_public_email_provider(self, api_client) -> None:
-        OrganizationFactory(slug="weird", email_domain="gmail.com")
+        OrganizationFactory(slug="weird")
         response = api_client.get(
             "/api/v1/auth/check-domain/?email=alice@gmail.com"
         )

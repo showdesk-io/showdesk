@@ -428,10 +428,19 @@ class SignupStateView(APIView):
 
 
 class CreateOrgSerializer(serializers.Serializer):
-    """Validate the wizard create-org payload."""
+    """Validate the wizard create-org payload.
+
+    `email_domain` is optional. When omitted, defaults to the founder's
+    own email domain (auto-verified). When set to a different domain,
+    we still create the org but the domain row is created as pending
+    DNS-challenge — the founder finishes verification from Settings.
+    """
 
     org_name = serializers.CharField(max_length=255)
     org_slug = serializers.CharField(max_length=50)
+    email_domain = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
 
 
 class SignupCreateOrgView(APIView):
@@ -472,16 +481,22 @@ class SignupCreateOrgView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        domain = extract_email_domain(request.user.email)
-        email_domain = (
-            domain if domain and not is_public_email_domain(domain) else ""
+        founder_domain = extract_email_domain(request.user.email)
+        # Client-provided email_domain wins; default to the founder's
+        # own domain (skipping public webmail). Empty value means "skip".
+        requested_domain = (
+            (serializer.validated_data.get("email_domain") or "")
+            .strip()
+            .lower()
         )
+        if not requested_domain:
+            requested_domain = (
+                founder_domain
+                if founder_domain and not is_public_email_domain(founder_domain)
+                else ""
+            )
 
-        org = Organization.objects.create(
-            name=org_name,
-            slug=org_slug,
-            email_domain=email_domain,
-        )
+        org = Organization.objects.create(name=org_name, slug=org_slug)
 
         user = request.user
         user.organization = org
@@ -489,24 +504,35 @@ class SignupCreateOrgView(APIView):
         user.is_staff = True
         user.save(update_fields=["organization", "role", "is_staff"])
 
-        # Auto-verify the founder's email domain via the new model. Best-
-        # effort: a public email or a domain already verified by another
-        # org just leaves the row out — the legacy `email_domain` field
-        # is still set above for read-back during the deprecation window.
-        if email_domain:
-            try:
-                services.try_admin_email_autoverify(
+        domain_status: str | None = None
+        if requested_domain:
+            if requested_domain == founder_domain and not is_public_email_domain(
+                requested_domain
+            ):
+                # Founder's own domain — auto-verify if eligible.
+                try:
+                    services.try_admin_email_autoverify(
+                        organization=org,
+                        domain=requested_domain,
+                        is_email_routing=True,
+                    )
+                    domain_status = "verified"
+                except services.DomainVerificationError as exc:
+                    logger.info(
+                        "Signup: auto-verify of %s for %s skipped (%s)",
+                        requested_domain,
+                        org.slug,
+                        exc,
+                    )
+            elif not is_public_email_domain(requested_domain):
+                # Different domain (or admin chose a custom one) — start
+                # a DNS challenge so the founder can finish from Settings.
+                services.start_dns_challenge(
                     organization=org,
-                    domain=email_domain,
+                    domain=requested_domain,
                     is_email_routing=True,
                 )
-            except services.DomainVerificationError as exc:
-                logger.info(
-                    "Signup: skipped auto-verify of %s for %s (%s)",
-                    email_domain,
-                    org.slug,
-                    exc,
-                )
+                domain_status = "pending_dns"
 
         _record_signup_success(request)
         _send_welcome_email(user, org)
@@ -520,6 +546,8 @@ class SignupCreateOrgView(APIView):
                     "slug": org.slug,
                     "name": org.name,
                 },
+                "email_domain": requested_domain,
+                "email_domain_status": domain_status,
             },
             status=status.HTTP_201_CREATED,
         )

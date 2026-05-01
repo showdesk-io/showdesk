@@ -154,9 +154,6 @@ function OrganizationsPanel() {
                     <div className="text-sm font-medium text-gray-900">
                       {org.name}
                     </div>
-                    {org.domain && (
-                      <div className="text-xs text-gray-500">{org.domain}</div>
-                    )}
                   </td>
                   <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
                     {org.slug}
@@ -269,7 +266,6 @@ function CreateOrganizationModal({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [domain, setDomain] = useState("");
 
   const createMutation = useMutation({
     mutationFn: createPlatformOrganization,
@@ -290,7 +286,7 @@ function CreateOrganizationModal({ onClose }: { onClose: () => void }) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    createMutation.mutate({ name, slug, domain: domain || undefined });
+    createMutation.mutate({ name, slug });
   };
 
   return (
@@ -299,6 +295,10 @@ function CreateOrganizationModal({ onClose }: { onClose: () => void }) {
         <h2 className="mb-4 text-lg font-semibold text-gray-900">
           New Organization
         </h2>
+        <p className="mb-4 text-xs text-gray-500">
+          Add domains for branding or email routing from the org's Settings
+          page after creation.
+        </p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700">
@@ -322,18 +322,6 @@ function CreateOrganizationModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setSlug(e.target.value)}
               required
               pattern="[a-z0-9-]+"
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Domain (optional)
-            </label>
-            <input
-              type="text"
-              value={domain}
-              onChange={(e) => setDomain(e.target.value)}
-              placeholder="example.com"
               className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
             />
           </div>
@@ -405,7 +393,6 @@ function OrganizationDetailPanel({
           {/* Info */}
           <div className="grid grid-cols-2 gap-4">
             <InfoItem label="Slug" value={org.slug} />
-            <InfoItem label="Domain" value={org.domain || "—"} />
             <InfoItem
               label="Status"
               value={org.is_active ? "Active" : "Suspended"}

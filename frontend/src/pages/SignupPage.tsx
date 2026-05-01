@@ -70,6 +70,10 @@ export function SignupPage() {
   // Email domain auto-derived by the backend from the verified email. Empty
   // string means a public webmail provider (gmail, etc.) — no auto-routing.
   const [signupDomain, setSignupDomain] = useState("");
+  // Editable override for the email_domain. Defaults to signupDomain on
+  // mount but the founder can swap to any custom domain — that path
+  // creates a pending DNS challenge instead of auto-verifying.
+  const [emailDomainOverride, setEmailDomainOverride] = useState("");
 
   const [isLoading, setIsLoading] = useState(false);
   const [resumeChecked, setResumeChecked] = useState(false);
@@ -86,6 +90,7 @@ export function SignupPage() {
       .then((data) => {
         setEmail(data.user.email);
         setSignupDomain(data.domain || "");
+        setEmailDomainOverride(data.domain || "");
         if (data.next_step === "has_org") {
           navigate("/", { replace: true });
           return;
@@ -165,6 +170,7 @@ export function SignupPage() {
       const data = await signupVerifyOTP(email, code);
       setTokens(data.access, data.refresh);
       setSignupDomain(data.domain || "");
+      setEmailDomainOverride(data.domain || "");
       if (data.next_step === "has_org") {
         navigate("/");
         return;
@@ -216,7 +222,16 @@ export function SignupPage() {
     if (!orgName.trim() || !orgSlug || slugResult?.available === false) return;
     setIsLoading(true);
     try {
-      await signupCreateOrg({ org_name: orgName, org_slug: orgSlug });
+      const data = await signupCreateOrg({
+        org_name: orgName,
+        org_slug: orgSlug,
+        email_domain: emailDomainOverride.trim().toLowerCase() || undefined,
+      });
+      if (data.email_domain_status === "pending_dns") {
+        toast.success(
+          `Workspace created. Verify ${data.email_domain} via DNS in Settings.`,
+        );
+      }
       navigate("/onboarding");
     } catch (err) {
       if (
@@ -544,15 +559,28 @@ export function SignupPage() {
               <input
                 id="emailDomain"
                 type="text"
-                value={signupDomain || "(none — public webmail)"}
-                readOnly
-                disabled
-                className="w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-500"
+                value={emailDomainOverride}
+                onChange={(e) =>
+                  setEmailDomainOverride(
+                    e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ""),
+                  )
+                }
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                placeholder={signupDomain || "acme.com"}
               />
               <p className="mt-1.5 text-xs text-gray-500">
-                {signupDomain
-                  ? `Teammates signing up with @${signupDomain} will be auto-routed to your workspace.`
-                  : "Your email is from a public provider, so we can't auto-route teammates. You can add a custom email domain later in Settings."}
+                {(() => {
+                  const v = emailDomainOverride.trim();
+                  if (!v) {
+                    return signupDomain
+                      ? `Defaults to ${signupDomain}. Teammates with @${signupDomain} will be auto-routed.`
+                      : "Optional. Add later in Settings (DNS verification required).";
+                  }
+                  if (v === signupDomain) {
+                    return `Auto-verified from your email. Teammates with @${v} will be auto-routed.`;
+                  }
+                  return `Different from your email — you'll verify @${v} via DNS in Settings after creation.`;
+                })()}
               </p>
             </div>
 

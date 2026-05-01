@@ -24,7 +24,6 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "slug",
-            "domain",
             "logo",
             "api_token",
             "widget_secret",
@@ -35,7 +34,6 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "video_expiration_days",
             "video_max_duration_seconds",
             "agent_count",
-            "email_domain",
             "onboarding_completed_at",
             "onboarding_step",
             "created_at",
@@ -45,7 +43,6 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "id",
             "api_token",
             "widget_secret",
-            "email_domain",
             "created_at",
             "updated_at",
         ]
@@ -125,7 +122,6 @@ class PlatformOrganizationListSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "slug",
-            "domain",
             "is_active",
             "agent_count",
             "ticket_count",
@@ -153,7 +149,6 @@ class PlatformOrganizationDetailSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "slug",
-            "domain",
             "logo",
             "api_token",
             "widget_secret",
@@ -191,7 +186,6 @@ class PlatformOrganizationCreateSerializer(serializers.ModelSerializer):
         fields = [
             "name",
             "slug",
-            "domain",
         ]
 
 

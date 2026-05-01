@@ -10,7 +10,6 @@ export interface Organization {
   id: string;
   name: string;
   slug: string;
-  domain: string;
   logo: string | null;
   api_token: string;
   widget_secret: string;
@@ -21,7 +20,6 @@ export interface Organization {
   video_expiration_days: number;
   video_max_duration_seconds: number;
   agent_count: number;
-  email_domain: string;
   onboarding_completed_at: string | null;
   onboarding_step: number;
   created_at: string;
@@ -90,7 +88,6 @@ export interface PlatformOrganization {
   id: string;
   name: string;
   slug: string;
-  domain: string;
   is_active: boolean;
   agent_count: number;
   ticket_count: number;

@@ -84,11 +84,14 @@ export async function fetchSignupState(): Promise<SignupStateResponse> {
 export interface SignupCreateOrgPayload {
   org_name: string;
   org_slug: string;
+  email_domain?: string;
 }
 
 export interface SignupCreateOrgResponse {
   user: User;
   organization: { id: string; slug: string; name: string };
+  email_domain: string;
+  email_domain_status: "verified" | "pending_dns" | null;
 }
 
 export async function signupCreateOrg(

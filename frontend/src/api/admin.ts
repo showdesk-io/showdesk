@@ -40,7 +40,6 @@ export async function fetchPlatformOrganizationDetail(
 export interface CreateOrganizationData {
   name: string;
   slug: string;
-  domain?: string;
 }
 
 export async function createPlatformOrganization(

@@ -414,8 +414,8 @@ class PlatformOrganizationViewSet(viewsets.ModelViewSet):
             qs = qs.filter(
                 Q(name__icontains=search)
                 | Q(slug__icontains=search)
-                | Q(domain__icontains=search)
-            )
+                | Q(domains__domain__icontains=search)
+            ).distinct()
         return qs.order_by("-created_at")
 
     @action(detail=True, methods=["post"])

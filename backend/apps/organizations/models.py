@@ -82,11 +82,6 @@ class Organization(TimestampedModel):
 
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255, unique=True)
-    domain = models.CharField(
-        max_length=255,
-        blank=True,
-        help_text="Primary domain for this organization.",
-    )
     logo = models.ImageField(upload_to="organizations/logos/", blank=True)
     api_token = models.UUIDField(
         default=uuid.uuid4,
@@ -137,15 +132,6 @@ class Organization(TimestampedModel):
     )
 
     # Self-service signup
-    email_domain = models.CharField(
-        max_length=255,
-        blank=True,
-        db_index=True,
-        help_text=(
-            "Email domain of the first admin (excluding public webmail providers). "
-            "Used to auto-route signups from the same domain into a join request."
-        ),
-    )
     onboarding_completed_at = models.DateTimeField(null=True, blank=True)
     onboarding_step = models.PositiveSmallIntegerField(
         default=0,
