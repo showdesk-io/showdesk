@@ -4,8 +4,14 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isAxiosError } from "axios";
 import toast from "react-hot-toast";
 import { fetchAgents, fetchTeams, createTeam, deleteTeam } from "@/api/users";
+import {
+  approveJoinRequest,
+  fetchJoinRequests,
+  rejectJoinRequest,
+} from "@/api/joinRequests";
 import { useCurrentUser } from "@/hooks/useAuth";
 
 export function TeamPage() {
@@ -117,6 +123,8 @@ export function TeamPage() {
           </div>
         </form>
       )}
+
+      {isAdmin && <JoinRequestsPanel />}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Agents */}
@@ -243,6 +251,105 @@ export function TeamPage() {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function JoinRequestsPanel() {
+  const queryClient = useQueryClient();
+  const { data: requests, isLoading } = useQuery({
+    queryKey: ["joinRequests", "pending"],
+    queryFn: () => fetchJoinRequests("pending"),
+  });
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["joinRequests"] });
+    void queryClient.invalidateQueries({ queryKey: ["agents"] });
+  };
+
+  const approveMutation = useMutation({
+    mutationFn: approveJoinRequest,
+    onSuccess: () => {
+      toast.success("Request approved.");
+      invalidate();
+    },
+    onError: (err) => {
+      const data = isAxiosError(err)
+        ? (err.response?.data as { detail?: string; code?: string })
+        : null;
+      if (data?.code === "email_taken") {
+        toast.error(
+          "This email now belongs to another account; the request was auto-rejected.",
+        );
+        invalidate();
+      } else {
+        toast.error(data?.detail || "Failed to approve.");
+      }
+    },
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: rejectJoinRequest,
+    onSuccess: () => {
+      toast.success("Request rejected.");
+      invalidate();
+    },
+    onError: () => toast.error("Failed to reject."),
+  });
+
+  if (isLoading) return null;
+  if (!requests || requests.length === 0) return null;
+
+  return (
+    <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50">
+      <div className="border-b border-amber-200 px-6 py-3">
+        <h2 className="text-sm font-semibold text-amber-900">
+          Pending join requests ({requests.length})
+        </h2>
+        <p className="text-xs text-amber-800">
+          Someone signed up with an email matching your organization's domain.
+          Review and approve to add them as an agent.
+        </p>
+      </div>
+      <div className="divide-y divide-amber-100">
+        {requests.map((r) => {
+          const pending =
+            (approveMutation.isPending &&
+              approveMutation.variables === r.id) ||
+            (rejectMutation.isPending && rejectMutation.variables === r.id);
+          return (
+            <div
+              key={r.id}
+              className="flex items-center gap-4 px-6 py-3"
+            >
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-900">
+                  {r.full_name || r.email}
+                </p>
+                <p className="text-xs text-gray-600">{r.email}</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => rejectMutation.mutate(r.id)}
+                  className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Reject
+                </button>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => approveMutation.mutate(r.id)}
+                  className="rounded-lg bg-primary-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+                >
+                  Approve
+                </button>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

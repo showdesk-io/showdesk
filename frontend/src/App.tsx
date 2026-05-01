@@ -11,12 +11,23 @@ import { AdminPage } from "./pages/AdminPage";
 import { TeamPage } from "./pages/TeamPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SetupPage } from "./pages/SetupPage";
+import { SignupPage } from "./pages/SignupPage";
+import { OnboardingPage } from "./pages/OnboardingPage";
 
 export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/setup" element={<SetupPage />} />
+      <Route path="/signup" element={<SignupPage />} />
+      <Route
+        path="/onboarding"
+        element={
+          <AuthGuard>
+            <OnboardingPage />
+          </AuthGuard>
+        }
+      />
       <Route
         path="/"
         element={

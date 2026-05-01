@@ -21,8 +21,24 @@ export interface Organization {
   video_expiration_days: number;
   video_max_duration_seconds: number;
   agent_count: number;
+  email_domain: string;
+  onboarding_completed_at: string | null;
+  onboarding_step: number;
   created_at: string;
   updated_at: string;
+}
+
+export type JoinRequestStatus = "pending" | "approved" | "rejected";
+
+export interface OrgJoinRequest {
+  id: string;
+  email: string;
+  full_name: string;
+  status: JoinRequestStatus;
+  created_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+  decided_by_email: string | null;
 }
 
 // ---------------------------------------------------------------------------

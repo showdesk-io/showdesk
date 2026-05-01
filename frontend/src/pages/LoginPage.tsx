@@ -7,7 +7,7 @@
  */
 
 import { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { requestOTP, verifyOTP } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";
@@ -107,6 +107,16 @@ export function LoginPage() {
             >
               {isLoading ? "Sending code..." : "Send login code"}
             </button>
+
+            <p className="pt-2 text-center text-sm text-gray-500">
+              No account yet?{" "}
+              <Link
+                to="/signup"
+                className="font-medium text-primary-600 hover:text-primary-700"
+              >
+                Create one
+              </Link>
+            </p>
           </form>
         ) : (
           <form onSubmit={handleVerifyOTP} className="space-y-4">
