@@ -16,6 +16,7 @@ from apps.organizations.signup_views import (
 )
 from apps.organizations.views import (
     JoinRequestViewSet,
+    OrganizationDomainViewSet,
     OrganizationViewSet,
     PlatformOrganizationViewSet,
     TeamViewSet,
@@ -43,6 +44,11 @@ router.register(r"organizations", OrganizationViewSet, basename="organization")
 router.register(r"teams", TeamViewSet, basename="team")
 router.register(r"users", UserViewSet, basename="user")
 router.register(r"join-requests", JoinRequestViewSet, basename="join-request")
+router.register(
+    r"organization-domains",
+    OrganizationDomainViewSet,
+    basename="organization-domain",
+)
 
 # Tickets
 router.register(r"tickets", TicketViewSet, basename="ticket")

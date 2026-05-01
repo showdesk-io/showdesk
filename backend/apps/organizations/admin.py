@@ -4,7 +4,7 @@ from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from .models import Organization, Team, User
+from .models import Organization, OrganizationDomain, Team, User
 
 
 @admin.register(Organization)
@@ -80,6 +80,31 @@ class UserAdmin(BaseUserAdmin):
             },
         ),
     )
+
+
+@admin.register(OrganizationDomain)
+class OrganizationDomainAdmin(admin.ModelAdmin):
+    """Admin for verified/pending organization domains."""
+
+    list_display = [
+        "domain",
+        "organization",
+        "is_branding",
+        "is_email_routing",
+        "status",
+        "verification_method",
+        "verified_at",
+    ]
+    list_filter = ["status", "verification_method", "is_branding", "is_email_routing"]
+    search_fields = ["domain", "organization__slug", "organization__name"]
+    readonly_fields = [
+        "id",
+        "verification_token",
+        "verified_at",
+        "last_check_at",
+        "created_at",
+        "updated_at",
+    ]
 
 
 @admin.register(Team)

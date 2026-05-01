@@ -67,6 +67,9 @@ export function SignupPage() {
   const [orgSlug, setOrgSlug] = useState("");
   const [orgSlugDirty, setOrgSlugDirty] = useState(false);
   const [slugResult, setSlugResult] = useState<CheckSlugResponse | null>(null);
+  // Email domain auto-derived by the backend from the verified email. Empty
+  // string means a public webmail provider (gmail, etc.) — no auto-routing.
+  const [signupDomain, setSignupDomain] = useState("");
 
   const [isLoading, setIsLoading] = useState(false);
   const [resumeChecked, setResumeChecked] = useState(false);
@@ -82,6 +85,7 @@ export function SignupPage() {
     fetchSignupState()
       .then((data) => {
         setEmail(data.user.email);
+        setSignupDomain(data.domain || "");
         if (data.next_step === "has_org") {
           navigate("/", { replace: true });
           return;
@@ -160,6 +164,7 @@ export function SignupPage() {
     try {
       const data = await signupVerifyOTP(email, code);
       setTokens(data.access, data.refresh);
+      setSignupDomain(data.domain || "");
       if (data.next_step === "has_org") {
         navigate("/");
         return;
@@ -283,7 +288,7 @@ export function SignupPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-md rounded-xl bg-white p-8 shadow-lg">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 h-12 w-12 rounded-xl bg-primary-500" />
+          <img src="/logo.svg" alt="Showdesk" className="mx-auto mb-4 h-12 w-12" />
           <h1 className="text-2xl font-bold text-gray-900">{heading}</h1>
           {step === "email" && (
             <p className="mt-1 text-sm text-gray-500">{subheading}</p>
@@ -527,6 +532,28 @@ export function SignupPage() {
                         : "Invalid format (lowercase letters, digits, dashes)"}
                 </p>
               )}
+            </div>
+
+            <div>
+              <label
+                htmlFor="emailDomain"
+                className="mb-1 block text-sm font-medium text-gray-700"
+              >
+                Email domain
+              </label>
+              <input
+                id="emailDomain"
+                type="text"
+                value={signupDomain || "(none — public webmail)"}
+                readOnly
+                disabled
+                className="w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-500"
+              />
+              <p className="mt-1.5 text-xs text-gray-500">
+                {signupDomain
+                  ? `Teammates signing up with @${signupDomain} will be auto-routed to your workspace.`
+                  : "Your email is from a public provider, so we can't auto-route teammates. You can add a custom email domain later in Settings."}
+              </p>
             </div>
 
             <button

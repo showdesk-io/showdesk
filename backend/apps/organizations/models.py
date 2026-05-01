@@ -369,6 +369,115 @@ class OTPCode(models.Model):
         return cls.objects.create(email=email, code=code)
 
 
+class OrganizationDomain(TimestampedModel):
+    """A domain claimed by an organization for branding and/or email routing.
+
+    Two independent purposes:
+      - is_branding:      shown publicly (replaces the legacy `domain` field).
+      - is_email_routing: drives the signup auto-join flow (replaces the
+                          legacy `email_domain` field).
+
+    A row may serve one or both. At least one must be set (DB-checked).
+
+    Verification:
+      - admin_email: an admin in the org has a verified email on this domain.
+                     Only valid for is_email_routing rows. Set automatically
+                     at signup; refused later if the domain is already
+                     verified by another org.
+      - dns_txt:     the org has placed `showdesk-verification=<token>` as
+                     a TXT record on `_showdesk.<domain>`. Required for
+                     branding domains and for any email_routing domain that
+                     does not match the admin's email.
+
+    Ownership transfer: at most one verified row per `domain` exists
+    globally (partial unique index). When org B's DNS challenge succeeds
+    on a domain org A holds, A flips to `failed` and B becomes `verified`.
+    Once verified, a row stays verified forever unless transferred.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        VERIFIED = "verified", "Verified"
+        FAILED = "failed", "Failed"
+
+    class VerificationMethod(models.TextChoices):
+        ADMIN_EMAIL = "admin_email", "Admin email"
+        DNS_TXT = "dns_txt", "DNS TXT"
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="domains",
+    )
+    domain = models.CharField(max_length=255, db_index=True)
+    is_branding = models.BooleanField(default=False)
+    is_email_routing = models.BooleanField(default=False)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    verification_method = models.CharField(
+        max_length=20,
+        choices=VerificationMethod.choices,
+        blank=True,
+        null=True,
+    )
+    verification_token = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text="Random token the admin embeds in the DNS TXT record.",
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
+    last_check_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "domain"],
+                name="unique_org_domain",
+            ),
+            models.UniqueConstraint(
+                fields=["domain"],
+                condition=models.Q(status="verified"),
+                name="unique_verified_domain_globally",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(is_branding=True)
+                | models.Q(is_email_routing=True),
+                name="domain_has_at_least_one_purpose",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["domain", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        purposes = []
+        if self.is_email_routing:
+            purposes.append("routing")
+        if self.is_branding:
+            purposes.append("branding")
+        return f"{self.domain} [{','.join(purposes)}] ({self.status})"
+
+    @staticmethod
+    def generate_token() -> str:
+        """Return a random 32-char hex token for DNS TXT verification."""
+        return secrets.token_hex(16)
+
+    @property
+    def txt_record_name(self) -> str:
+        """The hostname where the admin must place the TXT record."""
+        return f"_showdesk.{self.domain}"
+
+    @property
+    def txt_record_value(self) -> str:
+        """The full TXT record value the admin must publish."""
+        return f"showdesk-verification={self.verification_token}"
+
+
 class OrgJoinRequest(TimestampedModel):
     """A pending request to join an existing organization.
 

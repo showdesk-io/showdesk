@@ -13,9 +13,17 @@ from rest_framework.response import Response
 from apps.core.email import send_branded_email
 from apps.core.permissions import IsPlatformAdmin, get_active_org
 
-from .models import Organization, OrgJoinRequest, OTPCode, Team, User
+from .models import (
+    Organization,
+    OrganizationDomain,
+    OrgJoinRequest,
+    OTPCode,
+    Team,
+    User,
+)
 from .serializers import (
     InviteAgentSerializer,
+    OrganizationDomainSerializer,
     OrganizationSerializer,
     OrgJoinRequestSerializer,
     PlatformOrganizationCreateSerializer,
@@ -187,6 +195,57 @@ class UserViewSet(viewsets.ModelViewSet):
         user.is_active = not user.is_active
         user.save(update_fields=["is_active"])
         return Response(UserSerializer(user).data)
+
+
+class OrganizationDomainViewSet(viewsets.ModelViewSet):
+    """CRUD for the active org's verified/pending domains (admin-only writes).
+
+    Verification (admin_email auto-verify and DNS challenge) lives in a
+    separate action that lands in PR 3 — this PR only exposes the data
+    model so it can be backfilled and listed.
+    """
+
+    serializer_class = OrganizationDomainSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):  # noqa: ANN201
+        org = get_active_org(self.request)
+        if not org:
+            return OrganizationDomain.objects.none()
+        return OrganizationDomain.objects.filter(organization=org)
+
+    def _check_admin(self) -> Response | None:
+        user = self.request.user
+        if user.role != User.Role.ADMIN and not user.is_superuser:
+            return Response(
+                {"error": "Only admins can manage organization domains."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
+    def create(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
+        if (forbidden := self._check_admin()) is not None:
+            return forbidden
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
+        if (forbidden := self._check_admin()) is not None:
+            return forbidden
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
+        if (forbidden := self._check_admin()) is not None:
+            return forbidden
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
+        if (forbidden := self._check_admin()) is not None:
+            return forbidden
+        return super().destroy(request, *args, **kwargs)
+
+    def perform_create(self, serializer) -> None:  # noqa: ANN001
+        org = get_active_org(self.request)
+        serializer.save(organization=org)
 
 
 class TeamViewSet(viewsets.ModelViewSet):
