@@ -20,7 +20,7 @@ import {
   type CheckDomainResponse,
   type CheckSlugResponse,
 } from "@/api/signup";
-import { verifyOTP } from "@/api/auth";
+import { requestOTP, verifyOTP } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";
 
 type Step = "form" | "otp" | "join_requested";
@@ -161,6 +161,23 @@ export function SignupPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleResendCode = async () => {
+    setIsLoading(true);
+    try {
+      await requestOTP(email);
+      toast.success("New code sent — check your email.");
+    } catch {
+      toast.error("Could not resend code. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleStartOver = () => {
+    setStep("form");
+    setCode("");
   };
 
   return (
@@ -359,6 +376,24 @@ export function SignupPage() {
             >
               {isLoading ? "Verifying..." : "Verify and continue"}
             </button>
+
+            <div className="flex items-center justify-between text-sm">
+              <button
+                type="button"
+                onClick={handleStartOver}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                Use a different email
+              </button>
+              <button
+                type="button"
+                onClick={handleResendCode}
+                disabled={isLoading}
+                className="text-primary-600 hover:text-primary-700 disabled:opacity-50"
+              >
+                Resend code
+              </button>
+            </div>
           </form>
         )}
 

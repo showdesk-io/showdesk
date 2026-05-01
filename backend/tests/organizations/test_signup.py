@@ -396,6 +396,63 @@ class TestJoinRequestApproveReject:
 
 
 @pytest.mark.django_db
+class TestSignupSuccessQuota:
+    """Quota counts only successful org-creations / join-requests, not all hits."""
+
+    def test_failed_attempts_do_not_consume_quota(self, api_client) -> None:
+        """A user iterating on slug typos / email checks shouldn't get blocked."""
+        OrganizationFactory(slug="taken")
+        # 8 failed attempts (slug already taken)
+        for _ in range(8):
+            response = api_client.post(
+                "/api/v1/auth/signup/",
+                {
+                    "email": "alice@new.io",
+                    "full_name": "Alice",
+                    "org_name": "X",
+                    "org_slug": "taken",
+                },
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST
+        # 9th attempt with a valid slug should still succeed
+        response = api_client.post(
+            "/api/v1/auth/signup/",
+            {
+                "email": "alice@new.io",
+                "full_name": "Alice",
+                "org_name": "X",
+                "org_slug": "valid-slug",
+            },
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+
+    def test_sixth_successful_signup_is_blocked(self, api_client) -> None:
+        for i in range(5):
+            response = api_client.post(
+                "/api/v1/auth/signup/",
+                {
+                    "email": f"founder{i}@unique-{i}.io",
+                    "full_name": f"Founder {i}",
+                    "org_name": f"Org {i}",
+                    "org_slug": f"org-{i}",
+                },
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+        # 6th success blocked
+        response = api_client.post(
+            "/api/v1/auth/signup/",
+            {
+                "email": "spam@spam.io",
+                "full_name": "Spam",
+                "org_name": "Spam",
+                "org_slug": "spam-org",
+            },
+        )
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        assert response.data["code"] == "signup_quota_exceeded"
+
+
+@pytest.mark.django_db
 class TestInviteEmailUniqueness:
     """The existing invite endpoint now returns 409 (not 400) for duplicate emails."""
 

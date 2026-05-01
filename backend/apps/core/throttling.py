@@ -31,17 +31,6 @@ class WidgetSessionThrottle(AnonRateThrottle):
     rate = "10/minute"
 
 
-class SignupThrottle(AnonRateThrottle):
-    """Rate limit for self-service signup: 5/hour per IP.
-
-    Tight enough to prevent org-spam from a single source, generous
-    enough that a small team signing up together from the same office
-    network does not get blocked.
-    """
-
-    rate = "5/hour"
-
-
 class SignupCheckThrottle(AnonRateThrottle):
     """Rate limit for signup pre-flight checks (slug / domain): 30/minute per IP.
 
@@ -50,3 +39,9 @@ class SignupCheckThrottle(AnonRateThrottle):
     """
 
     rate = "30/minute"
+
+
+# Signup itself is *not* throttled by DRF: validation errors (400/409) would
+# count against the limit and lock out a user who just typoed their slug.
+# Instead, the SignupView counts successful org-creations / join-requests
+# manually via the cache (see signup_views.SUCCESS_RATE_LIMIT).

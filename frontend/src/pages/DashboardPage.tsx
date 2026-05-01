@@ -7,18 +7,23 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { fetchTicketStats } from "@/api/users";
+import { fetchOrganization, fetchTicketStats } from "@/api/users";
 import { useTickets } from "@/hooks/useTickets";
 import { useCurrentUser } from "@/hooks/useAuth";
 import { StatusBadge, PriorityBadge } from "@/components/common/StatusBadge";
 
 export function DashboardPage() {
   const { data: user } = useCurrentUser();
+  const { data: org } = useQuery({
+    queryKey: ["organization"],
+    queryFn: fetchOrganization,
+  });
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ["ticketStats"],
     queryFn: fetchTicketStats,
   });
   const { data: recentTickets } = useTickets({ page: 1 });
+  const showOnboardingNudge = !!org && !org.onboarding_completed_at;
 
   const statCards = [
     {
@@ -57,6 +62,26 @@ export function DashboardPage() {
           Here is what is happening with your tickets today.
         </p>
       </div>
+
+      {showOnboardingNudge && (
+        <div className="mb-6 flex items-center justify-between rounded-xl border border-primary-200 bg-primary-50 px-5 py-4">
+          <div>
+            <p className="text-sm font-semibold text-primary-900">
+              Finish setting up your workspace
+            </p>
+            <p className="mt-0.5 text-xs text-primary-800">
+              Customize your widget, invite teammates, and grab your embed
+              snippet — just a couple of minutes.
+            </p>
+          </div>
+          <Link
+            to="/onboarding"
+            className="ml-4 shrink-0 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600"
+          >
+            Resume setup
+          </Link>
+        </div>
+      )}
 
       {/* Stats cards */}
       <div className="mb-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">

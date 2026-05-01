@@ -387,6 +387,13 @@ non-matching domains can still join, but only through explicit invitation.
 - [ ] P0: Settings > Team -- "Pending join requests" panel for admins (approve/reject
       buttons, requester name + email + submitted date)
 - [ ] P1: Empty-state nudges in dashboard until onboarding is completed
+- [ ] P1: Widget install detection in onboarding step 3 -- after the user copies
+      the snippet, poll the API for the first widget request from their
+      `api_token` (e.g. `Organization.widget_first_seen_at` updated when a widget
+      submit/session call lands). Show a live "Waiting for first ping..." -> "
+      Widget detected!" state. Lets the user verify the integration before
+      finishing the wizard. Skip button stays available so users on a non-public
+      site can move on.
 
 ### Tests
 
@@ -483,7 +490,22 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 - [x] P0: Team management (CRUD, assign agents)
 - [x] P0: Widget configuration (colors, position, embed snippet, token regen)
 - [ ] P1: Widget integration code examples & generator in Settings > Widget (embed snippets for React/Angular/Vue/vanilla JS + backend HMAC generation examples for Node/Python/PHP/Ruby)
-- [ ] P1: Organization branding (logo, primary color, white-label)
+- [ ] P1: Organization branding -- new Settings > Branding tab. Scoped lean for
+      startups, no full white-label.
+      - Backend: `Organization.primary_color` (hex, distinct from `widget_color`
+        so the widget can differ from the dashboard) + `email_from_name`
+        (override the email sender display name, e.g. "Acme Support"). `logo`
+        already exists.
+      - Agent UI: inject `--color-primary` from `org.primary_color` as a CSS
+        custom property at AppLayout mount; sidebar shows `org.logo` (or
+        initials fallback).
+      - End-user emails: `send_branded_email` already routes per-org logo +
+        primary color via `_brand_for(org)`; extend to all ticket lifecycle
+        templates and use `email_from_name` to format the `From:` header.
+      - Settings UI: 3 fields (logo upload + preview + remove, primary color
+        picker, "From name" input). Admin-only.
+      - Out of scope (separate items): full white-label / removing Showdesk
+        mention, custom CSS, per-user theming, custom email domain.
 - [ ] P1: Custom domain for widget/portal
 - [x] P1: Tags & categories management
 - [x] P1: Custom priority management (CRUD, custom colors, per-org)

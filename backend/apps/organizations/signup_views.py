@@ -23,6 +23,7 @@ import logging
 import re
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.utils.text import slugify
 from rest_framework import serializers, status
@@ -32,7 +33,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.email import send_branded_email
-from apps.core.throttling import SignupCheckThrottle, SignupThrottle
+from apps.core.throttling import SignupCheckThrottle
 
 from .models import (
     OrgJoinRequest,
@@ -48,6 +49,14 @@ logger = logging.getLogger(__name__)
 # Slug rules: lowercase ASCII, digits, dashes; 3-50 chars; cannot start/end
 # with a dash. Validated client- and server-side.
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,48}[a-z0-9])?$")
+# Cap *successful* signups (org-created or join-requested) per IP per hour.
+# Failed validation attempts (slug taken, email duplicate, malformed input)
+# are intentionally not counted — they shouldn't penalize a user who is
+# iterating on their form.
+SIGNUP_SUCCESS_LIMIT = 5
+SIGNUP_SUCCESS_WINDOW_SECONDS = 3600
+
+
 _RESERVED_SLUGS = frozenset(
     {
         "admin",
@@ -110,10 +119,15 @@ class SignupView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [SignupThrottle]
+    # NOTE: not using a DRF throttle class — we count *successful* signups
+    # only, so that slug typos and email-already-exists do not lock out
+    # someone who is iterating on the form. See _check_success_quota.
 
     @transaction.atomic
     def post(self, request: Request) -> Response:
+        if (over_quota := self._check_success_quota(request)) is not None:
+            return over_quota
+
         serializer = SignupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -145,8 +159,51 @@ class SignupView(APIView):
             )
 
         if matching_org:
-            return self._create_join_request(matching_org, email, full_name)
-        return self._create_organization(email, full_name, data, domain)
+            response = self._create_join_request(matching_org, email, full_name)
+        else:
+            response = self._create_organization(email, full_name, data, domain)
+
+        if response.status_code in (
+            status.HTTP_201_CREATED,
+            status.HTTP_202_ACCEPTED,
+        ):
+            self._record_signup_success(request)
+        return response
+
+    @staticmethod
+    def _client_ip(request: Request) -> str:
+        forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.META.get("REMOTE_ADDR", "unknown")
+
+    @classmethod
+    def _success_cache_key(cls, request: Request) -> str:
+        return f"signup_success:{cls._client_ip(request)}"
+
+    @classmethod
+    def _check_success_quota(cls, request: Request) -> Response | None:
+        count = cache.get(cls._success_cache_key(request), 0)
+        if count >= SIGNUP_SUCCESS_LIMIT:
+            return Response(
+                {
+                    "detail": (
+                        "Too many accounts created from this network recently. "
+                        "Please try again later."
+                    ),
+                    "code": "signup_quota_exceeded",
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        return None
+
+    @classmethod
+    def _record_signup_success(cls, request: Request) -> None:
+        key = cls._success_cache_key(request)
+        # Re-read to avoid clobbering concurrent increments. We accept a small
+        # race here — worst case the limit is exceeded by 1-2.
+        current = cache.get(key, 0)
+        cache.set(key, current + 1, SIGNUP_SUCCESS_WINDOW_SECONDS)
 
     def _create_organization(
         self,
