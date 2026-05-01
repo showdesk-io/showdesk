@@ -28,6 +28,25 @@ export interface Organization {
   updated_at: string;
 }
 
+export type DomainStatus = "pending" | "verified" | "failed";
+export type DomainVerificationMethod = "admin_email" | "dns_txt";
+
+export interface OrganizationDomain {
+  id: string;
+  domain: string;
+  is_branding: boolean;
+  is_email_routing: boolean;
+  status: DomainStatus;
+  verification_method: DomainVerificationMethod | null;
+  verification_token: string;
+  verified_at: string | null;
+  last_check_at: string | null;
+  txt_record_name: string;
+  txt_record_value: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export type JoinRequestStatus = "pending" | "approved" | "rejected";
 
 export interface OrgJoinRequest {

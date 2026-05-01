@@ -33,6 +33,7 @@ import type { PriorityLevel } from "@/api/priorities";
 import type { CannedResponse } from "@/api/cannedResponses";
 import { AVAILABLE_VARIABLES } from "@/lib/cannedResponseVars";
 import type { Organization, Tag, User, UserRole } from "@/types";
+import { DomainsList } from "@/components/settings/DomainsList";
 
 const tabs = [
   "Agents",
@@ -1443,7 +1444,7 @@ function OrganizationTab({ isAdmin }: { isAdmin: boolean }) {
   }
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-3xl space-y-6">
       <div className="rounded-xl border border-gray-200 bg-white p-6">
         <h2 className="mb-4 text-lg font-semibold text-gray-900">
           Organization Details
@@ -1477,7 +1478,7 @@ function OrganizationTab({ isAdmin }: { isAdmin: boolean }) {
 
           <div>
             <label className="mb-1 block text-sm font-medium text-gray-700">
-              Domain
+              Primary domain
             </label>
             <input
               type="text"
@@ -1487,6 +1488,10 @@ function OrganizationTab({ isAdmin }: { isAdmin: boolean }) {
               placeholder="example.com"
               disabled={!isAdmin}
             />
+            <p className="mt-1 text-xs text-gray-500">
+              Display-only — the verified domains below drive branding and
+              email routing.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -1525,6 +1530,8 @@ function OrganizationTab({ isAdmin }: { isAdmin: boolean }) {
           </button>
         )}
       </div>
+
+      <DomainsList isAdmin={isAdmin} />
     </div>
   );
 }
