@@ -41,7 +41,7 @@ class SignupCheckThrottle(AnonRateThrottle):
     rate = "30/minute"
 
 
-# Signup itself is *not* throttled by DRF: validation errors (400/409) would
-# count against the limit and lock out a user who just typoed their slug.
-# Instead, the SignupView counts successful org-creations / join-requests
-# manually via the cache (see signup_views.SUCCESS_RATE_LIMIT).
+# Signup wizard endpoints (create-org, request-join) are *not* throttled by
+# DRF: validation errors (400/409) would count against the limit and lock out
+# a user who just typoed their slug. Instead, signup_views counts successful
+# org-creations / join-requests manually via the cache.

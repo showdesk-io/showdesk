@@ -8,7 +8,11 @@ from apps.organizations.auth_views import RequestOTPView, VerifyOTPView
 from apps.organizations.signup_views import (
     CheckDomainView,
     CheckSlugView,
-    SignupView,
+    SignupCreateOrgView,
+    SignupRequestJoinView,
+    SignupRequestOTPView,
+    SignupStateView,
+    SignupVerifyOTPView,
 )
 from apps.organizations.views import (
     JoinRequestViewSet,
@@ -72,8 +76,32 @@ urlpatterns = [
     # OTP authentication (passwordless)
     path("auth/request-otp/", RequestOTPView.as_view(), name="request-otp"),
     path("auth/verify-otp/", VerifyOTPView.as_view(), name="verify-otp"),
-    # Self-service signup (public)
-    path("auth/signup/", SignupView.as_view(), name="signup"),
+    # Self-service signup (OTP-first, multi-step)
+    path(
+        "auth/signup/request-otp/",
+        SignupRequestOTPView.as_view(),
+        name="signup-request-otp",
+    ),
+    path(
+        "auth/signup/verify-otp/",
+        SignupVerifyOTPView.as_view(),
+        name="signup-verify-otp",
+    ),
+    path(
+        "auth/signup/create-org/",
+        SignupCreateOrgView.as_view(),
+        name="signup-create-org",
+    ),
+    path(
+        "auth/signup/request-join/",
+        SignupRequestJoinView.as_view(),
+        name="signup-request-join",
+    ),
+    path(
+        "auth/signup/state/",
+        SignupStateView.as_view(),
+        name="signup-state",
+    ),
     path("auth/check-slug/", CheckSlugView.as_view(), name="check-slug"),
     path("auth/check-domain/", CheckDomainView.as_view(), name="check-domain"),
     # JWT refresh (still needed for token rotation)

@@ -334,8 +334,13 @@ class JoinRequestViewSet(
                 {"error": f"Join request is already {join_request.status}."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if User.objects.filter(email__iexact=join_request.email).exists():
-            # The requester signed up elsewhere between request and decision.
+
+        org = join_request.organization
+        existing = User.objects.filter(email__iexact=join_request.email).first()
+
+        if existing and existing.organization_id not in (None, org.id):
+            # The requester created or joined another org between request and
+            # decision. Auto-reject; we cannot move them.
             join_request.status = OrgJoinRequest.Status.REJECTED
             join_request.decided_at = timezone.now()
             join_request.decided_by = request.user
@@ -343,26 +348,37 @@ class JoinRequestViewSet(
             return Response(
                 {
                     "detail": (
-                        "This email is now used by another account; the request "
-                        "was auto-rejected."
+                        "This email now belongs to another organization; the "
+                        "request was auto-rejected."
                     ),
                     "code": "email_taken",
                 },
                 status=status.HTTP_409_CONFLICT,
             )
 
-        org = join_request.organization
-        first_name, _, last_name = (join_request.full_name or "").partition(" ")
-        user = User(
-            email=join_request.email,
-            first_name=first_name,
-            last_name=last_name,
-            role=User.Role.AGENT,
-            organization=org,
-            is_staff=True,
-        )
-        user.set_unusable_password()
-        user.save()
+        if existing:
+            user = existing
+            user.organization = org
+            user.role = User.Role.AGENT
+            user.is_staff = True
+            user.is_active = True
+            if not user.first_name and not user.last_name and join_request.full_name:
+                first_name, _, last_name = join_request.full_name.partition(" ")
+                user.first_name = first_name
+                user.last_name = last_name
+            user.save()
+        else:
+            first_name, _, last_name = (join_request.full_name or "").partition(" ")
+            user = User(
+                email=join_request.email,
+                first_name=first_name,
+                last_name=last_name,
+                role=User.Role.AGENT,
+                organization=org,
+                is_staff=True,
+            )
+            user.set_unusable_password()
+            user.save()
 
         join_request.status = OrgJoinRequest.Status.APPROVED
         join_request.decided_at = timezone.now()

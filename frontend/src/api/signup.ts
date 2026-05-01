@@ -1,11 +1,13 @@
 /**
- * Public signup endpoints.
+ * Public signup endpoints (OTP-first flow).
  *
- * No JWT — these are reachable from /signup before the user has any session.
- * Throttled at 5/h/IP on the server, so the form should debounce.
+ * Steps 1-2 are unauthenticated; steps 3a/3b run authenticated, after
+ * /signup/verify-otp/ has issued JWT tokens.
  */
 
 import axios from "axios";
+import { apiClient } from "./client";
+import type { AuthTokens, User } from "@/types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 
@@ -14,36 +16,117 @@ const publicClient = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-export interface SignupPayload {
+// ---------------------------------------------------------------------------
+// Step 1: request OTP
+// ---------------------------------------------------------------------------
+
+export interface SignupRequestOTPPayload {
   email: string;
-  full_name: string;
-  org_name?: string;
-  org_slug?: string;
+  full_name?: string;
 }
 
-export interface SignupCreatedResponse {
-  status: "created";
-  email: string;
+export async function signupRequestOTP(
+  payload: SignupRequestOTPPayload,
+): Promise<void> {
+  await publicClient.post("/auth/signup/request-otp/", payload);
+}
+
+// ---------------------------------------------------------------------------
+// Step 2: verify OTP
+// ---------------------------------------------------------------------------
+
+export type SignupNextStep = "has_org" | "join_request" | "create_org";
+
+export interface SignupVerifyOTPResponse extends AuthTokens {
+  user: User;
+  next_step: SignupNextStep;
+  domain?: string;
+  org_id?: string;
+  org_slug?: string;
+  org_name?: string;
+}
+
+export async function signupVerifyOTP(
+  email: string,
+  code: string,
+): Promise<SignupVerifyOTPResponse> {
+  const response = await publicClient.post<SignupVerifyOTPResponse>(
+    "/auth/signup/verify-otp/",
+    { email, code },
+  );
+  return response.data;
+}
+
+// ---------------------------------------------------------------------------
+// Resume helper: where in the wizard should this user be?
+// ---------------------------------------------------------------------------
+
+export interface SignupStateResponse {
+  user: User;
+  next_step: SignupNextStep;
+  domain?: string;
+  org_id?: string;
+  org_slug?: string;
+  org_name?: string;
+}
+
+export async function fetchSignupState(): Promise<SignupStateResponse> {
+  const response = await apiClient.get<SignupStateResponse>(
+    "/auth/signup/state/",
+  );
+  return response.data;
+}
+
+// ---------------------------------------------------------------------------
+// Step 3a: create org via wizard (authenticated)
+// ---------------------------------------------------------------------------
+
+export interface SignupCreateOrgPayload {
+  org_name: string;
+  org_slug: string;
+}
+
+export interface SignupCreateOrgResponse {
+  user: User;
   organization: { id: string; slug: string; name: string };
 }
 
-export interface SignupJoinRequestedResponse {
-  status: "join_requested";
-  email: string;
-  organization: { name: string };
-}
-
-export type SignupResponse =
-  | SignupCreatedResponse
-  | SignupJoinRequestedResponse;
-
-export async function signup(payload: SignupPayload): Promise<SignupResponse> {
-  const response = await publicClient.post<SignupResponse>(
-    "/auth/signup/",
+export async function signupCreateOrg(
+  payload: SignupCreateOrgPayload,
+): Promise<SignupCreateOrgResponse> {
+  const response = await apiClient.post<SignupCreateOrgResponse>(
+    "/auth/signup/create-org/",
     payload,
   );
   return response.data;
 }
+
+// ---------------------------------------------------------------------------
+// Step 3b: request to join an existing org (authenticated)
+// ---------------------------------------------------------------------------
+
+export interface SignupRequestJoinPayload {
+  full_name?: string;
+}
+
+export interface SignupRequestJoinResponse {
+  status: "join_requested";
+  organization: { id: string; name: string };
+}
+
+export async function signupRequestJoin(
+  payload: SignupRequestJoinPayload = {},
+): Promise<SignupRequestJoinResponse> {
+  const response = await apiClient.post<SignupRequestJoinResponse>(
+    "/auth/signup/request-join/",
+    payload,
+  );
+  return response.data;
+}
+
+// ---------------------------------------------------------------------------
+// Live form helpers (unchanged)
+// ---------------------------------------------------------------------------
 
 export interface CheckSlugResponse {
   available: boolean;

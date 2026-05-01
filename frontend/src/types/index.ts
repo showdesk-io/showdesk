@@ -52,7 +52,7 @@ export interface User {
   email: string;
   first_name: string;
   last_name: string;
-  organization: string;
+  organization: string | null;
   role: UserRole;
   avatar: string | null;
   phone: string;
