@@ -7,5 +7,8 @@ Ticket: {{ ticket.title }} ({{ ticket.reference }})
 ---
 {{ message_body }}
 ---
-
+{% if attachments %}
+Attachments:
+{% for a in attachments %}- {{ a.filename }} ({{ a.size|filesizeformat }}){% if a.url %} {{ a.url }}{% endif %}
+{% endfor %}{% endif %}
 {{ cta_label }}: {{ ticket_url }}{% endblock %}

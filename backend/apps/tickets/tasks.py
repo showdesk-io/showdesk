@@ -173,6 +173,15 @@ def send_ticket_reply_email(self, message_id: str) -> None:  # noqa: ANN001
 
     initial = (author_label[:1] or "?").upper()
 
+    attachments = [
+        {
+            "filename": att.filename,
+            "url": att.file.url if att.file else "",
+            "size": att.file_size,
+        }
+        for att in message.attachments.all()
+    ]
+
     try:
         send_branded_email(
             template="ticket_reply",
@@ -187,6 +196,7 @@ def send_ticket_reply_email(self, message_id: str) -> None:  # noqa: ANN001
                 "author_initial": initial,
                 "intro": intro,
                 "cta_label": cta_label,
+                "attachments": attachments,
             },
         )
         logger.info(

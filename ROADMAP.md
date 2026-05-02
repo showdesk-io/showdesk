@@ -478,9 +478,25 @@ Goal: a consistent, branded, HTML-rich rendering with a plain-text fallback, sha
 - [~] All `send_mail()` call sites refactored to use the helper -- 18 of 19 done; the lone holdout is `apps/core/management/commands/sendtestemail.py` (intentional, dev-only command using stock `send_mail`).
 - [x] CTA buttons (`backend/templates/emails/_button.html`) rendered as bulletproof table-based HTML with inline styles + bgcolor fallback.
 - [x] Per-org branding hook: `_brand_for(org)` reads `Organization.logo` (ImageField) and primary color, with graceful fallback to `BRAND_*` defaults. Per-org logos are also embedded as CID.
-- [ ] Email preview tool in Django admin (render any template with sample data, view in Mailpit during dev) -- still missing.
-- [x] Tests: snapshot-style coverage in `backend/tests/core/test_email.py` (4 cases verifying HTML alternative + plain-text body for the helper and ticket emails).
-- [ ] Ticket reply email: render the message body as HTML (preserve line breaks, basic formatting, attachment list) -- still TODO.
+- [x] Email preview tool -- shipped as a `preview_email` management
+      command (`python manage.py preview_email --list` /
+      `preview_email <template> --to <addr> [--org <slug>]`). Renders
+      every branded template with sample data through `send_branded_email`
+      (so output matches production exactly: CTA buttons, From: header,
+      per-org overrides). Lands in Mailpit in dev. Implemented as a
+      command rather than a custom admin URL because nothing else is
+      wired into the Django admin yet, and command output is friendlier
+      for designers iterating in CI / scripted snapshots.
+- [x] Tests: snapshot-style coverage in `backend/tests/core/test_email.py`
+      (12 cases now: HTML alternative + plain-text body, From: header
+      branding, primary_color overrides, ticket-reply linebreaks +
+      autolink + attachment list). Plus `test_preview_email_command.py`
+      parametrised over every sample template (16 cases).
+- [x] Ticket reply email: message body rendered as HTML --
+      `{{ message_body|urlize|linebreaksbr }}` so newlines become `<br>`
+      and bare URLs become clickable; attachments rendered as a bordered
+      list with name + clickable link + filesizeformat-formatted size,
+      pluralised header. Plain-text fallback also lists attachments.
 
 ### Agent Groups & Management
 

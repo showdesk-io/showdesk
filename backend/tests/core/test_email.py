@@ -17,6 +17,7 @@ from apps.tickets.tasks import (
 )
 from tests.factories import (
     OrganizationFactory,
+    TicketAttachmentFactory,
     TicketFactory,
     TicketMessageFactory,
     UserFactory,
@@ -198,6 +199,56 @@ def test_from_header_falls_back_to_brand_name_when_email_from_name_is_blank():
     # No org override -> default brand name (Showdesk) wraps the address.
     from_header = mail.outbox[0].from_email
     assert "Showdesk" in from_header or from_header.startswith("Showdesk")
+
+
+def test_ticket_reply_email_renders_body_with_line_breaks_and_links():
+    """Plain-text ``\\n`` becomes ``<br>``, raw URLs become ``<a>`` tags."""
+    org = OrganizationFactory()
+    agent = UserFactory(organization=org, role="agent", first_name="Alice")
+    ticket = TicketFactory(
+        organization=org,
+        assigned_agent=agent,
+        requester_email="end@example.com",
+    )
+    body = "Line one.\nLine two.\nVisit https://example.com for details."
+    message = TicketMessageFactory(ticket=ticket, author=agent, body=body)
+
+    send_ticket_reply_email(message.id)
+
+    html = _alt(mail.outbox[0])
+    # linebreaksbr -> <br>; urlize -> <a href="...">
+    assert "<br>" in html
+    assert 'href="https://example.com"' in html
+
+
+def test_ticket_reply_email_lists_attachments_in_html_and_text():
+    org = OrganizationFactory()
+    agent = UserFactory(organization=org, role="agent")
+    ticket = TicketFactory(
+        organization=org,
+        assigned_agent=agent,
+        requester_email="end@example.com",
+    )
+    message = TicketMessageFactory(ticket=ticket, author=agent, body="See attached.")
+    TicketAttachmentFactory(
+        ticket=ticket, message=message, filename="screenshot.png",
+        content_type="image/png", file_size=204800,
+    )
+    TicketAttachmentFactory(
+        ticket=ticket, message=message, filename="logs.txt",
+        content_type="text/plain", file_size=512,
+    )
+
+    send_ticket_reply_email(message.id)
+
+    msg = mail.outbox[0]
+    assert "screenshot.png" in msg.body
+    assert "logs.txt" in msg.body
+    html = _alt(msg)
+    assert "screenshot.png" in html
+    assert "logs.txt" in html
+    # Pluralised header rendered.
+    assert "2 attachments" in html
 
 
 def test_primary_color_override_lands_in_html_body():
