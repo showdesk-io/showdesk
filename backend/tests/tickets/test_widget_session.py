@@ -68,16 +68,12 @@ class TestWidgetSessionResume:
     def test_resume_finds_existing_session_for_user_b(self):
         """If user-B already has their own session, the mismatched stale
         session_id is dropped and user-B's real session is returned."""
-        WidgetSession.objects.create(
-            organization=self.org, external_user_id="user-A"
-        )
+        WidgetSession.objects.create(organization=self.org, external_user_id="user-A")
         owned_by_b = WidgetSession.objects.create(
             organization=self.org, external_user_id="user-B"
         )
         response = self._post(
-            session_id=str(
-                WidgetSession.objects.get(external_user_id="user-A").id
-            ),
+            session_id=str(WidgetSession.objects.get(external_user_id="user-A").id),
             external_user_id="user-B",
             user_hash=_hash(self.org.widget_secret, "user-B"),
         )

@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
 
-def query_txt_records(name: str, *, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> list[str]:
+def query_txt_records(
+    name: str, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
+) -> list[str]:
     """Return TXT record values for `name`, joined per record.
 
     Returns [] on NXDOMAIN, NoAnswer, timeout, or any resolver exception

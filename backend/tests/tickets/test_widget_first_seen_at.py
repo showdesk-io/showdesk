@@ -62,6 +62,5 @@ class TestWidgetFirstSeenAt:
 
         # No org should have been touched.
         assert (
-            Organization.objects.filter(widget_first_seen_at__isnull=False).count()
-            == 0
+            Organization.objects.filter(widget_first_seen_at__isnull=False).count() == 0
         )

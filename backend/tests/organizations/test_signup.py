@@ -143,9 +143,7 @@ class TestSignupVerifyOTP:
         assert user.is_verified is True
         assert not user.has_usable_password()
 
-    def test_verify_returns_join_request_when_domain_matches(
-        self, api_client
-    ) -> None:
+    def test_verify_returns_join_request_when_domain_matches(self, api_client) -> None:
         org = _org_with_routing_domain("acme", "Acme Inc", "acme.com")
         AdminFactory(organization=org, email="founder@acme.com")
         data = _request_and_verify(api_client, "bob@acme.com", "Bob")
@@ -173,9 +171,7 @@ class TestSignupVerifyOTP:
         assert data["domain"] == "gmail.com"
 
     def test_verify_invalid_code(self, api_client) -> None:
-        api_client.post(
-            "/api/v1/auth/signup/request-otp/", {"email": "alice@x.io"}
-        )
+        api_client.post("/api/v1/auth/signup/request-otp/", {"email": "alice@x.io"})
         response = api_client.post(
             "/api/v1/auth/signup/verify-otp/",
             {"email": "alice@x.io", "code": "000000"},
@@ -226,9 +222,7 @@ class TestSignupCreateOrg:
         assert user.role == User.Role.ADMIN
         assert user.is_staff is True
 
-    def test_create_org_skips_domain_for_public_email(
-        self, api_client
-    ) -> None:
+    def test_create_org_skips_domain_for_public_email(self, api_client) -> None:
         data = _request_and_verify(api_client, "alice@gmail.com")
         client = _auth_client(data)
         response = client.post(
@@ -295,9 +289,7 @@ class TestSignupCreateOrg:
             status.HTTP_403_FORBIDDEN,
         )
 
-    def test_create_org_user_with_existing_org(
-        self, api_client, organization
-    ) -> None:
+    def test_create_org_user_with_existing_org(self, api_client, organization) -> None:
         admin = AdminFactory(organization=organization, email="admin@a.com")
         data = _request_and_verify(api_client, admin.email)
         client = _auth_client(data)
@@ -406,9 +398,7 @@ class TestApproveAttachesLonelyUser:
         assert bob.organization == org
         assert bob.role == User.Role.AGENT
 
-    def test_approve_rejects_when_user_joined_another_org(
-        self, api_client
-    ) -> None:
+    def test_approve_rejects_when_user_joined_another_org(self, api_client) -> None:
         org_a = _org_with_routing_domain("a-corp", "A Corp", "example.com")
         admin_a = AdminFactory(organization=org_a)
         # Bob asks to join A
@@ -466,25 +456,19 @@ class TestCheckSlug:
 class TestCheckDomain:
     def test_matches_existing_org(self, api_client) -> None:
         _org_with_routing_domain("acme", "Acme Inc", "acme.com")
-        response = api_client.get(
-            "/api/v1/auth/check-domain/?email=bob@acme.com"
-        )
+        response = api_client.get("/api/v1/auth/check-domain/?email=bob@acme.com")
         assert response.status_code == status.HTTP_200_OK
         assert response.data["matches_org"] is True
         assert response.data["org_name"] == "Acme Inc"
 
     def test_no_match(self, api_client) -> None:
-        response = api_client.get(
-            "/api/v1/auth/check-domain/?email=alice@unknown.io"
-        )
+        response = api_client.get("/api/v1/auth/check-domain/?email=alice@unknown.io")
         assert response.status_code == status.HTTP_200_OK
         assert response.data["matches_org"] is False
 
     def test_public_email_provider(self, api_client) -> None:
         OrganizationFactory(slug="weird")
-        response = api_client.get(
-            "/api/v1/auth/check-domain/?email=alice@gmail.com"
-        )
+        response = api_client.get("/api/v1/auth/check-domain/?email=alice@gmail.com")
         assert response.status_code == status.HTTP_200_OK
         assert response.data["matches_org"] is False
         assert response.data["reason"] == "public_domain"
@@ -498,9 +482,7 @@ class TestCheckDomain:
 class TestSignupSuccessQuota:
     """Quota counts only successful org-creations / join-requests, not OTP sends."""
 
-    def test_failed_create_org_attempts_do_not_consume_quota(
-        self, api_client
-    ) -> None:
+    def test_failed_create_org_attempts_do_not_consume_quota(self, api_client) -> None:
         OrganizationFactory(slug="taken")
         data = _request_and_verify(api_client, "alice@new.io")
         client = _auth_client(data)
@@ -542,9 +524,7 @@ class TestSignupSuccessQuota:
 class TestJoinRequestAdminActions:
     """Admin-side approve/reject actions on the JoinRequestViewSet."""
 
-    def test_admin_can_list_pending_requests(
-        self, admin_client, organization
-    ) -> None:
+    def test_admin_can_list_pending_requests(self, admin_client, organization) -> None:
         OrgJoinRequest.objects.create(
             organization=organization,
             email="bob@example.com",
@@ -555,15 +535,11 @@ class TestJoinRequestAdminActions:
         assert response.data["count"] == 1
         assert response.data["results"][0]["email"] == "bob@example.com"
 
-    def test_agent_cannot_approve(
-        self, authenticated_client, organization
-    ) -> None:
+    def test_agent_cannot_approve(self, authenticated_client, organization) -> None:
         jr = OrgJoinRequest.objects.create(
             organization=organization, email="bob@example.com"
         )
-        response = authenticated_client.post(
-            f"/api/v1/join-requests/{jr.id}/approve/"
-        )
+        response = authenticated_client.post(f"/api/v1/join-requests/{jr.id}/approve/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_admin_approve_creates_user_when_no_lonely_row(
@@ -601,9 +577,7 @@ class TestJoinRequestAdminActions:
         assert response.data["status"] == "rejected"
         assert not User.objects.filter(email="bob@example.com").exists()
 
-    def test_cannot_approve_already_decided(
-        self, admin_client, organization
-    ) -> None:
+    def test_cannot_approve_already_decided(self, admin_client, organization) -> None:
         jr = OrgJoinRequest.objects.create(
             organization=organization,
             email="bob@example.com",
@@ -616,9 +590,7 @@ class TestJoinRequestAdminActions:
         self, admin_client, organization
     ) -> None:
         other_org = OrganizationFactory(slug="other-org")
-        OrgJoinRequest.objects.create(
-            organization=other_org, email="leak@example.com"
-        )
+        OrgJoinRequest.objects.create(organization=other_org, email="leak@example.com")
         response = admin_client.get("/api/v1/join-requests/")
         emails = [r["email"] for r in response.data["results"]]
         assert "leak@example.com" not in emails
@@ -628,9 +600,7 @@ class TestJoinRequestAdminActions:
 class TestInviteEmailUniqueness:
     """The existing invite endpoint still returns 409 for duplicate emails."""
 
-    def test_invite_existing_email_returns_409(
-        self, admin_client, agent
-    ) -> None:
+    def test_invite_existing_email_returns_409(self, admin_client, agent) -> None:
         response = admin_client.post(
             "/api/v1/users/invite/",
             {"email": agent.email, "first_name": "Dup", "last_name": "Agent"},
@@ -638,9 +608,7 @@ class TestInviteEmailUniqueness:
         assert response.status_code == status.HTTP_409_CONFLICT
         assert response.data["code"] == "email_taken"
 
-    def test_invite_existing_email_case_insensitive(
-        self, admin_client, agent
-    ) -> None:
+    def test_invite_existing_email_case_insensitive(self, admin_client, agent) -> None:
         response = admin_client.post(
             "/api/v1/users/invite/",
             {"email": agent.email.upper(), "first_name": "Up"},

@@ -115,9 +115,7 @@ def send_branded_email(
     return message.send(fail_silently=fail_silently)
 
 
-def _format_from_email(
-    from_email: str | None, organization: Any | None
-) -> str:
+def _format_from_email(from_email: str | None, organization: Any | None) -> str:
     """Build the From: header, honouring per-org ``email_from_name`` overrides.
 
     The address part stays whatever was passed (or ``DEFAULT_FROM_EMAIL``).
@@ -130,8 +128,6 @@ def _format_from_email(
     if not address:
         return raw  # Couldn't parse; let Django reject it downstream.
 
-    org_name = (
-        getattr(organization, "email_from_name", "") if organization else ""
-    )
+    org_name = getattr(organization, "email_from_name", "") if organization else ""
     display = org_name or name or settings.BRAND_NAME
     return formataddr((display, address))

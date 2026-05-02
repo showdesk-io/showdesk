@@ -92,9 +92,7 @@ class TestOrganizationDomainModel:
             status=OrganizationDomain.Status.PENDING,
             verification_method=OrganizationDomain.VerificationMethod.DNS_TXT,
         )
-        assert (
-            OrganizationDomain.objects.filter(domain="contested.com").count() == 2
-        )
+        assert OrganizationDomain.objects.filter(domain="contested.com").count() == 2
 
     def test_txt_record_helpers(self, organization) -> None:
         domain = OrganizationDomain.objects.create(
@@ -116,9 +114,7 @@ class TestOrganizationDomainModel:
 
 @pytest.mark.django_db
 class TestOrganizationDomainAPI:
-    def test_admin_lists_own_org_domains(
-        self, admin_client, organization
-    ) -> None:
+    def test_admin_lists_own_org_domains(self, admin_client, organization) -> None:
         OrganizationDomain.objects.create(
             organization=organization,
             domain="mine.com",
@@ -136,9 +132,7 @@ class TestOrganizationDomainAPI:
         assert "mine.com" in domains
         assert "leak.com" not in domains
 
-    def test_admin_creates_branding_domain(
-        self, admin_client, organization
-    ) -> None:
+    def test_admin_creates_branding_domain(self, admin_client, organization) -> None:
         response = admin_client.post(
             "/api/v1/organization-domains/",
             {"domain": "ACME.COM", "is_branding": True},
@@ -150,9 +144,7 @@ class TestOrganizationDomainAPI:
         domain = OrganizationDomain.objects.get(domain="acme.com")
         assert domain.organization == organization
 
-    def test_create_requires_at_least_one_purpose(
-        self, admin_client
-    ) -> None:
+    def test_create_requires_at_least_one_purpose(self, admin_client) -> None:
         response = admin_client.post(
             "/api/v1/organization-domains/",
             {"domain": "acme.com"},
@@ -169,9 +161,7 @@ class TestOrganizationDomainAPI:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "domain" in response.data
 
-    def test_agent_cannot_create(
-        self, authenticated_client, organization
-    ) -> None:
+    def test_agent_cannot_create(self, authenticated_client, organization) -> None:
         response = authenticated_client.post(
             "/api/v1/organization-domains/",
             {"domain": "acme.com", "is_branding": True},
@@ -179,9 +169,7 @@ class TestOrganizationDomainAPI:
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_admin_can_toggle_purposes(
-        self, admin_client, organization
-    ) -> None:
+    def test_admin_can_toggle_purposes(self, admin_client, organization) -> None:
         d = OrganizationDomain.objects.create(
             organization=organization,
             domain="acme.com",
@@ -197,9 +185,7 @@ class TestOrganizationDomainAPI:
         assert d.is_branding is True
         assert d.is_email_routing is True
 
-    def test_domain_field_is_immutable(
-        self, admin_client, organization
-    ) -> None:
+    def test_domain_field_is_immutable(self, admin_client, organization) -> None:
         d = OrganizationDomain.objects.create(
             organization=organization,
             domain="acme.com",
@@ -212,9 +198,7 @@ class TestOrganizationDomainAPI:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_status_and_token_are_read_only(
-        self, admin_client, organization
-    ) -> None:
+    def test_status_and_token_are_read_only(self, admin_client, organization) -> None:
         """The client cannot set status=verified or pick a token directly."""
         response = admin_client.post(
             "/api/v1/organization-domains/",
@@ -239,9 +223,7 @@ class TestOrganizationDomainAPI:
             domain="acme.com",
             is_email_routing=True,
         )
-        response = admin_client.delete(
-            f"/api/v1/organization-domains/{d.id}/"
-        )
+        response = admin_client.delete(f"/api/v1/organization-domains/{d.id}/")
         assert response.status_code == status.HTTP_204_NO_CONTENT
         assert not OrganizationDomain.objects.filter(id=d.id).exists()
 
@@ -252,9 +234,7 @@ class TestOrganizationDomainAPI:
             status.HTTP_403_FORBIDDEN,
         )
 
-    def test_create_response_includes_txt_record_helpers(
-        self, admin_client
-    ) -> None:
+    def test_create_response_includes_txt_record_helpers(self, admin_client) -> None:
         response = admin_client.post(
             "/api/v1/organization-domains/",
             {"domain": "acme.com", "is_branding": True},
@@ -311,9 +291,7 @@ class TestAdminEmailAutoVerify:
         d = OrganizationDomain.objects.get(domain="acme.com")
         assert d.verified_at is not None
 
-    def test_admin_email_refused_when_no_eligible_admin(
-        self, organization
-    ) -> None:
+    def test_admin_email_refused_when_no_eligible_admin(self, organization) -> None:
         admin = AdminFactory(
             organization=organization,
             email="founder@other.com",
@@ -385,9 +363,7 @@ class TestAdminEmailAutoVerify:
         assert response.status_code == status.HTTP_400_BAD_REQUEST, response.data
         assert response.data.get("code") == "use_dns_instead", response.data
 
-    def test_admin_email_refused_for_public_webmail(
-        self, organization
-    ) -> None:
+    def test_admin_email_refused_for_public_webmail(self, organization) -> None:
         admin = AdminFactory(
             organization=organization,
             email="founder@gmail.com",
@@ -436,9 +412,7 @@ class TestDNSVerification:
             "apps.organizations.services.verify_domain_dns",
             return_value=True,
         ):
-            response = admin_client.post(
-                f"/api/v1/organization-domains/{d.id}/verify/"
-            )
+            response = admin_client.post(f"/api/v1/organization-domains/{d.id}/verify/")
         assert response.status_code == status.HTTP_200_OK
         assert response.data["status"] == "verified"
         d.refresh_from_db()
@@ -457,9 +431,7 @@ class TestDNSVerification:
             "apps.organizations.services.verify_domain_dns",
             return_value=False,
         ):
-            response = admin_client.post(
-                f"/api/v1/organization-domains/{d.id}/verify/"
-            )
+            response = admin_client.post(f"/api/v1/organization-domains/{d.id}/verify/")
         assert response.status_code == status.HTTP_202_ACCEPTED
         assert response.data["code"] == "still_pending"
         d.refresh_from_db()
@@ -476,9 +448,7 @@ class TestDNSVerification:
             status=OrganizationDomain.Status.VERIFIED,
             verification_method=OrganizationDomain.VerificationMethod.ADMIN_EMAIL,
         )
-        response = admin_client.post(
-            f"/api/v1/organization-domains/{d.id}/verify/"
-        )
+        response = admin_client.post(f"/api/v1/organization-domains/{d.id}/verify/")
         assert response.status_code == status.HTTP_200_OK
 
     def test_regenerate_token_resets_to_pending(
@@ -515,9 +485,7 @@ class TestDNSVerification:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert response.data["code"] == "already_verified"
 
-    def test_agent_cannot_verify(
-        self, authenticated_client, organization
-    ) -> None:
+    def test_agent_cannot_verify(self, authenticated_client, organization) -> None:
         d = services.start_dns_challenge(
             organization=organization,
             domain="acme.com",
@@ -533,9 +501,7 @@ class TestDNSVerification:
 class TestOwnershipTransfer:
     def test_dns_win_transfers_ownership_and_notifies_loser(self) -> None:
         loser_org = OrganizationFactory(slug="incumbent")
-        loser_admin = AdminFactory(
-            organization=loser_org, email="boss@contested.com"
-        )
+        loser_admin = AdminFactory(organization=loser_org, email="boss@contested.com")
         # Make sure send_branded_email picks up an admin recipient.
         AdminFactory(organization=loser_org, email="watcher@contested.com")
 
@@ -589,6 +555,7 @@ class TestOwnershipTransfer:
             ).count()
             == 1
         )
+
 
 @pytest.mark.django_db
 class TestPendingPollerTask:

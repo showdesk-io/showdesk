@@ -258,9 +258,7 @@ class SignupRequestOTPSerializer(serializers.Serializer):
     """Validate signup OTP-request payload."""
 
     email = serializers.EmailField()
-    full_name = serializers.CharField(
-        max_length=255, required=False, allow_blank=True
-    )
+    full_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
 class SignupRequestOTPView(APIView):
@@ -285,9 +283,7 @@ class SignupRequestOTPView(APIView):
         full_name = (serializer.validated_data.get("full_name") or "").strip()
 
         existing = User.objects.filter(email__iexact=email).first()
-        if existing and (
-            existing.role == User.Role.END_USER or not existing.is_active
-        ):
+        if existing and (existing.role == User.Role.END_USER or not existing.is_active):
             return Response(
                 {
                     "detail": (
@@ -485,9 +481,7 @@ class SignupCreateOrgView(APIView):
         # Client-provided email_domain wins; default to the founder's
         # own domain (skipping public webmail). Empty value means "skip".
         requested_domain = (
-            (serializer.validated_data.get("email_domain") or "")
-            .strip()
-            .lower()
+            (serializer.validated_data.get("email_domain") or "").strip().lower()
         )
         if not requested_domain:
             requested_domain = (
@@ -561,9 +555,7 @@ class SignupCreateOrgView(APIView):
 class RequestJoinSerializer(serializers.Serializer):
     """Validate the request-join payload (full_name is optional refinement)."""
 
-    full_name = serializers.CharField(
-        max_length=255, required=False, allow_blank=True
-    )
+    full_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
 class SignupRequestJoinView(APIView):

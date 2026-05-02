@@ -67,8 +67,11 @@ def test_send_branded_email_skips_when_no_recipients():
         subject="No-op",
         to=[None, ""],
         context={
-            "kicker": "x", "heading": "x", "intro": "x",
-            "code": "0", "expiry_minutes": 1,
+            "kicker": "x",
+            "heading": "x",
+            "intro": "x",
+            "code": "0",
+            "expiry_minutes": 1,
         },
     )
     assert mail.outbox == []
@@ -119,7 +122,9 @@ def test_ticket_reply_email_skips_internal_notes():
     agent = UserFactory(organization=org, role="agent")
     ticket = TicketFactory(organization=org, assigned_agent=agent)
     note = TicketMessageFactory(
-        ticket=ticket, author=agent, body="not for the customer",
+        ticket=ticket,
+        author=agent,
+        body="not for the customer",
         message_type="internal_note",
     )
 
@@ -174,8 +179,11 @@ def test_email_from_name_overrides_display_name_in_from_header():
         to=["user@example.com"],
         organization=org,
         context={
-            "kicker": "x", "heading": "x", "intro": "x",
-            "code": "0", "expiry_minutes": 1,
+            "kicker": "x",
+            "heading": "x",
+            "intro": "x",
+            "code": "0",
+            "expiry_minutes": 1,
         },
     )
 
@@ -191,8 +199,11 @@ def test_from_header_falls_back_to_brand_name_when_email_from_name_is_blank():
         to=["user@example.com"],
         organization=org,
         context={
-            "kicker": "x", "heading": "x", "intro": "x",
-            "code": "0", "expiry_minutes": 1,
+            "kicker": "x",
+            "heading": "x",
+            "intro": "x",
+            "code": "0",
+            "expiry_minutes": 1,
         },
     )
 
@@ -231,12 +242,18 @@ def test_ticket_reply_email_lists_attachments_in_html_and_text():
     )
     message = TicketMessageFactory(ticket=ticket, author=agent, body="See attached.")
     TicketAttachmentFactory(
-        ticket=ticket, message=message, filename="screenshot.png",
-        content_type="image/png", file_size=204800,
+        ticket=ticket,
+        message=message,
+        filename="screenshot.png",
+        content_type="image/png",
+        file_size=204800,
     )
     TicketAttachmentFactory(
-        ticket=ticket, message=message, filename="logs.txt",
-        content_type="text/plain", file_size=512,
+        ticket=ticket,
+        message=message,
+        filename="logs.txt",
+        content_type="text/plain",
+        file_size=512,
     )
 
     send_ticket_reply_email(message.id)
@@ -260,8 +277,11 @@ def test_primary_color_override_lands_in_html_body():
         to=["user@example.com"],
         organization=org,
         context={
-            "kicker": "x", "heading": "x", "intro": "x",
-            "code": "0", "expiry_minutes": 1,
+            "kicker": "x",
+            "heading": "x",
+            "intro": "x",
+            "code": "0",
+            "expiry_minutes": 1,
         },
     )
 

@@ -4,20 +4,29 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('organizations', '0011_organization_widget_first_seen_at'),
+        ("organizations", "0011_organization_widget_first_seen_at"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='organization',
-            name='email_from_name',
-            field=models.CharField(blank=True, default='', help_text='Display name shown in the From: header of transactional emails (e.g. "Acme Support"). Falls back to the Showdesk brand name when empty.', max_length=100),
+            model_name="organization",
+            name="email_from_name",
+            field=models.CharField(
+                blank=True,
+                default="",
+                help_text='Display name shown in the From: header of transactional emails (e.g. "Acme Support"). Falls back to the Showdesk brand name when empty.',
+                max_length=100,
+            ),
         ),
         migrations.AddField(
-            model_name='organization',
-            name='primary_color',
-            field=models.CharField(blank=True, default='', help_text='Primary brand color (hex, e.g. #6366F1). Used in the dashboard and in branded emails. Falls back to the Showdesk default when empty.', max_length=7),
+            model_name="organization",
+            name="primary_color",
+            field=models.CharField(
+                blank=True,
+                default="",
+                help_text="Primary brand color (hex, e.g. #6366F1). Used in the dashboard and in branded emails. Falls back to the Showdesk default when empty.",
+                max_length=7,
+            ),
         ),
     ]

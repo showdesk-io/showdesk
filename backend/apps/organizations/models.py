@@ -114,7 +114,7 @@ class Organization(TimestampedModel):
         default="",
         help_text=(
             "Display name shown in the From: header of transactional emails "
-            "(e.g. \"Acme Support\"). Falls back to the Showdesk brand name "
+            '(e.g. "Acme Support"). Falls back to the Showdesk brand name '
             "when empty."
         ),
     )
@@ -462,8 +462,7 @@ class OrganizationDomain(TimestampedModel):
                 name="unique_verified_domain_globally",
             ),
             models.CheckConstraint(
-                condition=models.Q(is_branding=True)
-                | models.Q(is_email_routing=True),
+                condition=models.Q(is_branding=True) | models.Q(is_email_routing=True),
                 name="domain_has_at_least_one_purpose",
             ),
         ]

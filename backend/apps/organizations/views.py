@@ -267,17 +267,13 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
                 {"detail": str(exc), "code": exc.code},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        return Response(
-            self.get_serializer(row).data, status=status.HTTP_201_CREATED
-        )
+        return Response(self.get_serializer(row).data, status=status.HTTP_201_CREATED)
 
     def _create_with_dns_challenge(self, request, org):  # noqa: ANN001, ANN201
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         domain = serializer.validated_data["domain"]
-        if OrganizationDomain.objects.filter(
-            organization=org, domain=domain
-        ).exists():
+        if OrganizationDomain.objects.filter(organization=org, domain=domain).exists():
             return Response(
                 {"detail": "Domain already exists for this organization."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -286,13 +282,9 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
             organization=org,
             domain=domain,
             is_branding=serializer.validated_data.get("is_branding", False),
-            is_email_routing=serializer.validated_data.get(
-                "is_email_routing", False
-            ),
+            is_email_routing=serializer.validated_data.get("is_email_routing", False),
         )
-        return Response(
-            self.get_serializer(row).data, status=status.HTTP_201_CREATED
-        )
+        return Response(self.get_serializer(row).data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
         if (forbidden := self._check_admin()) is not None:

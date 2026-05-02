@@ -148,9 +148,8 @@ def send_ticket_reply_email(self, message_id: str) -> None:  # noqa: ANN001
             logger.info("No requester email for ticket %s.", ticket.reference)
             return
         recipients = [ticket.requester_email]
-        author_label = (
-            (author.first_name or "").strip()
-            or (author.email.split("@")[0] if author.email else "Support")
+        author_label = (author.first_name or "").strip() or (
+            author.email.split("@")[0] if author.email else "Support"
         )
         intro = f"{author_label} replied to your support ticket."
         cta_label = "View conversation"

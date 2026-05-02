@@ -256,9 +256,7 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
                 "domain is immutable; create a new entry instead."
             )
         if not _DOMAIN_RE.match(normalized):
-            raise serializers.ValidationError(
-                "Enter a valid domain (e.g. acme.com)."
-            )
+            raise serializers.ValidationError("Enter a valid domain (e.g. acme.com).")
         return normalized
 
     def validate(self, attrs: dict) -> dict:

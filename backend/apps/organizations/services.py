@@ -64,7 +64,9 @@ def has_eligible_admin(org: Organization, domain: str) -> bool:
     ).exists()
 
 
-def is_domain_taken_elsewhere(domain: str, *, exclude_org: Organization | None = None) -> bool:
+def is_domain_taken_elsewhere(
+    domain: str, *, exclude_org: Organization | None = None
+) -> bool:
     """True if some other org currently holds `domain` verified."""
     qs = OrganizationDomain.objects.filter(
         domain=domain.lower(),
@@ -205,17 +207,14 @@ def apply_dns_verification_success(domain_obj: OrganizationDomain) -> None:
     DNS state — only one org's token can be live at a time).
     """
     locked_rows = list(
-        OrganizationDomain.objects.select_for_update().filter(
-            domain=domain_obj.domain
-        )
+        OrganizationDomain.objects.select_for_update().filter(domain=domain_obj.domain)
     )
 
     loser = next(
         (
             r
             for r in locked_rows
-            if r.id != domain_obj.id
-            and r.status == OrganizationDomain.Status.VERIFIED
+            if r.id != domain_obj.id and r.status == OrganizationDomain.Status.VERIFIED
         ),
         None,
     )

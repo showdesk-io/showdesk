@@ -128,9 +128,7 @@ def backfill(apps, schema_editor):  # noqa: ANN001
                 claimed_verified.add(routing_domain)
 
         if branding_domain and _looks_like_domain(branding_domain):
-            existing = next(
-                (r for r in rows if r["domain"] == branding_domain), None
-            )
+            existing = next((r for r in rows if r["domain"] == branding_domain), None)
             if existing is not None:
                 # Same domain serves both purposes — collapse onto the
                 # routing row by flipping is_branding=True.
@@ -157,7 +155,6 @@ def unbackfill(apps, schema_editor):  # noqa: ANN001
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("organizations", "0008_organizationdomain"),
     ]

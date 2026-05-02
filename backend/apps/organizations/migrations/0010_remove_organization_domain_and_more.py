@@ -4,18 +4,17 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('organizations', '0009_backfill_organization_domains'),
+        ("organizations", "0009_backfill_organization_domains"),
     ]
 
     operations = [
         migrations.RemoveField(
-            model_name='organization',
-            name='domain',
+            model_name="organization",
+            name="domain",
         ),
         migrations.RemoveField(
-            model_name='organization',
-            name='email_domain',
+            model_name="organization",
+            name="email_domain",
         ),
     ]

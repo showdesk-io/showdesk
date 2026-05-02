@@ -70,6 +70,8 @@ def test_org_flag_applies_org_branding():
 def test_org_flag_with_unknown_slug_raises_command_error():
     with pytest.raises(CommandError):
         call_command(
-            "preview_email", "otp_code", to="preview@example.com",
+            "preview_email",
+            "otp_code",
+            to="preview@example.com",
             org="does-not-exist",
         )

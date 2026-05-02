@@ -230,8 +230,7 @@ class Command(BaseCommand):
             )
         if name not in SAMPLES:
             raise CommandError(
-                f"Unknown template '{name}'. "
-                f"Available: {', '.join(sorted(SAMPLES))}."
+                f"Unknown template '{name}'. Available: {', '.join(sorted(SAMPLES))}."
             )
 
         organization = None
