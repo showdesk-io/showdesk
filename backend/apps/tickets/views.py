@@ -543,6 +543,23 @@ class TicketViewSet(viewsets.ModelViewSet):
         if session_id:
             try:
                 session = WidgetSession.objects.get(id=session_id, organization=org)
+            except (WidgetSession.DoesNotExist, ValueError):
+                session = None
+
+            # Identity mismatch (e.g. a different user logged into the same
+            # browser): drop the stored session_id and fall through so the
+            # HMAC branch finds-or-creates the legitimate session for this
+            # user. Anonymous sessions (no external_user_id) can still be
+            # claimed by an identified user on the next branch.
+            if (
+                session is not None
+                and session.external_user_id
+                and external_user_id
+                and session.external_user_id != external_user_id
+            ):
+                session = None
+
+            if session is not None:
                 session.last_seen_at = timezone.now()
                 if name and not session.name:
                     session.name = name
@@ -550,8 +567,6 @@ class TicketViewSet(viewsets.ModelViewSet):
                     session.email = email
                 session.save()
                 return Response(WidgetSessionSerializer(session).data)
-            except (WidgetSession.DoesNotExist, ValueError):
-                pass  # Fall through to create new
 
         # HMAC-identified user: find-or-create by external_user_id
         if external_user_id and user_hash:

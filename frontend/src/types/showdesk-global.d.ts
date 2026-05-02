@@ -25,6 +25,7 @@ export interface ShowdeskGlobal {
   init(config: ShowdeskInitConfig): void;
   open(): void;
   destroy(): void;
+  reset(): void;
   setUser(user: ShowdeskUser): void;
 }
 

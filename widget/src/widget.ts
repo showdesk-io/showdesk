@@ -38,6 +38,7 @@ import { createButton, updateBadge } from "./ui/button";
 import { createModal, destroyModal, getStore, initSession } from "./ui/modal";
 import { reattachPopupIfNeeded } from "./ui/chat/chat-view";
 import { injectStyles } from "./ui/styles";
+import { clearSession as clearStoredSession } from "./session/session-manager";
 import type { NavigationMode, ShowdeskConfig, ShowdeskUserIdentity } from "./types";
 
 let isInitialized = false;
@@ -186,6 +187,16 @@ function destroy(): void {
   isInitialized = false;
 }
 
+/**
+ * Reset the widget: destroy the UI AND clear the stored session id.
+ * Call this when the embedding app's user identity changes (e.g. logout)
+ * so the next init() does not resume the previous user's conversation.
+ */
+function reset(): void {
+  destroy();
+  clearStoredSession();
+}
+
 // Auto-initialize if script tag has data-token
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", () => {
@@ -199,4 +210,4 @@ if (typeof document !== "undefined") {
 }
 
 // Export public API
-export { init, open, destroy, setUser };
+export { init, open, destroy, reset, setUser };

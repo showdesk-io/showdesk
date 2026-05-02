@@ -12,9 +12,13 @@ import { fetchInternalWidgetIdentity } from "@/api/widget";
 
 export function useInternalWidget(): void {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const accessToken = useAuthStore((s) => s.accessToken);
 
+  // Key the query by the access token so a logout/login as a different
+  // user refetches the identity instead of serving the previous user's
+  // cached response.
   const { data: identity } = useQuery({
-    queryKey: ["internal-widget-identity"],
+    queryKey: ["internal-widget-identity", accessToken],
     queryFn: fetchInternalWidgetIdentity,
     enabled: isAuthenticated,
     staleTime: Infinity,
@@ -50,7 +54,19 @@ export function useInternalWidget(): void {
     return () => {
       cancelled = true;
       if (pollTimer) window.clearTimeout(pollTimer);
-      window.Showdesk?.destroy();
+      // reset() (not destroy()) so the previous user's session_id is
+      // dropped from localStorage when the widget remounts for someone else.
+      // Fall back to destroy() for cached older widget builds without reset().
+      try {
+        const w = window.Showdesk;
+        if (typeof w?.reset === "function") {
+          w.reset();
+        } else if (typeof w?.destroy === "function") {
+          w.destroy();
+        }
+      } catch {
+        /* ignore */
+      }
     };
   }, [identity]);
 }
