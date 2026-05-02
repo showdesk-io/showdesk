@@ -399,9 +399,18 @@ non-matching domains can still join, but only through explicit invitation.
       emails / role).
 - [x] P0: pytest -- invitation endpoint returns 409 (not 500) when email
       exists, case-insensitive.
-- [ ] P0: Vitest -- signup form UI tests: still missing
-      (`SignupPage.tsx`, `OnboardingPage.tsx`). Only `authStore.test.ts`
-      exists in `frontend/src/store/__tests__/`.
+- [x] P0: Vitest UI tests -- 12 cases across
+      `frontend/src/pages/__tests__/SignupPage.test.tsx` (renders email
+      step, domain-match hint when an existing org matches the email,
+      OTP submit advances, OTP verify routes to wizard vs join_confirm
+      based on `next_step`, wizard submit calls `signupCreateOrg` +
+      navigates to `/onboarding`) and `OnboardingPage.test.tsx`
+      (renders step 0, resumes at the persisted step, redirects when
+      already completed, EmbedStep "Waiting" vs "Detected" badge based
+      on `widget_first_seen_at`, finish marks `onboarding_completed_at`
+      + navigates home). Stub the API modules with `vi.mock` and the
+      router with a partial `vi.mock("react-router-dom")` exposing a
+      `navigateMock` spy.
 
 ### Open questions
 
