@@ -21,7 +21,7 @@ from rest_framework.test import APIClient
 
 from apps.organizations.models import OrganizationDomain, User
 from apps.organizations import services
-from tests.factories import AdminFactory, OrganizationFactory, UserFactory
+from tests.factories import AdminFactory, OrganizationFactory
 
 
 @pytest.mark.django_db

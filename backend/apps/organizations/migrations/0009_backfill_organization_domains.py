@@ -22,7 +22,6 @@ all reads have been migrated.
 import re
 
 from django.db import migrations
-from django.utils import timezone
 
 
 # Mirrors apps.organizations.models.PUBLIC_EMAIL_DOMAINS at the time of
