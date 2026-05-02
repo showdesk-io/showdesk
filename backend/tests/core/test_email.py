@@ -159,3 +159,60 @@ def test_ticket_resolved_email_addresses_requester():
     html = _alt(msg)
     assert "Acme" in html
     assert "Jane" in html
+
+
+# ── Per-org branding overrides ────────────────────────────────────────
+
+
+def test_email_from_name_overrides_display_name_in_from_header():
+    org = OrganizationFactory(email_from_name="Acme Support")
+
+    send_branded_email(
+        template="otp_code",
+        subject="x",
+        to=["user@example.com"],
+        organization=org,
+        context={
+            "kicker": "x", "heading": "x", "intro": "x",
+            "code": "0", "expiry_minutes": 1,
+        },
+    )
+
+    assert mail.outbox[0].from_email.startswith("Acme Support <")
+
+
+def test_from_header_falls_back_to_brand_name_when_email_from_name_is_blank():
+    org = OrganizationFactory(email_from_name="")
+
+    send_branded_email(
+        template="otp_code",
+        subject="x",
+        to=["user@example.com"],
+        organization=org,
+        context={
+            "kicker": "x", "heading": "x", "intro": "x",
+            "code": "0", "expiry_minutes": 1,
+        },
+    )
+
+    # No org override -> default brand name (Showdesk) wraps the address.
+    from_header = mail.outbox[0].from_email
+    assert "Showdesk" in from_header or from_header.startswith("Showdesk")
+
+
+def test_primary_color_override_lands_in_html_body():
+    org = OrganizationFactory(primary_color="#FF00AA")
+
+    send_branded_email(
+        template="otp_code",
+        subject="x",
+        to=["user@example.com"],
+        organization=org,
+        context={
+            "kicker": "x", "heading": "x", "intro": "x",
+            "code": "0", "expiry_minutes": 1,
+        },
+    )
+
+    html = _alt(mail.outbox[0])
+    assert "#FF00AA" in html or "#ff00aa" in html.lower()

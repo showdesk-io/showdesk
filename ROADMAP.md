@@ -541,20 +541,26 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 - [x] P0: Team management (CRUD, assign agents)
 - [x] P0: Widget configuration (colors, position, embed snippet, token regen)
 - [ ] P1: Widget integration code examples & generator in Settings > Widget (embed snippets for React/Angular/Vue/vanilla JS + backend HMAC generation examples for Node/Python/PHP/Ruby)
-- [ ] P1: Organization branding -- new Settings > Branding tab. Scoped lean for
-      startups, no full white-label.
-      - Backend: `Organization.primary_color` (hex, distinct from `widget_color`
-        so the widget can differ from the dashboard) + `email_from_name`
-        (override the email sender display name, e.g. "Acme Support"). `logo`
-        already exists.
-      - Agent UI: inject `--color-primary` from `org.primary_color` as a CSS
-        custom property at AppLayout mount; sidebar shows `org.logo` (or
-        initials fallback).
-      - End-user emails: `send_branded_email` already routes per-org logo +
-        primary color via `_brand_for(org)`; extend to all ticket lifecycle
-        templates and use `email_from_name` to format the `From:` header.
-      - Settings UI: 3 fields (logo upload + preview + remove, primary color
-        picker, "From name" input). Admin-only.
+- [~] P1: Organization branding -- Settings > Branding tab. Scoped lean
+      for startups, no full white-label.
+      - [x] Backend: `Organization.primary_color` (hex, distinct from
+        `widget_color`) + `email_from_name`. Migration 0012. Both exposed
+        on `OrganizationSerializer`. `_format_from_email()` in
+        `apps/core/email.py` rewrites the From: header as
+        `"<email_from_name> <address>"` when set, else falls back to
+        `BRAND_NAME`. `_brand_for(org)` already routes per-org logo +
+        primary color through every branded template.
+      - [x] Settings UI: Branding tab with 3 admin-only fields -- logo
+        upload (multipart PATCH on `/organizations/{id}/`) + preview +
+        remove, primary-color picker (color input + hex text), "From
+        name" input. Toast feedback + dirty/discard handling.
+      - [x] Tests: 3 new pytest cases verify `email_from_name` lands in
+        the From: header, falls back to the brand name when blank, and
+        that `primary_color` overrides reach the rendered HTML body.
+      - [ ] Agent UI: inject `--color-primary` from `org.primary_color`
+        as a CSS custom property at AppLayout mount; sidebar shows
+        `org.logo` (or initials fallback). Deferred -- the Tailwind
+        palette is static, so this needs a dedicated runtime-CSS pass.
       - Out of scope (separate items): full white-label / removing Showdesk
         mention, custom CSS, per-user theming, custom email domain.
 - [ ] P1: Custom domain for widget/portal

@@ -102,6 +102,26 @@ export async function updateOrganization(
   return response.data;
 }
 
+export async function updateOrganizationLogo(
+  id: string,
+  file: File | null,
+): Promise<Organization> {
+  // Multipart PATCH so the backend ImageField can ingest the upload.
+  // ``file === null`` clears the logo (DRF reads "" as a blank ImageField).
+  const formData = new FormData();
+  if (file) {
+    formData.append("logo", file);
+  } else {
+    formData.append("logo", "");
+  }
+  const response = await apiClient.patch<Organization>(
+    `/organizations/${id}/`,
+    formData,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  );
+  return response.data;
+}
+
 export async function revokeCredentials(orgId: string): Promise<Organization> {
   const response = await apiClient.post<Organization>(
     `/organizations/${orgId}/revoke_credentials/`,

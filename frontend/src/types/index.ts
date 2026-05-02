@@ -11,6 +11,8 @@ export interface Organization {
   name: string;
   slug: string;
   logo: string | null;
+  primary_color: string;
+  email_from_name: string;
   api_token: string;
   widget_secret: string;
   is_active: boolean;

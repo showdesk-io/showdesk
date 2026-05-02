@@ -8,6 +8,7 @@ fallback alongside the HTML body.
 from __future__ import annotations
 
 import logging
+from email.utils import formataddr, parseaddr
 from typing import Any, Iterable
 
 from django.conf import settings
@@ -106,9 +107,31 @@ def send_branded_email(
     message = EmailMultiAlternatives(
         subject=subject,
         body=text_body,
-        from_email=from_email or settings.DEFAULT_FROM_EMAIL,
+        from_email=_format_from_email(from_email, organization),
         to=list(recipients),
         reply_to=list(reply_to) if reply_to else None,
     )
     message.attach_alternative(html_body, "text/html")
     return message.send(fail_silently=fail_silently)
+
+
+def _format_from_email(
+    from_email: str | None, organization: Any | None
+) -> str:
+    """Build the From: header, honouring per-org ``email_from_name`` overrides.
+
+    The address part stays whatever was passed (or ``DEFAULT_FROM_EMAIL``).
+    The display name comes from ``Organization.email_from_name`` if set,
+    otherwise from ``BRAND_NAME`` -- matching what end-users see in the
+    rendered HTML.
+    """
+    raw = from_email or settings.DEFAULT_FROM_EMAIL
+    name, address = parseaddr(raw)
+    if not address:
+        return raw  # Couldn't parse; let Django reject it downstream.
+
+    org_name = (
+        getattr(organization, "email_from_name", "") if organization else ""
+    )
+    display = org_name or name or settings.BRAND_NAME
+    return formataddr((display, address))

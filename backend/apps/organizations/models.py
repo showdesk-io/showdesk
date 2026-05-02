@@ -96,6 +96,29 @@ class Organization(TimestampedModel):
     )
     is_active = models.BooleanField(default=True)
 
+    # Branding (agent dashboard + transactional emails). Distinct from
+    # ``widget_color`` so the embedded widget can have its own accent
+    # without dragging the dashboard along.
+    primary_color = models.CharField(
+        max_length=7,
+        blank=True,
+        default="",
+        help_text=(
+            "Primary brand color (hex, e.g. #6366F1). Used in the dashboard "
+            "and in branded emails. Falls back to the Showdesk default when empty."
+        ),
+    )
+    email_from_name = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text=(
+            "Display name shown in the From: header of transactional emails "
+            "(e.g. \"Acme Support\"). Falls back to the Showdesk brand name "
+            "when empty."
+        ),
+    )
+
     # Widget configuration
     widget_color = models.CharField(
         max_length=7,

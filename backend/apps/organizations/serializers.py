@@ -25,6 +25,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "name",
             "slug",
             "logo",
+            "primary_color",
+            "email_from_name",
             "api_token",
             "widget_secret",
             "is_active",

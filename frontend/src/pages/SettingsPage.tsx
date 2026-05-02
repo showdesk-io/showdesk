@@ -13,6 +13,7 @@ import {
   revokeCredentials,
   toggleUserActive,
   updateOrganization,
+  updateOrganizationLogo,
   updateUser,
 } from "@/api/users";
 import { useCurrentUser } from "@/hooks/useAuth";
@@ -41,6 +42,7 @@ const tabs = [
   "Priorities",
   "Canned Responses",
   "Widget",
+  "Branding",
   "Organization",
 ] as const;
 type Tab = (typeof tabs)[number];
@@ -81,6 +83,7 @@ export function SettingsPage() {
           <CannedResponsesTab currentUser={currentUser} />
         )}
         {activeTab === "Widget" && <WidgetTab isAdmin={isAdmin} />}
+        {activeTab === "Branding" && <BrandingTab isAdmin={isAdmin} />}
         {activeTab === "Organization" && (
           <OrganizationTab isAdmin={isAdmin} />
         )}
@@ -1407,6 +1410,214 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
 }
 
 // ── Organization Tab ──────────────────────────────────────────────────
+
+// ── Branding Tab ──────────────────────────────────────────────────────
+
+function BrandingTab({ isAdmin }: { isAdmin: boolean }) {
+  const queryClient = useQueryClient();
+  const { data: org, isLoading } = useQuery({
+    queryKey: ["organization"],
+    queryFn: fetchOrganization,
+  });
+
+  const [primaryColor, setPrimaryColor] = useState("");
+  const [emailFromName, setEmailFromName] = useState("");
+  const [initialized, setInitialized] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  if (org && !initialized) {
+    setPrimaryColor(org.primary_color || "");
+    setEmailFromName(org.email_from_name || "");
+    setInitialized(true);
+  }
+
+  const onSuccess = () => {
+    void queryClient.invalidateQueries({ queryKey: ["organization"] });
+  };
+
+  const fieldsMutation = useMutation({
+    mutationFn: (data: Partial<Organization>) =>
+      updateOrganization(org!.id, data),
+    onSuccess: () => {
+      toast.success("Branding updated.");
+      onSuccess();
+    },
+    onError: () => toast.error("Failed to update branding."),
+  });
+
+  const logoMutation = useMutation({
+    mutationFn: (file: File | null) => updateOrganizationLogo(org!.id, file),
+    onSuccess: (updated) => {
+      toast.success(updated.logo ? "Logo uploaded." : "Logo removed.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      onSuccess();
+    },
+    onError: () => toast.error("Failed to update logo."),
+  });
+
+  if (isLoading || !org) {
+    return (
+      <div className="flex justify-center py-12">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  const dirty =
+    (org.primary_color || "") !== primaryColor ||
+    (org.email_from_name || "") !== emailFromName;
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      <div className="rounded-xl border border-gray-200 bg-white p-6">
+        <h2 className="mb-1 text-lg font-semibold text-gray-900">
+          Branding
+        </h2>
+        <p className="mb-6 text-sm text-gray-500">
+          Customize how your organization appears in the dashboard sidebar
+          and in transactional emails sent to your users.
+        </p>
+
+        {/* Logo */}
+        <div className="mb-6">
+          <label className="mb-2 block text-sm font-medium text-gray-700">
+            Logo
+          </label>
+          <div className="flex items-center gap-4">
+            <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+              {org.logo ? (
+                <img
+                  src={org.logo}
+                  alt={`${org.name} logo`}
+                  className="h-full w-full object-contain"
+                />
+              ) : (
+                <span className="text-xl font-semibold text-gray-400">
+                  {org.name.charAt(0).toUpperCase()}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                disabled={!isAdmin || logoMutation.isPending}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) logoMutation.mutate(file);
+                }}
+                className="text-xs file:mr-3 file:rounded-lg file:border-0 file:bg-primary-50 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-primary-700 hover:file:bg-primary-100 disabled:opacity-50"
+              />
+              {org.logo && isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => logoMutation.mutate(null)}
+                  disabled={logoMutation.isPending}
+                  className="self-start text-xs text-gray-500 hover:text-red-600 disabled:opacity-50"
+                >
+                  Remove logo
+                </button>
+              )}
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-gray-500">
+            PNG, JPG, SVG, or WebP. Square aspect ratio works best.
+          </p>
+        </div>
+
+        {/* Primary color */}
+        <div className="mb-6">
+          <label className="mb-2 block text-sm font-medium text-gray-700">
+            Primary color
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              type="color"
+              value={primaryColor || "#6366F1"}
+              onChange={(e) => setPrimaryColor(e.target.value.toUpperCase())}
+              disabled={!isAdmin}
+              className="h-10 w-14 cursor-pointer rounded-lg border border-gray-300 bg-white p-1 disabled:cursor-not-allowed"
+            />
+            <input
+              type="text"
+              value={primaryColor}
+              onChange={(e) => setPrimaryColor(e.target.value)}
+              placeholder="#6366F1"
+              maxLength={7}
+              disabled={!isAdmin}
+              className="w-32 rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm uppercase disabled:bg-gray-50 disabled:text-gray-500"
+            />
+            {primaryColor && isAdmin && (
+              <button
+                type="button"
+                onClick={() => setPrimaryColor("")}
+                className="text-xs text-gray-500 hover:text-gray-700"
+              >
+                Reset to default
+              </button>
+            )}
+          </div>
+          <p className="mt-2 text-xs text-gray-500">
+            Used in transactional emails sent from your organization.
+            Leave empty to keep the Showdesk default.
+          </p>
+        </div>
+
+        {/* Email "From" name */}
+        <div>
+          <label className="mb-2 block text-sm font-medium text-gray-700">
+            Email "From" name
+          </label>
+          <input
+            type="text"
+            value={emailFromName}
+            onChange={(e) => setEmailFromName(e.target.value)}
+            placeholder={`${org.name} Support`}
+            maxLength={100}
+            disabled={!isAdmin}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500"
+          />
+          <p className="mt-2 text-xs text-gray-500">
+            Display name in the From: header of outgoing emails (e.g.
+            "Acme Support &lt;noreply@showdesk.io&gt;"). Leave empty to use
+            the Showdesk brand name.
+          </p>
+        </div>
+
+        {isAdmin && (
+          <div className="mt-6 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() =>
+                fieldsMutation.mutate({
+                  primary_color: primaryColor,
+                  email_from_name: emailFromName,
+                })
+              }
+              disabled={!dirty || fieldsMutation.isPending}
+              className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+            >
+              {fieldsMutation.isPending ? "Saving..." : "Save Changes"}
+            </button>
+            {dirty && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPrimaryColor(org.primary_color || "");
+                  setEmailFromName(org.email_from_name || "");
+                }}
+                className="text-sm text-gray-500 hover:text-gray-700"
+              >
+                Discard
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function OrganizationTab({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient();
