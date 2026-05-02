@@ -15,6 +15,8 @@ import { useCurrentUser } from "@/hooks/useAuth";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useInternalWidget } from "@/hooks/useInternalWidget";
 import { fetchPlatformOrganizations } from "@/api/admin";
+import { fetchOrganization } from "@/api/users";
+import type { Organization } from "@/types";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: "grid" },
@@ -64,6 +66,32 @@ export function AppLayout() {
   const isSuperuser = user?.is_superuser ?? false;
   const hasOrg = !!(user?.organization || activeOrgId);
 
+  // Per-org branding: pull the active organization (impersonated or owned)
+  // so the sidebar can render its logo/name and the dashboard can pick up
+  // its primary color via a CSS custom property.
+  const { data: org } = useQuery({
+    queryKey: ["organization"],
+    queryFn: fetchOrganization,
+    enabled: hasOrg,
+  });
+
+  // Inject --color-primary so component-level styles can opt into the org's
+  // brand color via `style={{ color: "var(--color-primary)" }}` etc. The
+  // Tailwind palette is still static (compile-time), so existing
+  // `bg-primary-500` classes won't pick this up — that refactor is tracked
+  // separately as the "unify brand config across runtimes" tech-debt item.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (org?.primary_color) {
+      root.style.setProperty("--color-primary", org.primary_color);
+    } else {
+      root.style.removeProperty("--color-primary");
+    }
+    return () => {
+      root.style.removeProperty("--color-primary");
+    };
+  }, [org?.primary_color]);
+
   const handleLogout = () => {
     // Drop the in-app widget's stored session id so the next user who logs
     // in on this browser does not resume the previous user's conversation.
@@ -89,13 +117,15 @@ export function AppLayout() {
     <div className="flex h-screen">
       {/* Sidebar */}
       <aside className="flex w-64 flex-col border-r border-gray-200 bg-white">
-        {/* Logo */}
+        {/* Logo + brand name (per-org when set, Showdesk otherwise) */}
         <div className="flex h-16 items-center gap-2 border-b border-gray-200 px-6">
-          <img src="/logo.svg" alt="" aria-hidden="true" className="h-8 w-8" />
-          <span className="text-lg font-bold text-gray-900">Showdesk</span>
+          <SidebarBrandMark org={org} />
+          <span className="truncate text-lg font-bold text-gray-900">
+            {org?.name ?? "Showdesk"}
+          </span>
           <span
             className={clsx(
-              "ml-auto h-2 w-2 rounded-full",
+              "ml-auto h-2 w-2 shrink-0 rounded-full",
               wsStatus === "open" && "bg-green-500",
               wsStatus === "connecting" && "bg-yellow-400 animate-pulse",
               wsStatus === "closed" && "bg-red-500",
@@ -196,6 +226,34 @@ export function AppLayout() {
       </main>
     </div>
   );
+}
+
+// ── Sidebar Brand Mark ────────────────────────────────────────────────
+
+/**
+ * Renders the sidebar brand square. Per-org logo wins; otherwise the
+ * org's first letter on a primary tile; falls back to the Showdesk mark
+ * for users with no active org (e.g. superusers without impersonation).
+ */
+function SidebarBrandMark({ org }: { org: Organization | undefined }) {
+  if (org?.logo) {
+    return (
+      <img
+        src={org.logo}
+        alt=""
+        aria-hidden="true"
+        className="h-8 w-8 rounded object-contain"
+      />
+    );
+  }
+  if (org?.name) {
+    return (
+      <div className="flex h-8 w-8 items-center justify-center rounded bg-primary-100 text-sm font-semibold text-primary-700">
+        {org.name.charAt(0).toUpperCase()}
+      </div>
+    );
+  }
+  return <img src="/logo.svg" alt="" aria-hidden="true" className="h-8 w-8" />;
 }
 
 // ── Org Switcher ─────────────────────────────────────────────────────

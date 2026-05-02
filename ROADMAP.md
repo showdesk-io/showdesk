@@ -582,10 +582,20 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
       - [x] Tests: 3 new pytest cases verify `email_from_name` lands in
         the From: header, falls back to the brand name when blank, and
         that `primary_color` overrides reach the rendered HTML body.
-      - [ ] Agent UI: inject `--color-primary` from `org.primary_color`
-        as a CSS custom property at AppLayout mount; sidebar shows
-        `org.logo` (or initials fallback). Deferred -- the Tailwind
-        palette is static, so this needs a dedicated runtime-CSS pass.
+      - [x] Agent UI: AppLayout now reads the active org via
+        `fetchOrganization()` and (1) injects `--color-primary` on
+        `document.documentElement` whenever `org.primary_color` is
+        set, removing it on cleanup / when the field is cleared, so
+        components can opt in via `style={{ color: "var(--color-primary)" }}`;
+        (2) renders the org's logo in the sidebar -- per-org `logo`
+        wins, then a primary-tile of the org's first letter as
+        initials fallback, then the static Showdesk mark when no org
+        is active (e.g. superusers without impersonation). Brand
+        name in the sidebar follows the same fallback chain. Note:
+        Tailwind's `primary` palette is still compile-time static, so
+        existing `bg-primary-500` classes don't pick up the CSS
+        variable -- that wider refactor stays under the
+        "unify brand config across runtimes" tech-debt item.
       - Out of scope (separate items): full white-label / removing Showdesk
         mention, custom CSS, per-user theming, custom email domain.
 - [ ] P1: Custom domain for widget/portal
