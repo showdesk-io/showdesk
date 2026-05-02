@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-05-01
+> Last updated: 2026-05-02
 
 ---
 
@@ -92,6 +92,7 @@ Everything needed before writing real feature code. **All done.**
 - [x] **Widget: screen capture fails** -- screenshot button was disabled ("Coming soon"). Implemented full screenshot capture via getDisplayMedia single-frame, with overlay hiding, thumbnail previews, and backend widget attachment upload endpoint. Also fixed PipCompositor captureStream caching and added video track validation.
 - [x] **Widget: modal overlay blocks recording** -- when recording starts, the overlay and modal are now hidden and the FAB is replaced by a compact recording bar (dot + timer + PiP controls + stop) at the FAB position. User can interact freely with the page. On stop, the modal reappears with the recording preview.
 - [x] **Agent dashboard: no real-time updates** -- WebSocket `refetchQueries()` fix applied. Added 10s polling fallback on ticket detail view (`refetchInterval: 10_000` in `useTicket` hook) so updates work even when WebSocket connection fails (e.g. behind Cloudflare proxy).
+- [x] **Widget: session leakage between users on the same browser** -- when a logged-in user A logged out and user B logged in via the in-app widget (dogfooding), the widget resumed user A's `session_id` from `localStorage` and showed A's conversations to B. Fixed by (1) a new `Showdesk.reset()` public API that clears the stored session id (`widget/src/widget.ts`); (2) `useInternalWidget` keying the identity query by `accessToken` and calling `reset()` on cleanup; (3) backend `widget_session` dropping the supplied `session_id` when its `external_user_id` mismatches the HMAC-identified user (`backend/apps/tickets/views.py`). 4 pytest cases in `backend/tests/tickets/test_widget_session.py`.
 
 ---
 
@@ -334,77 +335,70 @@ non-matching domains can still join, but only through explicit invitation.
 
 ### Backend
 
-- [ ] P0: Public `POST /api/v1/auth/signup/` endpoint
-      -- payload: `{ email, full_name, org_name, org_slug }`
-      -- **path A** (email domain not matching any org): creates Organization + first
-        User (role=ADMIN, is_staff=True), sets `Organization.email_domain` if domain
-        is not in the public-webmail blocklist, sends OTP email
-      -- **path B** (email domain matches an existing org's `email_domain`): creates
-        an `OrgJoinRequest` (no User yet), notifies org admins by email, returns
-        `{ status: "join_requested", org_name }` so the frontend can show
-        "Your request to join Acme was sent"
-      -- rate-limited per IP and per email (5/hour) to prevent spam
-- [ ] P0: Slug availability endpoint `GET /api/v1/auth/check-slug/?slug=foo`
-- [ ] P0: Domain lookup endpoint `GET /api/v1/auth/check-domain/?email=alice@acme.com`
-      -- returns `{ matches_org: bool, org_name?: str }` so the signup form can
-        switch UI from "Create org" to "Request to join Acme" before submission
-- [ ] P0: Email-uniqueness guard on signup AND on agent invitation
-      -- keep `User.email` globally unique (one human = one org)
-      -- return 409 with explicit message instead of 500/IntegrityError
-      -- applies to existing `POST /api/v1/users/invite/` too (currently crashes)
-- [ ] P0: `Organization.email_domain` field (nullable, indexed) + public-webmail
-      blocklist constant (gmail, hotmail, outlook, yahoo, icloud, proton, aol,
-      gmx, mail, yandex, qq, 163 -- extendable)
-- [ ] P0: `OrgJoinRequest` model
-      -- fields: org, email, full_name, status (pending/approved/rejected),
-        created_at, decided_at, decided_by
-      -- endpoint `POST /api/v1/join-requests/{id}/approve/` (admin-only) -- creates
-        the User with role=AGENT, sends welcome + OTP email
-      -- endpoint `POST /api/v1/join-requests/{id}/reject/` (admin-only) -- sends
-        rejection email
-      -- endpoint `GET /api/v1/join-requests/?status=pending` (admin-only) -- list
-- [ ] P0: Onboarding state on Organization
-      -- `onboarding_completed_at` (nullable datetime), `onboarding_step` (small int)
-- [ ] P0: Welcome email on signup + join-request-submitted/approved/rejected emails
-      (added to the template list in "Email Design & Branding" section)
+- [x] P0: Public signup endpoint -- restructured into a 4-step OTP-first flow
+      under `/api/v1/auth/signup/`: `request-otp/`, `verify-otp/`, `create-org/`,
+      `request-join/`, `state/`. The OTP gate guarantees the email is verified
+      before an org is created or a join request is filed. Quota is counted per
+      IP+email but only on success (201/202) so typo iterations don't lock the
+      user out. See `apps/organizations/signup_views.py`.
+- [x] P0: Slug availability endpoint `GET /api/v1/auth/check-slug/?slug=foo`
+      (with reserved-words list).
+- [x] P0: Domain lookup endpoint `GET /api/v1/auth/check-domain/?email=alice@acme.com`
+      -- now reads from `OrganizationDomain` (status=verified, is_email_routing=True),
+      not the legacy scalar.
+- [x] P0: Email-uniqueness guard -- `/auth/signup/request-otp/` refuses
+      `END_USER` accounts and inactive users; `/users/invite/` returns 409
+      `code=email_taken` instead of 500/IntegrityError.
+- [x] P0: Public-webmail blocklist (`PUBLIC_EMAIL_DOMAINS`, ~61 entries:
+      gmail, outlook, yahoo, free.fr, etc.). The original
+      `Organization.email_domain` scalar has since been replaced by the
+      richer `OrganizationDomain` model -- see "Organizations: Verified
+      Domains" below.
+- [x] P0: `OrgJoinRequest` model + admin-only `approve` / `reject` actions
+      (`apps/organizations/models.py`, `views.py`). Approval can attach a
+      pre-existing lonely user to the target org (created during the OTP
+      gate) instead of duplicating it.
+- [x] P0: Onboarding state on Organization -- `onboarding_completed_at`
+      (nullable datetime) and `onboarding_step` (PositiveSmallIntegerField).
+- [x] P0: Welcome email on signup + join-request-submitted / approved /
+      rejected emails (templates in `backend/templates/emails/`).
 
 ### Frontend
 
-- [ ] P0: `/signup` public page
-      -- fields: full name, work email
-      -- on email blur: call /check-domain/ -- if match, switch UI to "Join {OrgName}"
-        (single button, no org name/slug fields)
-      -- if no match: show org name + slug fields (live availability via /check-slug/)
-      -- submit path A -> OTP verification screen -> setTokens + redirect to /onboarding
-      -- submit path B -> "Request sent, you'll get an email when approved" screen
-- [ ] P0: Update login page + AuthGuard with "Create an account" CTA
-- [ ] P0: Post-signup onboarding wizard (`/onboarding`)
-      -- step 1: configure widget (color, position, greeting)
-      -- step 2: invite teammates (skippable)
-      -- step 3: copy embed snippet + "Test it" link to `/widget-demo?token=...`
-      -- skippable, resumable (persists `Organization.onboarding_step`)
-      -- completion sets `onboarding_completed_at` and redirects to dashboard
-- [ ] P0: Settings > Team -- "Pending join requests" panel for admins (approve/reject
-      buttons, requester name + email + submitted date)
-- [ ] P1: Empty-state nudges in dashboard until onboarding is completed
-- [ ] P1: Widget install detection in onboarding step 3 -- after the user copies
-      the snippet, poll the API for the first widget request from their
-      `api_token` (e.g. `Organization.widget_first_seen_at` updated when a widget
-      submit/session call lands). Show a live "Waiting for first ping..." -> "
-      Widget detected!" state. Lets the user verify the integration before
-      finishing the wizard. Skip button stays available so users on a non-public
-      site can move on.
+- [x] P0: `/signup` public page -- five internal steps (`email`, `otp`,
+      `wizard`, `join_confirm`, `join_done`); domain-match preview triggers
+      the "Request to join {OrgName}" branch; live slug check; auto-resume
+      via `/auth/signup/state/`. See `frontend/src/pages/SignupPage.tsx`.
+- [x] P0: Login page CTA "Create an account"; AuthGuard now redirects an
+      authenticated user without an org to `/signup` so the wizard can
+      finish.
+- [x] P0: Post-signup onboarding wizard (`/onboarding`) -- 3 steps (widget
+      config, invite teammates, copy embed snippet + demo link), resumable
+      via `Organization.onboarding_step`. `OnboardingPage.tsx`.
+- [x] P0: Team page -- "Pending join requests" panel for admins
+      (approve/reject buttons). Lives on `/team` (the existing Team page),
+      not on a Settings tab. `TeamPage.tsx`.
+- [x] P1: Empty-state nudge on dashboard until `onboarding_completed_at`
+      is set, linking to `/onboarding`.
+- [ ] P1: Widget install detection in onboarding step 3 -- still missing.
+      Requires `Organization.widget_first_seen_at` (updated on first widget
+      submit/session call) and a poll on the wizard step. Skip button must
+      stay available for users on a non-public site.
 
 ### Tests
 
-- [ ] P0: pytest -- signup path A (org created), path B (join request created), slug
-      taken, email taken globally, rate limit, OTP delivery, public-webmail domain
-      does not trigger auto-join
-- [ ] P0: pytest -- slug + domain check endpoints
-- [ ] P0: pytest -- join request approve/reject (creates user / sends emails / role)
-- [ ] P0: pytest -- invitation endpoint returns 409 (not 500) when email exists
-- [ ] P0: Vitest -- signup form: domain-match UI switch, slug live-check, OTP step,
-      join-request confirmation screen, onboarding wizard navigation + resume
+- [x] P0: pytest -- 27+ cases in `backend/tests/organizations/test_signup.py`
+      covering both paths, slug rules, domain match, public-webmail
+      exclusion, join request lifecycle, multi-org scoping, quota counted
+      only on success.
+- [x] P0: pytest -- slug + domain check endpoints.
+- [x] P0: pytest -- join request approve/reject (creates user / sends
+      emails / role).
+- [x] P0: pytest -- invitation endpoint returns 409 (not 500) when email
+      exists, case-insensitive.
+- [ ] P0: Vitest -- signup form UI tests: still missing
+      (`SignupPage.tsx`, `OnboardingPage.tsx`). Only `authStore.test.ts`
+      exists in `frontend/src/store/__tests__/`.
 
 ### Open questions
 
@@ -415,21 +409,75 @@ non-matching domains can still join, but only through explicit invitation.
 
 ---
 
+## Phase 2.6 -- Organizations: Verified Domains
+
+A small but load-bearing system that replaces the two legacy scalar fields
+`Organization.domain` (free-text branding) and `Organization.email_domain`
+(implicit signup auto-route signal) with a single, verified-state-aware
+`OrganizationDomain` model. Multiple domains per org, both branding and
+email-routing roles, two verification paths (DNS TXT, admin-email
+auto-verify), and explicit ownership transfer when a competing org wins
+a DNS challenge.
+
+### Backend
+
+- [x] `OrganizationDomain` model with status (pending/verified/failed),
+      method (dns_txt/admin_email), token, verified_at, last_check_at,
+      `is_branding`, `is_email_routing`. Constraints: unique(org, domain),
+      partial unique on `domain` where status='verified' (one verified
+      claim per domain globally), check constraint requiring at least one
+      role. `apps/organizations/models.py:358-465`.
+- [x] Migrations: `0008` create model, `0009` backfill from legacy
+      scalars, `0010` drop `Organization.domain` and `.email_domain`.
+- [x] Service layer (`apps/organizations/services.py`):
+      `try_admin_email_autoverify`, `start_dns_challenge`,
+      `perform_dns_check`, `apply_dns_verification_success`
+      (atomically transfers ownership, flips loser to failed, emails admins).
+- [x] DNS lookups: `apps/organizations/dns_verification.py` (thin
+      dnspython wrapper, returns `[]` on errors).
+- [x] Periodic recheck: Celery Beat task
+      `recheck_dns_pending_domains` every 15 minutes, bounded by a 7-day
+      window per pending row.
+- [x] CRUD endpoints: `/api/v1/organization-domains/` with `verify` and
+      `regenerate-token` actions (admin-only writes).
+- [x] Signup integration: `SignupCreateOrgView` calls
+      `try_admin_email_autoverify` for the founder's domain (best-effort).
+- [x] `OrganizationDomain`-aware lookups in `_resolve_next_step`,
+      `CheckDomainView`, and the request-join branch.
+- [x] `domain_verified` and `domain_ownership_transferred` email templates.
+
+### Frontend
+
+- [x] Settings > Organization -- new Domains section
+      (`frontend/src/components/settings/DomainsList.tsx`): add via DNS or
+      admin-email, toggle is_branding / is_email_routing flags, "Check now"
+      for pending DNS rows, copy TXT record, regenerate stale tokens,
+      delete. Legacy backfilled rows get a "Verify via DNS" shortcut.
+- [x] Signup wizard `email_domain` field is editable: defaults to founder's
+      verified email domain (auto-verified), or accept a custom domain
+      (creates a pending DNS challenge instead). Status shown via the new
+      `email_domain_status` field on the create-org response.
+- [x] `Organization` / `PlatformOrganization` TypeScript types lose
+      `domain` and `email_domain` (single source of truth is now the
+      Domains list).
+
+---
+
 ## Phase 3 -- Admin Console
 
 ### Email Design & Branding (Priority 1)
 
-Today every email goes out as plain text via `send_mail()` (9 call sites: ticket lifecycle x4, OTP login, agent invitation, setup OTP, admin OTP, test command). Goal: a consistent, branded, HTML-rich rendering with a plain-text fallback, shared across all transactional emails.
+Goal: a consistent, branded, HTML-rich rendering with a plain-text fallback, shared across all transactional emails. **Mostly done in commits `478b130` and `0a75184`.**
 
-- [ ] Shared base email template (header with Showdesk logo, body slot, footer with org name + unsubscribe placeholder, dark-mode-friendly inline CSS)
-- [ ] Per-email Django templates (`*.html` + `*.txt`) for: new ticket, agent reply, requester reply, ticket assigned, ticket resolved, OTP login, agent invitation, admin OTP, **signup welcome, join request submitted, join request approved, join request rejected**
-- [ ] `send_branded_email()` helper in `apps/core/email.py` -- renders HTML + text from templates, sets `EmailMultiAlternatives`, handles `Reply-To`
-- [ ] Refactor all 9 call sites (`tickets/tasks.py`, `organizations/auth_views.py`, `organizations/views.py`, `core/setup_views.py`, `core/admin_auth.py`) to use the helper
-- [ ] CTA buttons (e.g. "View ticket", "Reply") rendered as bulletproof button HTML (table-based, Outlook-safe)
-- [ ] Ticket reply email: render the message body as HTML (preserve line breaks, basic formatting, attachment list)
-- [ ] Per-org branding hook: optional logo URL + primary color from `Organization` model (falls back to Showdesk defaults). Pairs with "Organization branding" item in Org Admin below.
-- [ ] Email preview tool in Django admin (render any template with sample data, view in Mailpit during dev)
-- [ ] Tests: snapshot the rendered HTML + text for each template; verify `EmailMultiAlternatives` carries both parts
+- [x] Shared base email template (`backend/templates/emails/base.html`) with header logo, body slot, brand-colored footer, inline CSS, dark-mode-friendly.
+- [x] Per-email Django templates (`*.html` + `*.txt`) for: new ticket, agent reply, ticket assigned, ticket resolved, OTP login, agent invitation, signup welcome, join request submitted/approved/rejected, **domain verified, domain ownership transferred** (13 templates total).
+- [x] `send_branded_email()` helper in `apps/core/email.py` -- renders HTML + text, sets `EmailMultiAlternatives`, embeds the logo via CID (multipart/related) so the image renders inline without an external fetch.
+- [~] All `send_mail()` call sites refactored to use the helper -- 18 of 19 done; the lone holdout is `apps/core/management/commands/sendtestemail.py` (intentional, dev-only command using stock `send_mail`).
+- [x] CTA buttons (`backend/templates/emails/_button.html`) rendered as bulletproof table-based HTML with inline styles + bgcolor fallback.
+- [x] Per-org branding hook: `_brand_for(org)` reads `Organization.logo` (ImageField) and primary color, with graceful fallback to `BRAND_*` defaults. Per-org logos are also embedded as CID.
+- [ ] Email preview tool in Django admin (render any template with sample data, view in Mailpit during dev) -- still missing.
+- [x] Tests: snapshot-style coverage in `backend/tests/core/test_email.py` (4 cases verifying HTML alternative + plain-text body for the helper and ticket emails).
+- [ ] Ticket reply email: render the message body as HTML (preserve line breaks, basic formatting, attachment list) -- still TODO.
 
 ### Agent Groups & Management
 
@@ -549,7 +597,7 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 ### Developer Experience / Tech Debt
 
 - [ ] Migrate backend dependencies from `requirements.txt` to `pyproject.toml` (PEP 621). Pick a tool (`uv`, Poetry, or `pip-tools`), generate a lockfile for reproducible builds, separate prod / dev / test dependency groups, update `backend/Dockerfile` to install from the new manifest, and adapt CI. Goal: deterministic builds + cleaner dev/prod split (e.g. `watchdog` only in dev).
-- [ ] **Unify brand config across runtimes** (single source of truth). Today the Showdesk brand is duplicated in three places: `tailwind.config.js` (front, build-time), `widget/src/ui/styles.ts` `DEFAULT_PRIMARY` (widget, runtime), and Django settings `BRAND_*` (backend, runtime). Changing the primary color requires editing 3 files. Pick a shared source — likely `brand.json` at repo root, consumed by Tailwind via `require()`, by the widget via TS import, and by Django via `json.load()` at startup. Migrate all three runtimes, drop the duplicated constants, document the new workflow. Pairs with the per-org branding work in Phase 3.
+- [ ] **Unify brand config across runtimes** (single source of truth). The Django side already centralises the brand under `BRAND_*` env-overridable settings (commit `c6705c1`), but the front and the widget still duplicate the primary colour: `tailwind.config.js` defines the full `primary.50…950` scale, `widget/src/ui/styles.ts` has its own `DEFAULT_PRIMARY`, and `Organization.widget_color` defaults to `#6366F1` in the model. Changing the primary colour still requires editing 3+ files. Pick a shared source -- likely `brand.json` at repo root, consumed by Tailwind via `require()`, by the widget via TS import, and by Django via `json.load()` at startup. Migrate all runtimes, drop the duplicated constants, document the new workflow. Pairs with the per-org branding work in Phase 3.
 
 ---
 
@@ -572,13 +620,15 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 | Area | Progress | What's done | What's left |
 |------|----------|-------------|-------------|
 | Scaffolding | **100%** | All infra, Docker, CI, docs | -- |
-| Backend API | **~99%** | Models, views, tasks, seeds, email, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type, widget_tickets endpoint, platform admin API, impersonation, **WidgetSession + messaging migration, message-delete notify, internal-org provisioning + identity-hash endpoint** | Video duration validation |
-| Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, file attachments, saved views, stats modal, agent/team filters, inline tag creation, technical context panel, issue type badge, platform admin page, org switcher, fixed embed snippet, widget preview button, **chat-style ticket detail (inline media + lightbox + inline edit), delete-message mutation, 10 s polling fallback, in-app widget dogfooding** | Shortcuts, bulk actions, agent video reply, SLA editor |
-| Widget | **~99%** | Full messaging UI (chat + history tabs, session system, audio messages, message deletion with undo, attachment menu), recording (screen + camera PiP + screenshot), upload, e2e tests, console/network collectors, user identity (API + data-user-*), API URL auto-detect, /cdn/widget.js distribution, MPA popup recording incl. audio, contact nudge, FAB unread badge + mark-as-read | Retry, i18n, accessibility |
-| Tests | **~85%** | 122+ tests (pytest + Vitest + Playwright) incl. identity-hash endpoint (7 cases), wizard flow, identity, context tests | Widget messaging tests, video API tests, more frontend tests |
-| Widget UX (Phase 2) | **~92%** | P0: distribution/API URL + **messaging refactor (WhatsApp-style chat, session system, tabs, audio, message deletion)** (100%). P1: wizard (100%), auto context (100%), user identity (100%), camera PiP (100%). P2: MPA recording persistence incl. audio (100%), ticket history in widget incl. FAB unread badge + mark-as-read (100%). Screenshot capture (basic, no annotation). | Screenshot annotation, multi-attach, session replay, video markers, News/Ideas tabs |
-| Signup & Onboarding (Phase 2.5) | **0%** | -- | Public signup endpoint, slug/domain check, email-uniqueness guard, OrgJoinRequest model + admin approval UI, /signup page + onboarding wizard, welcome/join-request emails |
-| Admin (org) | **~60%** | Agent/team CRUD, widget config, tags, custom priorities, canned responses (templates + slash picker + variables) | Branding, SLA, audit log |
+| Backend API | **~99%** | Models, views, tasks, seeds, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type, widget_tickets, platform admin, impersonation, WidgetSession + messaging, message-delete notify, internal-org provisioning + identity-hash, **OTP-first 4-step signup, OrgJoinRequest, OrganizationDomain (DNS + admin-email verification, ownership transfer, periodic recheck), branded HTML emails (CID logo)** | Video duration validation, ticket-reply email body as HTML |
+| Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, attachments, saved views, stats modal, filters, inline tag creation, technical context panel, issue type badge, platform admin, org switcher, fixed embed snippet, widget preview button, chat-style ticket detail, in-app widget dogfooding, **/signup page (5 internal steps + auto-resume), /onboarding wizard (3 steps, resumable), Settings > Domains, dashboard onboarding nudge** | Shortcuts, bulk actions, agent video reply, SLA editor, Branding tab |
+| Widget | **~99%** | Full messaging UI (chat + history tabs, session system, audio messages, message deletion with undo, attachment menu), recording (screen + camera PiP + screenshot), upload, e2e tests, console/network collectors, user identity (API + data-user-*), API URL auto-detect, /cdn/widget.js distribution, MPA popup recording incl. audio, contact nudge, FAB unread badge + mark-as-read, **`Showdesk.reset()` for clean user-switch (fixes session leakage between users on the same browser)** | Retry, i18n, accessibility |
+| Tests | **~88%** | 155+ pytest tests (incl. 27 signup cases, identity-hash, branded emails, OrganizationDomain, widget session resume) + 15 Vitest + 19 Playwright | Vitest for SignupPage / OnboardingPage, widget messaging tests, video API tests |
+| Widget UX (Phase 2) | **~92%** | P0: distribution/API URL + messaging refactor (100%). P1: wizard, auto context, user identity, camera PiP (100%). P2: MPA recording persistence incl. audio, ticket history (100%). Screenshot capture (basic, no annotation). | Screenshot annotation, multi-attach, session replay, video markers, News/Ideas tabs |
+| Signup & Onboarding (Phase 2.5) | **~95%** | All P0 backend (OTP-first signup, slug/domain check, 409 guard, OrgJoinRequest, onboarding state) + frontend (/signup, /onboarding wizard, join-requests panel on Team page, dashboard nudge) + 27+ pytest cases | Widget install detection in onboarding step 3 (`widget_first_seen_at`), Vitest for the signup/onboarding UI |
+| Verified Domains (Phase 2.6) | **100%** | OrganizationDomain model + migrations 0008-0010 (backfill + drop legacy scalars), DNS TXT + admin-email verification, ownership transfer, Celery recheck task, full CRUD + verify/regenerate-token actions, Settings UI, signup wizard integration, transfer email | -- |
+| Email branding (Phase 3) | **~85%** | Shared base template, 13 transactional templates (HTML + txt), `send_branded_email()` helper, CID inline logo, per-org logo + colour, bulletproof CTA buttons, snapshot tests, 18/19 call sites refactored | Email preview in Django admin, ticket reply body as HTML, refactor `sendtestemail` command (low priority) |
+| Admin (org) | **~65%** | Agent/team CRUD, widget config, tags, custom priorities, canned responses (templates + slash picker + variables), Domains section | Branding tab (primary_color + email_from_name + per-org logo upload UI), SLA editor (backend model exists, no UI), audit log |
 | Admin (platform) | **~45%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar, in-app dogfooding (internal org + identity-hash) | Usage/quotas dashboard, billing, feature flags, monitoring |
 | Post-MVP | **0%** | -- | Everything |
 | AI | **0%** | Models/flags ready | All implementation (auto-categorization, topic-change detection, title/description generation) |
@@ -586,16 +636,34 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 ### Next priorities
 
 1. ~~Widget distribution & API URL~~ -- **Done**
-2. ~~Widget bugs (screenshot, recording overlay, captureStream)~~ -- **Done**
-3. ~~Widget messaging refactor (chat + history + session + audio)~~ -- **Done**
-4. ~~FAB unread badge + read-receipts~~ -- **Done**
-5. **Phase 2.5 -- Self-service signup & onboarding** (unblocks acquisition: public signup, domain auto-join with admin approval, onboarding wizard)
-6. **Phase 2 P2 remaining**: screenshot annotation overlay, multi-attachments
-7. **AI layer kickoff**: ticket auto-categorization, AI title/description generation (Phase 5, behind feature flag)
-8. Platform admin console (P1: usage/quotas dashboard, billing, feature flags)
-9. ~~Canned responses / macros~~ -- **Done**
-10. Keyboard shortcuts + bulk actions
+2. ~~Widget messaging refactor + FAB unread badge~~ -- **Done**
+3. ~~Phase 2.5 P0 (signup, onboarding, join requests)~~ -- **Done**
+4. ~~Phase 2.6 verified domains~~ -- **Done**
+5. ~~Branded HTML emails (P1)~~ -- **Mostly done** (Django-admin preview + ticket-reply HTML body still TODO)
+6. ~~Widget session leakage fix (in-app dogfooding)~~ -- **Done**
+7. **Phase 2.5 leftover P1**: widget install detection in onboarding step 3 (`Organization.widget_first_seen_at` + poll on the wizard).
+8. **Phase 3 Org Admin -- Branding tab** (logo upload + primary_color + email_from_name; the per-org plumbing already exists, only the UI is missing).
+9. **Phase 2 P2 remaining**: screenshot annotation overlay, multi-attachments.
+10. **AI layer kickoff**: ticket auto-categorization, AI title/description generation (Phase 5, behind feature flag).
+11. Platform admin console (P1: usage/quotas dashboard, billing, feature flags).
+12. Keyboard shortcuts + bulk actions on the ticket list.
+13. Frontend Vitest coverage of signup / onboarding flows.
+
+### Strategic backlog -- 2026-04-30 brainstorm
+
+`docs/brainstorm/` contains 7 research syntheses (commit `1594782`) on
+topics that may shape post-MVP direction. Each note has competitor
+analysis, 2025-2026 sourcing, and a recommended architecture; use them
+as input the next time we plan a major Phase 4+ initiative.
+
+- `multi-channel-communication.md` -- email / WhatsApp / Insta / Slack inbound
+- `agent-create-ticket.md` -- agent-side ticket creation flow
+- `contacts-companies-management.md` -- CRM-light layer
+- `help-desk-portal.md` -- per-org KB + status page + custom domain
+- `video-library-loom-like.md` -- Loom-style record + transcode + CDN
+- `phone-support-webrtc.md` -- WebRTC phone via LiveKit
+- `mcp-server.md` -- MCP server exposing tickets/KB to AI agents
 
 ---
 
-*This roadmap is a living document. Last updated: 2026-04-30.*
+*This roadmap is a living document. Last updated: 2026-05-02.*
