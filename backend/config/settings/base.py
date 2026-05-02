@@ -307,10 +307,21 @@ BRAND_MUTED_COLOR = config("BRAND_MUTED_COLOR", default="#64748B")
 BRAND_BACKGROUND_COLOR = config("BRAND_BACKGROUND_COLOR", default="#F1F5F9")
 BRAND_CARD_BACKGROUND_COLOR = config("BRAND_CARD_BACKGROUND_COLOR", default="#FFFFFF")
 BRAND_BORDER_COLOR = config("BRAND_BORDER_COLOR", default="#E2E8F0")
-# Empty default → email helper falls back to f"{SITE_URL}/logo.png" (served
-# by the frontend's public/ folder). Set BRAND_LOGO_URL explicitly when the
-# app and the asset live on different origins.
+# Email logo resolution order:
+#   1. Per-org Organization.logo if set → attached as CID (multipart/related)
+#   2. BRAND_LOGO_URL if set → used as-is (external URL, no attachment)
+#   3. BRAND_LOGO_PATH file if it exists → attached as CID
+#   4. Otherwise → template falls back to text-only header
+# CID embedding is the default because external URLs are blocked or proxied
+# by most modern mail clients (Gmail, Outlook) and don't work in dev where
+# SITE_URL points to localhost.
 BRAND_LOGO_URL = config("BRAND_LOGO_URL", default="")
+BRAND_LOGO_PATH = config(
+    "BRAND_LOGO_PATH", default=str(BASE_DIR / "static" / "brand" / "logo.png")
+)
+# Cap embedded logos at 500 KB to keep email payloads sane. Larger files
+# fall back to the external URL (or text) and emit a warning.
+BRAND_LOGO_MAX_BYTES = config("BRAND_LOGO_MAX_BYTES", default=512 * 1024, cast=int)
 
 # =============================================================================
 # OTP Authentication
