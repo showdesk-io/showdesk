@@ -36,6 +36,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "agent_count",
             "onboarding_completed_at",
             "onboarding_step",
+            "widget_first_seen_at",
             "created_at",
             "updated_at",
         ]
@@ -43,6 +44,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "id",
             "api_token",
             "widget_secret",
+            "widget_first_seen_at",
             "created_at",
             "updated_at",
         ]

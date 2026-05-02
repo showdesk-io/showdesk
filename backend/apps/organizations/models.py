@@ -137,6 +137,14 @@ class Organization(TimestampedModel):
         default=0,
         help_text="Last completed step of the post-signup onboarding wizard.",
     )
+    widget_first_seen_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Timestamp of the first widget request authenticated with this "
+            "org's api_token. Powers the install-detection step in onboarding."
+        ),
+    )
 
     class Meta:
         ordering = ["name"]

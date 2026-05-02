@@ -407,6 +407,16 @@ function EmbedStep({
   );
   const [copied, setCopied] = useState(false);
 
+  // Poll the org every 3 s until the widget pings home for the first time,
+  // so the wizard can flip the status badge live without a manual refresh.
+  const detected = Boolean(org.widget_first_seen_at);
+  useQuery({
+    queryKey: ["organization"],
+    queryFn: fetchOrganization,
+    enabled: !detected,
+    refetchInterval: detected ? false : 3000,
+  });
+
   const copy = () => {
     void navigator.clipboard.writeText(snippet).then(() => {
       setCopied(true);
@@ -440,6 +450,32 @@ function EmbedStep({
         >
           {copied ? "Copied!" : "Copy"}
         </button>
+      </div>
+
+      <div
+        className={clsx(
+          "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm",
+          detected
+            ? "border-green-200 bg-green-50 text-green-700"
+            : "border-gray-200 bg-gray-50 text-gray-500",
+        )}
+      >
+        {detected ? (
+          <>
+            <span className="text-base leading-none">✓</span>
+            <span>
+              Widget detected on your site. You're good to go.
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="h-2 w-2 animate-pulse rounded-full bg-primary-400" />
+            <span>
+              Waiting for the first widget call... open your site (or the
+              demo page) once the snippet is in place.
+            </span>
+          </>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">

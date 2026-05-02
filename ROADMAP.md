@@ -380,10 +380,13 @@ non-matching domains can still join, but only through explicit invitation.
       not on a Settings tab. `TeamPage.tsx`.
 - [x] P1: Empty-state nudge on dashboard until `onboarding_completed_at`
       is set, linking to `/onboarding`.
-- [ ] P1: Widget install detection in onboarding step 3 -- still missing.
-      Requires `Organization.widget_first_seen_at` (updated on first widget
-      submit/session call) and a poll on the wizard step. Skip button must
-      stay available for users on a non-public site.
+- [x] P1: Widget install detection in onboarding step 3 --
+      `Organization.widget_first_seen_at` (migration 0011) is stamped by
+      `_get_widget_org()` on the first widget request. The wizard polls
+      the org every 3 s while still null and flips the embed step from a
+      "Waiting for first ping..." pulse to a green "Widget detected" badge.
+      Skip link to the dashboard remains available. Tests:
+      `backend/tests/tickets/test_widget_first_seen_at.py` (4 cases).
 
 ### Tests
 

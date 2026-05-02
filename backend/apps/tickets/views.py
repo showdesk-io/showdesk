@@ -78,6 +78,16 @@ def _get_widget_org(request):
             {"error": "Invalid or inactive organization token."},
             status=status.HTTP_401_UNAUTHORIZED,
         )
+    # Stamp the first widget call so the onboarding wizard can flip from
+    # "Waiting for first ping" to "Widget detected". Single UPDATE keyed on
+    # the still-null state to avoid a race with concurrent first calls.
+    if org.widget_first_seen_at is None:
+        now = timezone.now()
+        updated = Organization.objects.filter(
+            pk=org.pk, widget_first_seen_at__isnull=True
+        ).update(widget_first_seen_at=now)
+        if updated:
+            org.widget_first_seen_at = now
     return org, None
 
 
