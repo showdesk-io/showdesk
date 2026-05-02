@@ -7,7 +7,12 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { TicketList, type ViewMode } from "@/components/tickets/TicketList";
-import { useTickets, useCreateTicket } from "@/hooks/useTickets";
+import { BulkActionBar } from "@/components/tickets/BulkActionBar";
+import {
+  useTickets,
+  useCreateTicket,
+  useBulkUpdateTickets,
+} from "@/hooks/useTickets";
 import { fetchFilteredStats } from "@/api/tickets";
 import { useTags } from "@/hooks/useTags";
 import { useSavedViews, useCreateSavedView, useDeleteSavedView } from "@/hooks/useSavedViews";
@@ -148,6 +153,37 @@ export function TicketListPage() {
   });
 
   const createTicket = useCreateTicket();
+  const bulkUpdate = useBulkUpdateTickets();
+
+  // ── Bulk selection ───────────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const toggleSelected = useCallback((ticketId: string, next: boolean) => {
+    setSelectedIds((prev) => {
+      const copy = new Set(prev);
+      if (next) copy.add(ticketId);
+      else copy.delete(ticketId);
+      return copy;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  // Drop selections that fall off the page when filters / pagination
+  // change so the action bar count never overcounts ghosts.
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const visible = new Set((data?.results ?? []).map((t) => t.id));
+    const trimmed = new Set([...selectedIds].filter((id) => visible.has(id)));
+    if (trimmed.size !== selectedIds.size) setSelectedIds(trimmed);
+    // Intentionally omit selectedIds from deps -- we only react to data changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.results]);
+
+  const selectAllVisible = useCallback(() => {
+    const visible = (data?.results ?? []).map((t) => t.id);
+    setSelectedIds(new Set(visible));
+  }, [data?.results]);
 
   const handleCreate = (formData: {
     title: string;
@@ -320,8 +356,37 @@ export function TicketListPage() {
       </div>
 
       {/* Ticket list */}
-      <div className="flex-1 overflow-auto bg-white">
-        <TicketList tickets={data?.results ?? []} isLoading={isLoading} viewMode={viewMode} />
+      <div className="relative flex-1 overflow-auto bg-white">
+        <TicketList
+          tickets={data?.results ?? []}
+          isLoading={isLoading}
+          viewMode={viewMode}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelected}
+        />
+
+        {selectedIds.size > 0 && (
+          <BulkActionBar
+            selectedIds={selectedIds}
+            visibleCount={data?.results?.length ?? 0}
+            agents={agents ?? []}
+            onSelectAllVisible={selectAllVisible}
+            onClear={clearSelection}
+            isPending={bulkUpdate.isPending}
+            onBulkUpdate={(payload) => {
+              bulkUpdate.mutate(
+                { ids: [...selectedIds], ...payload },
+                {
+                  onSuccess: (res) => {
+                    toast.success(`${res.updated} ticket(s) updated.`);
+                    clearSelection();
+                  },
+                  onError: () => toast.error("Bulk update failed."),
+                },
+              );
+            }}
+          />
+        )}
       </div>
 
       {/* Create ticket modal */}

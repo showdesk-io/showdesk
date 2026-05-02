@@ -497,6 +497,101 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         return Response(TicketSerializer(ticket).data)
 
+    @action(detail=False, methods=["post"], url_path="bulk_update")
+    def bulk_update(self, request):  # noqa: ANN001, ANN201
+        """Apply a single update to many tickets at once.
+
+        Body: ``{"ids": [uuid, ...], "status"?, "priority"?,
+        "assigned_agent_id"? (uuid|null)}``. Tickets outside the active
+        organization are silently dropped (they are filtered out by the
+        org-scoped queryset). Status transitions update the lifecycle
+        timestamps the way the per-ticket actions do.
+        """
+        from django.db import transaction
+
+        ids = request.data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return Response(
+                {"error": "Provide a non-empty 'ids' array."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        new_status = request.data.get("status")
+        new_priority = request.data.get("priority")
+        # assigned_agent_id may be:
+        #   - omitted     -> leave assignee untouched
+        #   - a uuid str  -> set to that agent (must be in this org)
+        #   - explicit None -> unassign
+        agent_provided = "assigned_agent_id" in request.data
+        new_agent_id = request.data.get("assigned_agent_id")
+
+        if new_status is None and new_priority is None and not agent_provided:
+            return Response(
+                {
+                    "error": "At least one of status / priority / assigned_agent_id is required."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if new_status is not None and new_status not in Ticket.Status.values:
+            return Response(
+                {"error": f"Invalid status '{new_status}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        org = get_active_org(request)
+        if new_agent_id:
+            from apps.organizations.models import User
+
+            agent_in_org = User.objects.filter(
+                id=new_agent_id,
+                organization=org,
+                role__in=[User.Role.AGENT, User.Role.ADMIN],
+                is_active=True,
+            ).exists()
+            if not agent_in_org:
+                return Response(
+                    {"error": "Assigned agent must belong to the active organization."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        # Org-scoped queryset already filters out anything outside the
+        # active org, so a hostile or stale id list is a no-op rather
+        # than a leak.
+        tickets = list(self.get_queryset().filter(id__in=ids))
+        if not tickets:
+            return Response({"updated": 0, "ids": []})
+
+        now = timezone.now()
+        with transaction.atomic():
+            for ticket in tickets:
+                if new_priority is not None:
+                    ticket.priority = new_priority
+                if agent_provided:
+                    ticket.assigned_agent_id = new_agent_id or None
+                    if new_agent_id and not ticket.first_response_at:
+                        ticket.first_response_at = now
+                if new_status is not None:
+                    ticket.status = new_status
+                    if new_status == Ticket.Status.RESOLVED:
+                        ticket.resolved_at = ticket.resolved_at or now
+                    elif new_status == Ticket.Status.CLOSED:
+                        ticket.closed_at = ticket.closed_at or now
+                    elif new_status == Ticket.Status.OPEN:
+                        ticket.resolved_at = None
+                        ticket.closed_at = None
+                ticket.save()
+
+        for ticket in tickets:
+            try:
+                notify_ticket_update(ticket)
+            except Exception:
+                logger.exception(
+                    "WebSocket notification failed for %s", ticket.reference
+                )
+
+        return Response({"updated": len(tickets), "ids": [str(t.id) for t in tickets]})
+
     # ------------------------------------------------------------------
     # Widget messaging endpoints (chat-style)
     # ------------------------------------------------------------------

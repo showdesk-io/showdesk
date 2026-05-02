@@ -415,11 +415,54 @@ function TagBadges({ tags }: { tags: Tag[] }) {
   );
 }
 
+// ── Selection checkbox ────────────────────────────────────────────────
+
+function SelectCheckbox({
+  checked,
+  onToggle,
+  ariaLabel,
+}: {
+  checked: boolean;
+  onToggle: (next: boolean) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <input
+      type="checkbox"
+      checked={checked}
+      aria-label={ariaLabel}
+      onChange={(e) => onToggle(e.target.checked)}
+      // Don't bubble through to the row link / hover styling.
+      onClick={(e) => e.stopPropagation()}
+      className="h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+    />
+  );
+}
+
 // ── Compact Row ───────────────────────────────────────────────────────
 
-function CompactRow({ ticket }: { ticket: TicketListItem }) {
+interface RowProps {
+  ticket: TicketListItem;
+  selected?: boolean;
+  onToggleSelected?: (next: boolean) => void;
+}
+
+function CompactRow({ ticket, selected, onToggleSelected }: RowProps) {
   return (
-    <div className="flex items-center gap-4 px-6 py-3 transition-colors hover:bg-gray-50">
+    <div
+      className={clsx(
+        "flex items-center gap-4 px-6 py-3 transition-colors",
+        selected ? "bg-primary-50/60 hover:bg-primary-50" : "hover:bg-gray-50",
+      )}
+    >
+      {onToggleSelected && (
+        <SelectCheckbox
+          checked={!!selected}
+          onToggle={onToggleSelected}
+          ariaLabel={`Select ${ticket.reference}`}
+        />
+      )}
+
       {/* Inline actions (priority is clickable) */}
       <InlineActions ticket={ticket} />
 
@@ -459,7 +502,7 @@ function CompactRow({ ticket }: { ticket: TicketListItem }) {
 
 // ── Expanded Row ──────────────────────────────────────────────────────
 
-function ExpandedRow({ ticket }: { ticket: TicketListItem }) {
+function ExpandedRow({ ticket, selected, onToggleSelected }: RowProps) {
   const descriptionPreview = ticket.description
     ? ticket.description.length > 160
       ? ticket.description.slice(0, 160) + "..."
@@ -467,8 +510,23 @@ function ExpandedRow({ ticket }: { ticket: TicketListItem }) {
     : "";
 
   return (
-    <div className="px-6 py-4 transition-colors hover:bg-gray-50">
+    <div
+      className={clsx(
+        "px-6 py-4 transition-colors",
+        selected ? "bg-primary-50/60 hover:bg-primary-50" : "hover:bg-gray-50",
+      )}
+    >
       <div className="flex items-start gap-4">
+        {onToggleSelected && (
+          <div className="pt-1">
+            <SelectCheckbox
+              checked={!!selected}
+              onToggle={onToggleSelected}
+              ariaLabel={`Select ${ticket.reference}`}
+            />
+          </div>
+        )}
+
         {/* Inline actions */}
         <div className="pt-0.5">
           <InlineActions ticket={ticket} />
@@ -516,9 +574,22 @@ interface TicketListProps {
   tickets: TicketListItem[];
   isLoading: boolean;
   viewMode?: ViewMode;
+  /**
+   * If provided, renders a checkbox column on each row and highlights
+   * selected rows. The list does not own the selection state -- the
+   * page above does.
+   */
+  selectedIds?: Set<string>;
+  onToggleSelect?: (ticketId: string, next: boolean) => void;
 }
 
-export function TicketList({ tickets, isLoading, viewMode = "compact" }: TicketListProps) {
+export function TicketList({
+  tickets,
+  isLoading,
+  viewMode = "compact",
+  selectedIds,
+  onToggleSelect,
+}: TicketListProps) {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -540,7 +611,16 @@ export function TicketList({ tickets, isLoading, viewMode = "compact" }: TicketL
   return (
     <div className="divide-y divide-gray-200">
       {tickets.map((ticket) => (
-        <Row key={ticket.id} ticket={ticket} />
+        <Row
+          key={ticket.id}
+          ticket={ticket}
+          selected={selectedIds?.has(ticket.id)}
+          onToggleSelected={
+            onToggleSelect
+              ? (next) => onToggleSelect(ticket.id, next)
+              : undefined
+          }
+        />
       ))}
     </div>
   );

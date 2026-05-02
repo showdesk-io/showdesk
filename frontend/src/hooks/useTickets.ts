@@ -5,6 +5,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   assignTicket,
+  bulkUpdateTickets,
   closeTicket,
   createMessage,
   createTicket,
@@ -131,6 +132,18 @@ export function useReopenTicket() {
     mutationFn: reopenTicket,
     onSuccess: (ticket) => {
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+      void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
+    },
+  });
+}
+
+export function useBulkUpdateTickets() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: bulkUpdateTickets,
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
       void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
     },

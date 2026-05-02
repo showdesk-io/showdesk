@@ -110,6 +110,33 @@ export async function deleteMessage(messageId: string): Promise<void> {
   await apiClient.delete(`/messages/${messageId}/`);
 }
 
+// ── Bulk update ──────────────────────────────────────────────────────
+
+export interface BulkUpdatePayload {
+  ids: string[];
+  status?: string;
+  priority?: string;
+  // ``undefined`` -> leave assignee untouched.
+  // ``null``      -> explicitly unassign.
+  // string        -> set to that agent.
+  assigned_agent_id?: string | null;
+}
+
+export interface BulkUpdateResponse {
+  updated: number;
+  ids: string[];
+}
+
+export async function bulkUpdateTickets(
+  payload: BulkUpdatePayload,
+): Promise<BulkUpdateResponse> {
+  const response = await apiClient.post<BulkUpdateResponse>(
+    "/tickets/bulk_update/",
+    payload,
+  );
+  return response.data;
+}
+
 // ── Filtered Stats ───────────────────────────────────────────────────
 
 export interface FilteredTicketStats {

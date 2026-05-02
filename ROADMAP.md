@@ -148,7 +148,15 @@ Everything needed before writing real feature code. **All done.**
 - [x] Tag management (CRUD in Settings, assign on tickets, filter in list)
 - [ ] SLA policy editor
 - [ ] Keyboard shortcuts
-- [ ] Bulk actions on ticket list
+- [x] Bulk actions on ticket list -- new `POST /tickets/bulk_update/`
+      action accepts `{ids, status?, priority?, assigned_agent_id?}`
+      and applies the update in a single transaction (org-scoped, so
+      cross-org IDs are silently dropped). Frontend: row checkboxes,
+      page-level selection state with auto-trim on filter change, and
+      a sticky `BulkActionBar` at the bottom with Resolve / Close /
+      Reopen / Assign… / Clear. 10 pytest cases cover the lifecycle
+      timestamp transitions, cross-org isolation, and validation
+      (empty ids, missing fields, invalid status, cross-org agent).
 - [ ] WebSocket URL derived from window.location (no hardcoded env var)
 - [ ] Responsive layout
 - [ ] Dark mode (optional)
