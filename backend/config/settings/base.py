@@ -99,6 +99,7 @@ USE_TZ = True
 # Static files
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [BASE_DIR / "static"]
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -307,21 +308,13 @@ BRAND_MUTED_COLOR = config("BRAND_MUTED_COLOR", default="#64748B")
 BRAND_BACKGROUND_COLOR = config("BRAND_BACKGROUND_COLOR", default="#F1F5F9")
 BRAND_CARD_BACKGROUND_COLOR = config("BRAND_CARD_BACKGROUND_COLOR", default="#FFFFFF")
 BRAND_BORDER_COLOR = config("BRAND_BORDER_COLOR", default="#E2E8F0")
-# Email logo resolution order:
-#   1. Per-org Organization.logo if set → attached as CID (multipart/related)
-#   2. BRAND_LOGO_URL if set → used as-is (external URL, no attachment)
-#   3. BRAND_LOGO_PATH file if it exists → attached as CID
-#   4. Otherwise → template falls back to text-only header
-# CID embedding is the default because external URLs are blocked or proxied
-# by most modern mail clients (Gmail, Outlook) and don't work in dev where
-# SITE_URL points to localhost.
+# Email logo: external URL (Stripe-style — embedding as CID adds an unwanted
+# "attached file" indicator in many mail clients). Empty default → helper
+# falls back to f"{SITE_URL}/static/brand/logo.png", which is served by
+# Django from backend/static/brand/ (Caddy proxies /static/* to the backend
+# in dev; collectstatic + web server in prod). Set BRAND_LOGO_URL explicitly
+# when the asset lives on a different origin (CDN, marketing site, etc.).
 BRAND_LOGO_URL = config("BRAND_LOGO_URL", default="")
-BRAND_LOGO_PATH = config(
-    "BRAND_LOGO_PATH", default=str(BASE_DIR / "static" / "brand" / "logo.png")
-)
-# Cap embedded logos at 500 KB to keep email payloads sane. Larger files
-# fall back to the external URL (or text) and emit a warning.
-BRAND_LOGO_MAX_BYTES = config("BRAND_LOGO_MAX_BYTES", default=512 * 1024, cast=int)
 
 # =============================================================================
 # OTP Authentication
