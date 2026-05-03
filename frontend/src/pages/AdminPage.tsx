@@ -12,17 +12,41 @@ import {
   suspendPlatformOrganization,
   deletePlatformOrganization,
   fetchOrganizationStats,
+  fetchPlatformUsage,
+  type UsagePeriod,
 } from "@/api/admin";
+
+const adminTabs = ["Organizations", "Usage"] as const;
+type AdminTab = (typeof adminTabs)[number];
+
 export function AdminPage() {
+  const [activeTab, setActiveTab] = useState<AdminTab>("Organizations");
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-gray-200 bg-white px-6 pt-6">
         <h1 className="mb-4 text-2xl font-bold text-gray-900">
           Platform Admin
         </h1>
+        <div className="flex gap-1">
+          {adminTabs.map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={clsx(
+                "rounded-t-lg px-4 py-2 text-sm font-medium transition-colors",
+                activeTab === tab
+                  ? "border-b-2 border-primary-500 text-primary-700"
+                  : "text-gray-500 hover:text-gray-700",
+              )}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="flex-1 overflow-auto p-6">
-        <OrganizationsPanel />
+        {activeTab === "Organizations" && <OrganizationsPanel />}
+        {activeTab === "Usage" && <UsagePanel />}
       </div>
     </div>
   );
@@ -462,6 +486,183 @@ function StatsSection({
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── Usage Panel ──────────────────────────────────────────────────────
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), units.length - 1);
+  return `${(bytes / Math.pow(k, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function formatNumber(n: number): string {
+  return n.toLocaleString();
+}
+
+function UsagePanel() {
+  const [period, setPeriod] = useState<UsagePeriod>("all");
+  const { data, isLoading } = useQuery({
+    queryKey: ["platform-usage", period],
+    queryFn: () => fetchPlatformUsage(period),
+  });
+
+  if (isLoading || !data) {
+    return (
+      <div className="flex justify-center py-12">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  const totals = data.platform;
+
+  return (
+    <div className="space-y-6">
+      {/* Period toggle */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">
+            Resource usage
+          </h2>
+          <p className="mt-1 text-sm text-gray-500">
+            {period === "all"
+              ? "All-time platform totals."
+              : "Activity in the last 30 days."}{" "}
+            Per-org breakdown lists the top 20 tenants by ticket volume.
+          </p>
+        </div>
+        <div className="flex rounded-lg border border-gray-200 bg-white p-0.5">
+          {(["all", "month"] as UsagePeriod[]).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPeriod(p)}
+              className={clsx(
+                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                period === p
+                  ? "bg-primary-50 text-primary-700"
+                  : "text-gray-500 hover:text-gray-700",
+              )}
+            >
+              {p === "all" ? "All time" : "Last 30d"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Platform totals */}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <BigStatCard
+          label="Organizations"
+          value={formatNumber(totals.organizations_total)}
+          sub={`${formatNumber(totals.organizations_active)} active`}
+        />
+        <BigStatCard
+          label="Active agents"
+          value={formatNumber(totals.agents_active)}
+        />
+        <BigStatCard
+          label={period === "all" ? "Tickets" : "Tickets (30d)"}
+          value={formatNumber(totals.tickets_total)}
+        />
+        <BigStatCard
+          label={period === "all" ? "Videos" : "Videos (30d)"}
+          value={formatNumber(totals.videos_total)}
+          sub={`${formatNumber(totals.video_minutes)} min`}
+        />
+        <BigStatCard
+          label="Attachment + video storage"
+          value={formatBytes(totals.attachment_storage_bytes)}
+        />
+      </div>
+
+      {/* Per-org table */}
+      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <table className="min-w-full divide-y divide-gray-200 text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                Organization
+              </th>
+              <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                Agents
+              </th>
+              <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                Tickets
+              </th>
+              <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                Videos
+              </th>
+              <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                Video min
+              </th>
+              <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                Storage
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {data.organizations.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={6}
+                  className="px-4 py-8 text-center text-sm text-gray-400"
+                >
+                  No usage to report yet.
+                </td>
+              </tr>
+            ) : (
+              data.organizations.map((row) => (
+                <tr key={row.id} className="hover:bg-gray-50">
+                  <td className="whitespace-nowrap px-4 py-2">
+                    <div className="font-medium text-gray-900">{row.name}</div>
+                    <div className="text-xs text-gray-500">{row.slug}</div>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-right text-gray-700">
+                    {formatNumber(row.agents)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-right text-gray-700">
+                    {formatNumber(row.tickets)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-right text-gray-700">
+                    {formatNumber(row.videos)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-right text-gray-700">
+                    {formatNumber(row.video_minutes)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-right text-gray-700">
+                    {formatBytes(row.storage_bytes)}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function BigStatCard({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-4">
+      <div className="text-xs font-medium uppercase tracking-wide text-gray-500">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-bold text-gray-900">{value}</div>
+      {sub && <div className="mt-1 text-xs text-gray-500">{sub}</div>}
     </div>
   );
 }

@@ -643,7 +643,20 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 
 - [x] P0: Organization list (create, suspend, delete)
 - [x] P0: Organization detail (usage stats)
-- [ ] P1: Usage & quotas dashboard
+- [x] P1: Usage & quotas dashboard -- new
+      `GET /api/v1/platform/organizations/usage/?period=all|month`
+      action returns platform-wide totals (orgs / active orgs / agents
+      / tickets / videos / video minutes / attachment+video storage
+      bytes) plus a per-org breakdown capped at the top 20 tenants
+      by ticket volume. Live-aggregated from the source tables
+      (Ticket, TicketAttachment, VideoRecording) with a single query
+      per metric -- the `UsageRecord` roll-up model stays available
+      for billing-quality history later. Frontend: AdminPage gains
+      tabs (Organizations / Usage), the Usage panel shows 5 stat
+      cards + a per-org table with bytes formatted as B/KB/MB/GB and
+      an All-time / Last 30d period toggle. Tests: 4 pytest cases
+      (forbidden for non-superuser, totals + per-org breakdown,
+      30-day window filter, top-20 cap with heaviest-first sort).
 - [ ] P1: Billing / Plans management
 - [ ] P1: Feature flags per tenant
 - [ ] P2: Global monitoring dashboard

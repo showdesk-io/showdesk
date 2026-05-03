@@ -86,3 +86,45 @@ export async function fetchOrganizationStats(
   );
   return response.data;
 }
+
+// ── Platform-wide usage ──────────────────────────────────────────────
+
+export type UsagePeriod = "all" | "month";
+
+export interface PlatformUsageTotals {
+  organizations_total: number;
+  organizations_active: number;
+  agents_active: number;
+  tickets_total: number;
+  videos_total: number;
+  video_minutes: number;
+  attachment_storage_bytes: number;
+}
+
+export interface PlatformUsageOrgRow {
+  id: string;
+  name: string;
+  slug: string;
+  is_active: boolean;
+  agents: number;
+  tickets: number;
+  videos: number;
+  video_minutes: number;
+  storage_bytes: number;
+}
+
+export interface PlatformUsageResponse {
+  period: UsagePeriod;
+  platform: PlatformUsageTotals;
+  organizations: PlatformUsageOrgRow[];
+}
+
+export async function fetchPlatformUsage(
+  period: UsagePeriod = "all",
+): Promise<PlatformUsageResponse> {
+  const response = await apiClient.get<PlatformUsageResponse>(
+    "/platform/organizations/usage/",
+    { params: { period } },
+  );
+  return response.data;
+}

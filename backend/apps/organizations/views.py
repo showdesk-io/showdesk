@@ -418,6 +418,116 @@ class PlatformOrganizationViewSet(viewsets.ModelViewSet):
         org.save(update_fields=["is_active"])
         return Response(PlatformOrganizationDetailSerializer(org).data)
 
+    @action(detail=False, methods=["get"])
+    def usage(self, request):  # noqa: ANN001, ANN201
+        """Platform-wide and per-org resource usage snapshot.
+
+        Always live-computed from the source tables (no dependency on
+        the unused UsageRecord roll-ups for now). Period filter
+        (``?period=month`` for a 30-day window, otherwise all-time).
+        Per-org rows: capped to the 20 heaviest tenants by ticket
+        volume, since the platform admin is the only consumer.
+        """
+        from django.db.models import Sum
+        from apps.tickets.models import Ticket, TicketAttachment
+        from apps.videos.models import VideoRecording
+
+        period = request.query_params.get("period", "all")
+        since = (
+            timezone.now() - timezone.timedelta(days=30) if period == "month" else None
+        )
+
+        org_qs = Organization.objects.all()
+        ticket_qs = Ticket.objects.all()
+        attachment_qs = TicketAttachment.objects.all()
+        video_qs = VideoRecording.objects.all()
+        if since is not None:
+            ticket_qs = ticket_qs.filter(created_at__gte=since)
+            attachment_qs = attachment_qs.filter(created_at__gte=since)
+            video_qs = video_qs.filter(created_at__gte=since)
+
+        agent_qs = User.objects.filter(
+            role__in=[User.Role.AGENT, User.Role.ADMIN], is_active=True
+        )
+
+        platform_totals = {
+            "organizations_total": org_qs.count(),
+            "organizations_active": org_qs.filter(is_active=True).count(),
+            "agents_active": agent_qs.count(),
+            "tickets_total": ticket_qs.count(),
+            "videos_total": video_qs.count(),
+            "video_minutes": round(
+                (video_qs.aggregate(s=Sum("duration_seconds"))["s"] or 0) / 60,
+                1,
+            ),
+            "attachment_storage_bytes": (
+                attachment_qs.aggregate(s=Sum("file_size"))["s"] or 0
+            )
+            + (video_qs.aggregate(s=Sum("file_size"))["s"] or 0),
+        }
+
+        # Per-org breakdown -- annotate then sort by ticket count.
+        per_org_rows = []
+        agent_counts = dict(
+            agent_qs.values("organization")
+            .annotate(c=Count("id"))
+            .values_list("organization", "c")
+        )
+        ticket_counts = dict(
+            ticket_qs.values("organization")
+            .annotate(c=Count("id"))
+            .values_list("organization", "c")
+        )
+        video_counts = dict(
+            video_qs.values("ticket__organization")
+            .annotate(c=Count("id"))
+            .values_list("ticket__organization", "c")
+        )
+        video_minutes = {
+            row["ticket__organization"]: round((row["s"] or 0) / 60, 1)
+            for row in video_qs.values("ticket__organization").annotate(
+                s=Sum("duration_seconds")
+            )
+        }
+        attachment_bytes = dict(
+            attachment_qs.values("ticket__organization")
+            .annotate(s=Sum("file_size"))
+            .values_list("ticket__organization", "s")
+        )
+        video_bytes = dict(
+            video_qs.values("ticket__organization")
+            .annotate(s=Sum("file_size"))
+            .values_list("ticket__organization", "s")
+        )
+
+        for org in org_qs.order_by("name"):
+            tickets = ticket_counts.get(org.id, 0)
+            per_org_rows.append(
+                {
+                    "id": str(org.id),
+                    "name": org.name,
+                    "slug": org.slug,
+                    "is_active": org.is_active,
+                    "agents": agent_counts.get(org.id, 0),
+                    "tickets": tickets,
+                    "videos": video_counts.get(org.id, 0),
+                    "video_minutes": video_minutes.get(org.id, 0.0),
+                    "storage_bytes": (attachment_bytes.get(org.id) or 0)
+                    + (video_bytes.get(org.id) or 0),
+                }
+            )
+
+        # Sort heaviest tenants first; trim to top 20 to keep the
+        # response size predictable.
+        per_org_rows.sort(key=lambda r: r["tickets"], reverse=True)
+        return Response(
+            {
+                "period": "month" if since else "all",
+                "platform": platform_totals,
+                "organizations": per_org_rows[:20],
+            }
+        )
+
     @action(detail=True, methods=["get"])
     def stats(self, request, pk=None):  # noqa: ANN001, ANN201
         """Return usage statistics for an organization."""
