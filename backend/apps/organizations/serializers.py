@@ -17,6 +17,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
     """Serializer for the Organization model."""
 
     agent_count = serializers.SerializerMethodField()
+    enabled_features = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
@@ -39,6 +40,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "onboarding_completed_at",
             "onboarding_step",
             "widget_first_seen_at",
+            "plan",
+            "enabled_features",
             "created_at",
             "updated_at",
         ]
@@ -47,12 +50,17 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "api_token",
             "widget_secret",
             "widget_first_seen_at",
+            "plan",
+            "enabled_features",
             "created_at",
             "updated_at",
         ]
 
     def get_agent_count(self, obj: Organization) -> int:
         return obj.users.filter(role__in=["admin", "agent"], is_active=True).count()
+
+    def get_enabled_features(self, obj: Organization) -> list[str]:
+        return sorted(obj.enabled_features())
 
 
 class OrganizationPublicSerializer(serializers.ModelSerializer):

@@ -677,10 +677,24 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
       against every plan, both override directions (unlock for
       lower plan / kill-switch for plan default), the unknown-flag
       fallback, the `enabled_features()` set, and the platform-admin
-      PATCH path. Gating actual features on `has_feature()` is
-      explicitly out of scope here -- the data model + admin UI
-      land first so we can iterate on the catalogue before sprinkling
-      gates throughout the codebase.
+      PATCH path. (Live gating sites are tracked just below.)
+- [x] P1: Live feature gates -- `apps/core/permissions.has_feature(...)`
+      DRF permission factory used by `SLAPolicyViewSet` (gates the
+      whole CRUD), the `tickets/bulk_update/` action, and
+      `OrganizationViewSet.update/partial_update` (which rejects any
+      PATCH touching `logo` / `primary_color` / `email_from_name`
+      without `custom_branding`). `OrganizationSerializer` ships
+      `enabled_features` so the frontend can hide gated UI:
+      SettingsPage drops the SLA / Branding tabs when missing,
+      TicketListPage hides selection checkboxes + BulkActionBar +
+      the `x` shortcut when `bulk_actions` is missing. Test factories
+      default `OrganizationFactory.plan = "business"` so existing
+      tests keep their unrestricted access; 11 new pytest cases pin
+      each gate (free 403 / starter or business 200 / per-tenant
+      override unlocks) plus the `enabled_features` exposure on
+      `/organizations/`. The 4 catalogued-but-unimplemented flags
+      (`ai_categorization`, `audit_log`, `sso`, `webhooks`) are
+      ungated until their features ship.
 - [ ] P2: Global monitoring dashboard
 - [x] P1: Impersonation -- org switcher in sidebar, X-Showdesk-Org header, middleware + get_active_org helper
 - [x] P1: Conditional sidebar -- superusers without an organization only see Admin; superusers attached to an org (or impersonating) see both Admin and the standard nav

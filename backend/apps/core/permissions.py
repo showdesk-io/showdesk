@@ -12,6 +12,29 @@ class IsPlatformAdmin(BasePermission):
         )
 
 
+def has_feature(feature: str) -> type[BasePermission]:
+    """Build a DRF permission class that gates on a per-org feature flag.
+
+    Usage:
+        permission_classes = [IsAuthenticated, has_feature("sla_policies")]
+
+    Resolves the active org via ``get_active_org`` so that platform
+    admin impersonation (X-Showdesk-Org header) sees the impersonated
+    org's flags, not the superuser's own. Returns 403 if the flag is
+    not enabled for the org.
+    """
+
+    class _HasFeature(BasePermission):
+        message = f"Your plan does not include the '{feature}' feature."
+
+        def has_permission(self, request, view):  # noqa: ANN001, ANN201
+            org = get_active_org(request)
+            return org is not None and org.has_feature(feature)
+
+    _HasFeature.__name__ = f"HasFeature_{feature}"
+    return _HasFeature
+
+
 def get_active_org(request):  # noqa: ANN001, ANN201
     """Return the effective organization for the current request.
 

@@ -41,12 +41,39 @@ class OrganizationViewSet(viewsets.ModelViewSet):
     serializer_class = OrganizationSerializer
     permission_classes = [IsAuthenticated]
 
+    # Fields that require the ``custom_branding`` feature flag to mutate.
+    # Read-only orgs (free plan) keep the defaults (Showdesk brand) but
+    # cannot edit them; the API returns 403 the moment they try.
+    BRANDING_WRITABLE_FIELDS = ("logo", "primary_color", "email_from_name")
+
     def get_queryset(self):  # noqa: ANN201
         """Filter organizations by the active organization."""
         org = get_active_org(self.request)
         if org:
             return Organization.objects.filter(id=org.id)
         return Organization.objects.none()
+
+    def update(self, request, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        self._reject_branding_writes_without_flag(request)
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        self._reject_branding_writes_without_flag(request)
+        return super().partial_update(request, *args, **kwargs)
+
+    def _reject_branding_writes_without_flag(self, request) -> None:
+        from rest_framework.exceptions import PermissionDenied
+
+        org = get_active_org(request)
+        if org is None or org.has_feature("custom_branding"):
+            return
+        # Touched any branding field? -- raise a clean 403.
+        touched = [f for f in self.BRANDING_WRITABLE_FIELDS if f in request.data]
+        if touched:
+            raise PermissionDenied(
+                "Custom branding is not included in your plan. "
+                f"Fields requiring it: {', '.join(touched)}."
+            )
 
     @action(detail=True, methods=["post"])
     def regenerate_token(self, request, pk=None):  # noqa: ANN001, ANN201

@@ -9,7 +9,7 @@ from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from apps.core.permissions import get_active_org
+from apps.core.permissions import get_active_org, has_feature
 from rest_framework.parsers import FormParser, MultiPartParser
 from apps.core.throttling import (
     WidgetMessageThrottle,
@@ -498,7 +498,12 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         return Response(TicketSerializer(ticket).data)
 
-    @action(detail=False, methods=["post"], url_path="bulk_update")
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="bulk_update",
+        permission_classes=[IsAuthenticated, has_feature("bulk_actions")],
+    )
     def bulk_update(self, request):  # noqa: ANN001, ANN201
         """Apply a single update to many tickets at once.
 
@@ -1227,10 +1232,12 @@ class SLAPolicyViewSet(viewsets.ModelViewSet):
 
     Admins can create/update/delete; agents can read only. Per-priority
     uniqueness is enforced at the model level (``unique_together``).
+
+    Gated behind the ``sla_policies`` feature flag (Cloud Business+).
     """
 
     serializer_class = SLAPolicySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, has_feature("sla_policies")]
 
     def get_queryset(self):  # noqa: ANN201
         org = get_active_org(self.request)

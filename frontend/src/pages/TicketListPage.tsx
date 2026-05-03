@@ -18,7 +18,7 @@ import { fetchFilteredStats } from "@/api/tickets";
 import { useTags } from "@/hooks/useTags";
 import { useSavedViews, useCreateSavedView, useDeleteSavedView } from "@/hooks/useSavedViews";
 import { useCurrentUser } from "@/hooks/useAuth";
-import { fetchAgents, fetchTeams } from "@/api/users";
+import { fetchAgents, fetchOrganization, fetchTeams } from "@/api/users";
 import type { TicketPriority, SavedView, SavedViewFilters } from "@/types";
 
 const statusOptions: { value: string; label: string }[] = [
@@ -93,6 +93,11 @@ export function TicketListPage() {
   const { data: agents } = useQuery({ queryKey: ["agents"], queryFn: fetchAgents });
   const { data: teams } = useQuery({ queryKey: ["teams"], queryFn: fetchTeams });
   const { data: savedViews } = useSavedViews();
+  const { data: org } = useQuery({
+    queryKey: ["organization"],
+    queryFn: fetchOrganization,
+  });
+  const canBulkAct = (org?.enabled_features ?? []).includes("bulk_actions");
 
   const currentFilters = useMemo(
     () =>
@@ -216,7 +221,9 @@ export function TicketListPage() {
         ),
       k: () => setFocusedIndex((i) => Math.max(i - 1, 0)),
       x: () => {
-        if (focusedTicket) toggleSelected(focusedTicket.id, !selectedIds.has(focusedTicket.id));
+        if (!canBulkAct) return;
+        if (focusedTicket)
+          toggleSelected(focusedTicket.id, !selectedIds.has(focusedTicket.id));
       },
       Enter: () => {
         if (focusedTicket) navigate(`/tickets/${focusedTicket.id}`);
@@ -406,12 +413,12 @@ export function TicketListPage() {
           tickets={data?.results ?? []}
           isLoading={isLoading}
           viewMode={viewMode}
-          selectedIds={selectedIds}
-          onToggleSelect={toggleSelected}
+          selectedIds={canBulkAct ? selectedIds : undefined}
+          onToggleSelect={canBulkAct ? toggleSelected : undefined}
           focusedId={focusedTicket?.id ?? null}
         />
 
-        {selectedIds.size > 0 && (
+        {canBulkAct && selectedIds.size > 0 && (
           <BulkActionBar
             selectedIds={selectedIds}
             visibleCount={data?.results?.length ?? 0}

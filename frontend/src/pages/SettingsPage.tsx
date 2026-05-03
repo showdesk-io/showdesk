@@ -57,18 +57,46 @@ const tabs = [
 ] as const;
 type Tab = (typeof tabs)[number];
 
+// Tabs that depend on a feature flag. Hidden when the org's plan does
+// not include the flag (and there is no per-tenant override). The
+// resolved set comes from `Organization.enabled_features` on the API
+// response, so this map only needs the (tab → flag) edges.
+const TABS_REQUIRING_FEATURE: Partial<Record<Tab, string>> = {
+  SLA: "sla_policies",
+  Branding: "custom_branding",
+};
+
 export function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("Agents");
   const { data: currentUser } = useCurrentUser();
   const isAdmin =
     currentUser?.role === "admin" || false;
 
+  // The /organizations/ payload now ships `enabled_features`; reuse the
+  // same query key as the rest of the app so we hit the same cache.
+  const { data: org } = useQuery({
+    queryKey: ["organization"],
+    queryFn: fetchOrganization,
+  });
+  const enabledFeatures = new Set(org?.enabled_features ?? []);
+
+  const visibleTabs = tabs.filter((tab) => {
+    const flag = TABS_REQUIRING_FEATURE[tab];
+    return !flag || enabledFeatures.has(flag);
+  });
+
+  // If the active tab disappears (e.g. plan downgrade), fall back.
+  const fallbackTab = visibleTabs[0];
+  if (fallbackTab && !visibleTabs.includes(activeTab)) {
+    setActiveTab(fallbackTab);
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-gray-200 bg-white px-6 pt-6">
         <h1 className="mb-4 text-2xl font-bold text-gray-900">Settings</h1>
         <div className="flex gap-1">
-          {tabs.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}

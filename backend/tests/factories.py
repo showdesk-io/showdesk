@@ -22,7 +22,14 @@ from apps.videos.models import VideoRecording
 
 
 class OrganizationFactory(factory.django.DjangoModelFactory):
-    """Factory for creating Organization instances."""
+    """Factory for creating Organization instances.
+
+    Default plan is BUSINESS so that all currently-shipped feature
+    flags (bulk_actions, custom_branding, sla_policies, etc.) are
+    enabled out of the box -- existing tests expected unrestricted
+    access. Tests that exercise the gates explicitly pass
+    ``plan=Plan.FREE`` (or any other tier).
+    """
 
     class Meta:
         model = Organization
@@ -35,6 +42,7 @@ class OrganizationFactory(factory.django.DjangoModelFactory):
     widget_greeting = "How can we help?"
     video_expiration_days = 90
     video_max_duration_seconds = 600
+    plan = "business"
 
 
 class UserFactory(factory.django.DjangoModelFactory):
