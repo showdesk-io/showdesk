@@ -12,9 +12,12 @@ import {
   suspendPlatformOrganization,
   deletePlatformOrganization,
   fetchOrganizationStats,
+  fetchPlatformOrganizationDetail,
+  updatePlatformOrganization,
   fetchPlatformUsage,
   type UsagePeriod,
 } from "@/api/admin";
+import type { Plan } from "@/types";
 
 const adminTabs = ["Organizations", "Usage"] as const;
 type AdminTab = (typeof adminTabs)[number];
@@ -385,6 +388,11 @@ function OrganizationDetailPanel({
     queryFn: () => fetchPlatformOrganizations({ page_size: 100 }),
   });
 
+  const { data: detail } = useQuery({
+    queryKey: ["platform-organization-detail", orgId],
+    queryFn: () => fetchPlatformOrganizationDetail(orgId),
+  });
+
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ["platform-org-stats", orgId],
     queryFn: () => fetchOrganizationStats(orgId),
@@ -427,6 +435,9 @@ function OrganizationDetailPanel({
             />
           </div>
 
+          {/* Plan + feature flags */}
+          {detail && <PlanFeatureFlagsEditor detail={detail} />}
+
           {/* Stats */}
           {statsLoading ? (
             <div className="text-sm text-gray-400">Loading stats...</div>
@@ -442,6 +453,220 @@ function OrganizationDetailPanel({
             </>
           ) : null}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Plan + Feature Flags editor ──────────────────────────────────────
+
+const PLAN_OPTIONS: { value: Plan; label: string }[] = [
+  { value: "free", label: "Free" },
+  { value: "starter", label: "Cloud Starter" },
+  { value: "business", label: "Cloud Business" },
+  { value: "enterprise", label: "Enterprise" },
+];
+
+// Mirrors PLAN_DEFAULT_FEATURES in apps/organizations/models.py. Kept
+// in sync manually -- the backend response also returns
+// `enabled_features` so the rendered tri-state matches reality.
+const KNOWN_FLAGS = [
+  "bulk_actions",
+  "custom_branding",
+  "sla_policies",
+  "ai_categorization",
+  "audit_log",
+  "sso",
+  "webhooks",
+] as const;
+
+const PLAN_DEFAULT_FEATURES_FE: Record<Plan, Set<string>> = {
+  free: new Set(),
+  starter: new Set(["bulk_actions", "custom_branding"]),
+  business: new Set([
+    "bulk_actions",
+    "custom_branding",
+    "sla_policies",
+    "ai_categorization",
+    "webhooks",
+  ]),
+  enterprise: new Set(KNOWN_FLAGS),
+};
+
+function PlanFeatureFlagsEditor({
+  detail,
+}: {
+  detail: import("@/types").PlatformOrganizationDetail;
+}) {
+  const queryClient = useQueryClient();
+  const [plan, setPlan] = useState<Plan>(detail.plan);
+  const [overrides, setOverrides] = useState<Record<string, boolean>>(
+    detail.feature_flag_overrides ?? {},
+  );
+  const [initialised, setInitialised] = useState(detail.id);
+
+  // Re-seed local state when the panel switches to a different org.
+  if (initialised !== detail.id) {
+    setPlan(detail.plan);
+    setOverrides(detail.feature_flag_overrides ?? {});
+    setInitialised(detail.id);
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: (data: Partial<import("@/types").PlatformOrganizationDetail>) =>
+      updatePlatformOrganization(detail.id, data),
+    onSuccess: () => {
+      toast.success("Plan & flags updated");
+      void queryClient.invalidateQueries({
+        queryKey: ["platform-organization-detail", detail.id],
+      });
+    },
+    onError: () => toast.error("Failed to update plan / flags"),
+  });
+
+  const planDefaults = PLAN_DEFAULT_FEATURES_FE[plan];
+  const dirty =
+    plan !== detail.plan ||
+    JSON.stringify(overrides) !==
+      JSON.stringify(detail.feature_flag_overrides ?? {});
+
+  // For each flag, the resolved state used to render the toggle:
+  //   override wins, otherwise the plan default.
+  const resolved = (flag: string): boolean => {
+    if (flag in overrides) return overrides[flag] === true;
+    return planDefaults.has(flag);
+  };
+
+  const setOverride = (flag: string, value: boolean | null) => {
+    setOverrides((prev) => {
+      const next = { ...prev };
+      if (value === null) delete next[flag];
+      else next[flag] = value;
+      return next;
+    });
+  };
+
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-semibold text-gray-700">
+        Plan & feature flags
+      </h3>
+      <div className="space-y-3 rounded-lg border border-gray-200 p-4">
+        <div>
+          <label className="mb-1 block text-xs font-medium uppercase text-gray-500">
+            Plan
+          </label>
+          <select
+            value={plan}
+            onChange={(e) => setPlan(e.target.value as Plan)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+          >
+            {PLAN_OPTIONS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <label className="text-xs font-medium uppercase text-gray-500">
+              Features
+            </label>
+            <span className="text-[10px] text-gray-400">
+              Plan default · override
+            </span>
+          </div>
+          <ul className="space-y-1.5">
+            {KNOWN_FLAGS.map((flag) => {
+              const overridden = flag in overrides;
+              const isOn = resolved(flag);
+              return (
+                <li
+                  key={flag}
+                  className="flex items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-gray-50"
+                >
+                  <div>
+                    <div className="font-mono text-gray-800">{flag}</div>
+                    <div className="text-[10px] text-gray-400">
+                      Plan default:{" "}
+                      {planDefaults.has(flag) ? "on" : "off"}
+                      {overridden && (
+                        <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                          Overridden
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setOverride(flag, true)}
+                      className={clsx(
+                        "rounded px-2 py-0.5 text-[10px] font-medium",
+                        isOn && (overridden || planDefaults.has(flag))
+                          ? "bg-green-100 text-green-700"
+                          : "text-gray-400 hover:bg-gray-100",
+                      )}
+                    >
+                      ON
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOverride(flag, false)}
+                      className={clsx(
+                        "rounded px-2 py-0.5 text-[10px] font-medium",
+                        !isOn
+                          ? "bg-red-100 text-red-700"
+                          : "text-gray-400 hover:bg-gray-100",
+                      )}
+                    >
+                      OFF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOverride(flag, null)}
+                      disabled={!overridden}
+                      title="Reset to plan default"
+                      className="rounded px-2 py-0.5 text-[10px] text-gray-400 hover:bg-gray-100 disabled:opacity-30"
+                    >
+                      ↺
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        {dirty && (
+          <div className="flex justify-end gap-2 border-t border-gray-100 pt-3">
+            <button
+              type="button"
+              onClick={() => {
+                setPlan(detail.plan);
+                setOverrides(detail.feature_flag_overrides ?? {});
+              }}
+              className="rounded-lg px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                saveMutation.mutate({
+                  plan,
+                  feature_flag_overrides: overrides,
+                })
+              }
+              disabled={saveMutation.isPending}
+              className="rounded-lg bg-primary-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+            >
+              {saveMutation.isPending ? "Saving..." : "Save"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -658,7 +658,29 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
       (forbidden for non-superuser, totals + per-org breakdown,
       30-day window filter, top-20 cap with heaviest-first sort).
 - [ ] P1: Billing / Plans management
-- [ ] P1: Feature flags per tenant
+- [x] P1: Feature flags per tenant -- new
+      `Organization.plan` (free / starter / business / enterprise --
+      mirroring the Cloud pricing tiers in
+      `showdesk.io/MARKET_ANALYSIS.md`) plus
+      `Organization.feature_flag_overrides` (JSONField). Helpers:
+      `org.has_feature(name)` resolves overrides → plan default →
+      False; `org.enabled_features()` returns the active set. The
+      flag catalogue (`bulk_actions`, `custom_branding`,
+      `sla_policies`, `ai_categorization`, `audit_log`, `sso`,
+      `webhooks`) and `PLAN_DEFAULT_FEATURES` map live in
+      `apps/organizations/models.py` -- no external flagging library
+      yet, since the catalogue is still small. Migration 0013 adds
+      both fields. Platform admin Detail panel exposes a Plan
+      dropdown + per-flag ON/OFF/reset triadic toggles with an
+      "Overridden" badge so it's obvious when a tenant diverges
+      from its plan default. Tests: 12 pytest cases pin the resolver
+      against every plan, both override directions (unlock for
+      lower plan / kill-switch for plan default), the unknown-flag
+      fallback, the `enabled_features()` set, and the platform-admin
+      PATCH path. Gating actual features on `has_feature()` is
+      explicitly out of scope here -- the data model + admin UI
+      land first so we can iterate on the catalogue before sprinkling
+      gates throughout the codebase.
 - [ ] P2: Global monitoring dashboard
 - [x] P1: Impersonation -- org switcher in sidebar, X-Showdesk-Org header, middleware + get_active_org helper
 - [x] P1: Conditional sidebar -- superusers without an organization only see Admin; superusers attached to an org (or impersonating) see both Admin and the standard nav

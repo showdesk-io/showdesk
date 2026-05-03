@@ -98,6 +98,8 @@ export interface PlatformOrganization {
   updated_at: string;
 }
 
+export type Plan = "free" | "starter" | "business" | "enterprise";
+
 export interface PlatformOrganizationDetail extends PlatformOrganization {
   logo: string | null;
   api_token: string;
@@ -107,6 +109,9 @@ export interface PlatformOrganizationDetail extends PlatformOrganization {
   widget_greeting: string;
   video_expiration_days: number;
   video_max_duration_seconds: number;
+  plan: Plan;
+  feature_flag_overrides: Record<string, boolean>;
+  enabled_features: string[];
 }
 
 export interface OrganizationStats {

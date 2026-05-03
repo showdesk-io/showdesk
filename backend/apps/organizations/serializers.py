@@ -146,6 +146,7 @@ class PlatformOrganizationDetailSerializer(serializers.ModelSerializer):
 
     agent_count = serializers.SerializerMethodField()
     ticket_count = serializers.SerializerMethodField()
+    enabled_features = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
@@ -164,6 +165,9 @@ class PlatformOrganizationDetailSerializer(serializers.ModelSerializer):
             "video_max_duration_seconds",
             "agent_count",
             "ticket_count",
+            "plan",
+            "feature_flag_overrides",
+            "enabled_features",
             "created_at",
             "updated_at",
         ]
@@ -171,6 +175,7 @@ class PlatformOrganizationDetailSerializer(serializers.ModelSerializer):
             "id",
             "api_token",
             "widget_secret",
+            "enabled_features",
             "created_at",
             "updated_at",
         ]
@@ -180,6 +185,9 @@ class PlatformOrganizationDetailSerializer(serializers.ModelSerializer):
 
     def get_ticket_count(self, obj: Organization) -> int:
         return obj.tickets.count()
+
+    def get_enabled_features(self, obj: Organization) -> list[str]:
+        return sorted(obj.enabled_features())
 
 
 class PlatformOrganizationCreateSerializer(serializers.ModelSerializer):

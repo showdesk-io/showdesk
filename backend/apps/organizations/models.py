@@ -72,6 +72,57 @@ def is_public_email_domain(domain: str) -> bool:
     return domain.lower() in PUBLIC_EMAIL_DOMAINS
 
 
+# Pricing tiers as per the business plan -- per workspace, not per seat
+# (`docs/plans/...` in showdesk.io). Mapped to a default feature set
+# below; per-org overrides on ``Organization.feature_flag_overrides``
+# can pin individual flags True/False regardless of plan.
+class Plan(models.TextChoices):
+    FREE = "free", "Free"
+    STARTER = "starter", "Cloud Starter"
+    BUSINESS = "business", "Cloud Business"
+    ENTERPRISE = "enterprise", "Enterprise"
+
+
+# Names of features the rest of the codebase can gate on. Keep this list
+# short -- a flag should represent a meaningful product capability, not
+# an internal toggle. Anything beyond a handful belongs in a dedicated
+# flagging system (django-waffle, Flagsmith, etc.) rather than in the
+# Organization row.
+FEATURE_FLAGS = (
+    "bulk_actions",
+    "custom_branding",
+    "sla_policies",
+    "ai_categorization",
+    "audit_log",
+    "sso",
+    "webhooks",
+)
+
+# Default unlocked-flag set per plan. Add a feature to a tier and every
+# org on that tier (or above, since `_PLAN_RANK` is used implicitly via
+# the union below) gets it for free.
+PLAN_DEFAULT_FEATURES: dict[str, set[str]] = {
+    Plan.FREE: set(),
+    Plan.STARTER: {"bulk_actions", "custom_branding"},
+    Plan.BUSINESS: {
+        "bulk_actions",
+        "custom_branding",
+        "sla_policies",
+        "ai_categorization",
+        "webhooks",
+    },
+    Plan.ENTERPRISE: {
+        "bulk_actions",
+        "custom_branding",
+        "sla_policies",
+        "ai_categorization",
+        "webhooks",
+        "audit_log",
+        "sso",
+    },
+}
+
+
 class Organization(TimestampedModel):
     """A company or entity that uses Showdesk to manage support tickets.
 
@@ -169,11 +220,54 @@ class Organization(TimestampedModel):
         ),
     )
 
+    # Billing plan + feature flags. The plan picks a default unlocked
+    # feature set (see PLAN_DEFAULT_FEATURES); per-org overrides pin
+    # individual flags True/False regardless of plan -- handy for
+    # enabling a beta feature for a single tenant or revoking one
+    # without changing their tier.
+    plan = models.CharField(
+        max_length=20,
+        choices=Plan.choices,
+        default=Plan.FREE,
+        help_text="Billing tier. Drives the default feature-flag set.",
+    )
+    feature_flag_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Per-org feature toggles, e.g. {'ai_categorization': true}. "
+            "Each entry overrides the plan default for that flag."
+        ),
+    )
+
     class Meta:
         ordering = ["name"]
 
     def __str__(self) -> str:
         return self.name
+
+    def has_feature(self, flag: str) -> bool:
+        """Return True if the org currently has access to ``flag``.
+
+        Per-org overrides win over plan defaults so a beta feature can
+        be flipped on (or off) for a single tenant without changing
+        their billing tier.
+        """
+        overrides = self.feature_flag_overrides or {}
+        if flag in overrides:
+            return bool(overrides[flag])
+        return flag in PLAN_DEFAULT_FEATURES.get(self.plan, set())
+
+    def enabled_features(self) -> set[str]:
+        """Set of feature flag names currently enabled for this org."""
+        defaults = set(PLAN_DEFAULT_FEATURES.get(self.plan, set()))
+        overrides = self.feature_flag_overrides or {}
+        for flag, enabled in overrides.items():
+            if enabled:
+                defaults.add(flag)
+            else:
+                defaults.discard(flag)
+        return defaults
 
     @staticmethod
     def generate_widget_secret() -> str:
