@@ -32,6 +32,15 @@ import {
 } from "@/hooks/useCannedResponses";
 import type { PriorityLevel } from "@/api/priorities";
 import type { CannedResponse } from "@/api/cannedResponses";
+import {
+  fetchSLAPolicies,
+  createSLAPolicy,
+  updateSLAPolicy,
+  deleteSLAPolicy,
+  type SLAPolicy,
+  type SLAPolicyInput,
+  type SLAPriority,
+} from "@/api/slaPolicies";
 import { AVAILABLE_VARIABLES } from "@/lib/cannedResponseVars";
 import type { Organization, Tag, User, UserRole } from "@/types";
 import { DomainsList } from "@/components/settings/DomainsList";
@@ -40,6 +49,7 @@ const tabs = [
   "Agents",
   "Tags",
   "Priorities",
+  "SLA",
   "Canned Responses",
   "Widget",
   "Branding",
@@ -79,6 +89,7 @@ export function SettingsPage() {
         {activeTab === "Agents" && <AgentsTab isAdmin={isAdmin} />}
         {activeTab === "Tags" && <TagsTab isAdmin={isAdmin} />}
         {activeTab === "Priorities" && <PrioritiesTab isAdmin={isAdmin} />}
+        {activeTab === "SLA" && <SLATab isAdmin={isAdmin} />}
         {activeTab === "Canned Responses" && (
           <CannedResponsesTab currentUser={currentUser} />
         )}
@@ -1410,6 +1421,348 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
 }
 
 // ── Organization Tab ──────────────────────────────────────────────────
+
+// ── SLA Tab ──────────────────────────────────────────────────────────
+
+const SLA_PRIORITIES: { value: SLAPriority; label: string; color: string }[] = [
+  { value: "urgent", label: "Urgent", color: "#EF4444" },
+  { value: "high", label: "High", color: "#F97316" },
+  { value: "medium", label: "Medium", color: "#3B82F6" },
+  { value: "low", label: "Low", color: "#6B7280" },
+];
+
+function formatMinutes(total: number): string {
+  if (total < 60) return `${total} min`;
+  if (total % 60 === 0) {
+    const h = total / 60;
+    return h < 24 ? `${h} h` : `${(h / 24).toFixed(h % 24 === 0 ? 0 : 1)} d`;
+  }
+  return `${Math.floor(total / 60)} h ${total % 60} min`;
+}
+
+function SLATab({ isAdmin }: { isAdmin: boolean }) {
+  const queryClient = useQueryClient();
+  const { data: policies, isLoading } = useQuery({
+    queryKey: ["sla-policies"],
+    queryFn: fetchSLAPolicies,
+  });
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+
+  const onSuccess = () => {
+    void queryClient.invalidateQueries({ queryKey: ["sla-policies"] });
+  };
+
+  const createMutation = useMutation({
+    mutationFn: createSLAPolicy,
+    onSuccess: () => {
+      toast.success("SLA policy created.");
+      setShowCreate(false);
+      onSuccess();
+    },
+    onError: (err: unknown) => {
+      const detail =
+        (err as { response?: { data?: Record<string, unknown> } }).response
+          ?.data;
+      const msg =
+        (detail?.priority as string[] | undefined)?.[0] ||
+        "Failed to create SLA policy.";
+      toast.error(msg);
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<SLAPolicyInput> }) =>
+      updateSLAPolicy(id, data),
+    onSuccess: () => {
+      toast.success("SLA policy updated.");
+      setEditingId(null);
+      onSuccess();
+    },
+    onError: () => toast.error("Failed to update SLA policy."),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteSLAPolicy,
+    onSuccess: () => {
+      toast.success("SLA policy deleted.");
+      onSuccess();
+    },
+    onError: () => toast.error("Failed to delete SLA policy."),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-12">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  const usedPriorities = new Set((policies ?? []).map((p) => p.priority));
+  const availablePriorities = SLA_PRIORITIES.filter(
+    (p) => !usedPriorities.has(p.value),
+  );
+
+  return (
+    <div className="mx-auto max-w-3xl">
+      <div className="mb-4 flex items-start justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">
+            SLA Policies ({policies?.length ?? 0})
+          </h2>
+          <p className="mt-1 text-sm text-gray-500">
+            Define target response and resolution times per priority. Each
+            priority can have at most one policy.
+          </p>
+        </div>
+        {isAdmin && availablePriorities.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowCreate(!showCreate)}
+            className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600"
+          >
+            + New policy
+          </button>
+        )}
+      </div>
+
+      {showCreate && (
+        <SLAPolicyForm
+          availablePriorities={availablePriorities}
+          isSubmitting={createMutation.isPending}
+          onSubmit={(data) => createMutation.mutate(data)}
+          onCancel={() => setShowCreate(false)}
+        />
+      )}
+
+      {(policies ?? []).length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 bg-white p-8 text-center text-sm text-gray-500">
+          No SLA policies yet.{" "}
+          {isAdmin && "Add one to start tracking response times by priority."}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {(policies ?? []).map((policy) => {
+            const meta = SLA_PRIORITIES.find((p) => p.value === policy.priority);
+            return (
+              <div
+                key={policy.id}
+                className="rounded-xl border border-gray-200 bg-white p-4"
+              >
+                {editingId === policy.id ? (
+                  <SLAPolicyForm
+                    initial={policy}
+                    availablePriorities={SLA_PRIORITIES.filter(
+                      (p) => !usedPriorities.has(p.value) || p.value === policy.priority,
+                    )}
+                    isSubmitting={updateMutation.isPending}
+                    onSubmit={(data) =>
+                      updateMutation.mutate({ id: policy.id, data })
+                    }
+                    onCancel={() => setEditingId(null)}
+                  />
+                ) : (
+                  <div className="flex items-center gap-4">
+                    <span
+                      className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium text-white"
+                      style={{ backgroundColor: meta?.color || "#9CA3AF" }}
+                    >
+                      {meta?.label ?? policy.priority}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="truncate text-sm font-medium text-gray-900">
+                          {policy.name}
+                        </h3>
+                        {!policy.is_active && (
+                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium uppercase text-gray-500">
+                            Inactive
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-xs text-gray-500">
+                        First response in{" "}
+                        <strong>{formatMinutes(policy.first_response_minutes)}</strong>
+                        {" · "}
+                        Resolve in{" "}
+                        <strong>{formatMinutes(policy.resolution_minutes)}</strong>
+                      </p>
+                    </div>
+                    {isAdmin && (
+                      <div className="flex shrink-0 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(policy.id)}
+                          className="rounded-lg px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`Delete policy "${policy.name}"?`)) {
+                              deleteMutation.mutate(policy.id);
+                            }
+                          }}
+                          className="rounded-lg px-3 py-1.5 text-xs text-red-600 hover:bg-red-50"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SLAPolicyForm({
+  initial,
+  availablePriorities,
+  isSubmitting,
+  onSubmit,
+  onCancel,
+}: {
+  initial?: SLAPolicy;
+  availablePriorities: { value: SLAPriority; label: string; color: string }[];
+  isSubmitting: boolean;
+  onSubmit: (data: SLAPolicyInput) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [priority, setPriority] = useState<SLAPriority>(
+    initial?.priority ?? availablePriorities[0]?.value ?? "medium",
+  );
+  const [firstResponseMinutes, setFirstResponseMinutes] = useState(
+    initial?.first_response_minutes ?? 60,
+  );
+  const [resolutionMinutes, setResolutionMinutes] = useState(
+    initial?.resolution_minutes ?? 480,
+  );
+  const [isActive, setIsActive] = useState(initial?.is_active ?? true);
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit({
+          name,
+          priority,
+          first_response_minutes: firstResponseMinutes,
+          resolution_minutes: resolutionMinutes,
+          is_active: isActive,
+        });
+      }}
+      className={clsx(
+        !initial &&
+          "mb-4 rounded-xl border border-primary-200 bg-primary-50/30 p-4",
+      )}
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
+          <label className="mb-1 block text-xs font-medium text-gray-600">
+            Name
+          </label>
+          <input
+            type="text"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+            placeholder="e.g. Standard urgent"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">
+            Priority
+          </label>
+          <select
+            value={priority}
+            onChange={(e) => setPriority(e.target.value as SLAPriority)}
+            disabled={availablePriorities.length === 0}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+          >
+            {availablePriorities.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 flex items-center gap-2 text-xs font-medium text-gray-600">
+            <input
+              type="checkbox"
+              checked={isActive}
+              onChange={(e) => setIsActive(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            Active (applied to new tickets)
+          </label>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">
+            First response (minutes)
+          </label>
+          <input
+            type="number"
+            required
+            min={1}
+            value={firstResponseMinutes}
+            onChange={(e) =>
+              setFirstResponseMinutes(parseInt(e.target.value, 10) || 0)
+            }
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+          />
+          <p className="mt-1 text-[10px] text-gray-400">
+            = {formatMinutes(firstResponseMinutes)}
+          </p>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-gray-600">
+            Resolution (minutes)
+          </label>
+          <input
+            type="number"
+            required
+            min={1}
+            value={resolutionMinutes}
+            onChange={(e) =>
+              setResolutionMinutes(parseInt(e.target.value, 10) || 0)
+            }
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+          />
+          <p className="mt-1 text-[10px] text-gray-400">
+            = {formatMinutes(resolutionMinutes)}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 flex gap-2">
+        <button
+          type="submit"
+          disabled={isSubmitting || !name.trim()}
+          className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+        >
+          {isSubmitting ? "Saving..." : initial ? "Save" : "Create"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg px-4 py-2 text-sm text-gray-600 hover:bg-gray-100"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
 
 // ── Branding Tab ──────────────────────────────────────────────────────
 

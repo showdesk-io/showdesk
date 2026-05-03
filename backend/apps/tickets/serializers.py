@@ -46,7 +46,14 @@ class TagSerializer(serializers.ModelSerializer):
 
 
 class SLAPolicySerializer(serializers.ModelSerializer):
-    """Serializer for the SLAPolicy model."""
+    """Serializer for the SLAPolicy model.
+
+    ``organization`` is set server-side from the active org in the
+    viewset's ``perform_create`` -- exposing it as writable would let a
+    caller forge cross-org rows. The ``unique_together`` (org, priority)
+    is enforced explicitly here so duplicates surface as a clean 400
+    instead of an unhandled IntegrityError.
+    """
 
     class Meta:
         model = SLAPolicy
@@ -61,7 +68,25 @@ class SLAPolicySerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "organization", "created_at", "updated_at"]
+
+    def validate_priority(self, value: str) -> str:
+        from apps.core.permissions import get_active_org
+
+        request = self.context.get("request")
+        if request is None:
+            return value
+        org = get_active_org(request)
+        if org is None:
+            return value
+        qs = SLAPolicy.objects.filter(organization=org, priority=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(
+                f"A policy for priority '{value}' already exists in this organization."
+            )
+        return value
 
 
 class TicketAttachmentSerializer(serializers.ModelSerializer):

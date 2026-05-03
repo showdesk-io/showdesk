@@ -610,7 +610,21 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 - [x] P1: Tags & categories management
 - [x] P1: Custom priority management (CRUD, custom colors, per-org)
 - [x] P1: Canned responses / macros (CRUD in Settings, slash-trigger picker in reply composer, `{{variable}}` substitution, personal/shared scope, usage counter)
-- [ ] P2: SLA policy editor
+- [x] P2: SLA policy editor -- new `SLAPolicyViewSet`
+      (`/api/v1/sla-policies/`) backed by the existing `SLAPolicy`
+      model: agents read-only, admins write. Per-(org, priority)
+      uniqueness validated explicitly in the serializer so duplicates
+      surface as a clean 400 instead of an unhandled IntegrityError.
+      Settings > SLA tab lets admins create / edit / delete one
+      policy per priority with first-response and resolution
+      thresholds in minutes (rendered as `h`/`d` for readability), an
+      Active toggle, and a confirm-before-delete. Frontend hides the
+      "+ New policy" CTA once all four built-in priorities have a
+      policy. 9 pytest cases cover read-by-agent, admin CRUD, agent
+      403 on writes, the duplicate-priority guard, and cross-org
+      isolation. Breach detection / SLA badges on tickets are
+      separately tracked under "Notification System" (SLA breach
+      events).
 - [ ] P2: Notification preferences (per-agent, webhooks)
 - [ ] P2: Audit log
 - [ ] P3: Automation rules / triggers

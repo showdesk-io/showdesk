@@ -39,6 +39,7 @@ from .serializers import (
     CannedResponseSerializer,
     PriorityLevelSerializer,
     SavedViewSerializer,
+    SLAPolicySerializer,
     TagSerializer,
     TicketAttachmentSerializer,
     TicketCreateFromWidgetSerializer,
@@ -1219,6 +1220,47 @@ class PriorityLevelViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:  # noqa: ANN001
         """Set organization from the active org."""
         serializer.save(organization=get_active_org(self.request))
+
+
+class SLAPolicyViewSet(viewsets.ModelViewSet):
+    """CRUD for ``SLAPolicy`` rows, scoped to the active organization.
+
+    Admins can create/update/delete; agents can read only. Per-priority
+    uniqueness is enforced at the model level (``unique_together``).
+    """
+
+    serializer_class = SLAPolicySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):  # noqa: ANN201
+        org = get_active_org(self.request)
+        if org:
+            from .models import SLAPolicy
+
+            return SLAPolicy.objects.filter(organization=org)
+        from .models import SLAPolicy
+
+        return SLAPolicy.objects.none()
+
+    def _require_admin(self) -> None:
+        from apps.organizations.models import User
+        from rest_framework.exceptions import PermissionDenied
+
+        user = self.request.user
+        if user.role != User.Role.ADMIN and not user.is_superuser:
+            raise PermissionDenied("Only admins can manage SLA policies.")
+
+    def perform_create(self, serializer) -> None:  # noqa: ANN001
+        self._require_admin()
+        serializer.save(organization=get_active_org(self.request))
+
+    def perform_update(self, serializer) -> None:  # noqa: ANN001
+        self._require_admin()
+        serializer.save()
+
+    def perform_destroy(self, instance) -> None:  # noqa: ANN001
+        self._require_admin()
+        instance.delete()
 
 
 class SavedViewViewSet(viewsets.ModelViewSet):

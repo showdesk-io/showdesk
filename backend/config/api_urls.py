@@ -26,6 +26,7 @@ from apps.tickets.views import (
     CannedResponseViewSet,
     PriorityLevelViewSet,
     SavedViewViewSet,
+    SLAPolicyViewSet,
     TagViewSet,
     TicketAttachmentViewSet,
     TicketMessageViewSet,
@@ -56,6 +57,7 @@ router.register(r"messages", TicketMessageViewSet, basename="message")
 router.register(r"attachments", TicketAttachmentViewSet, basename="attachment")
 router.register(r"tags", TagViewSet, basename="tag")
 router.register(r"priorities", PriorityLevelViewSet, basename="priority")
+router.register(r"sla-policies", SLAPolicyViewSet, basename="sla-policy")
 router.register(r"saved-views", SavedViewViewSet, basename="saved-view")
 router.register(
     r"canned-responses",
