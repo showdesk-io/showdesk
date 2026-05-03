@@ -13,6 +13,7 @@ import {
   useCreateTicket,
   useBulkUpdateTickets,
 } from "@/hooks/useTickets";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { fetchFilteredStats } from "@/api/tickets";
 import { useTags } from "@/hooks/useTags";
 import { useSavedViews, useCreateSavedView, useDeleteSavedView } from "@/hooks/useSavedViews";
@@ -184,6 +185,50 @@ export function TicketListPage() {
     const visible = (data?.results ?? []).map((t) => t.id);
     setSelectedIds(new Set(visible));
   }, [data?.results]);
+
+  // ── Keyboard navigation (Linear/GitHub-style) ────────────────────────
+  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const ticketsList = data?.results ?? [];
+
+  // Reset focus when the visible list changes (filter / pagination).
+  useEffect(() => {
+    setFocusedIndex(-1);
+  }, [ticketsList.length]);
+
+  const focusedTicket = focusedIndex >= 0 ? ticketsList[focusedIndex] : null;
+
+  // Scroll the focused row into view so j/k navigation stays comfortable
+  // even with long lists.
+  useEffect(() => {
+    if (!focusedTicket) return;
+    const el = document.querySelector(
+      `[data-ticket-row="${focusedTicket.id}"]`,
+    );
+    if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [focusedTicket]);
+
+  useKeyboardShortcuts(
+    {
+      j: () =>
+        setFocusedIndex((i) =>
+          ticketsList.length === 0 ? -1 : Math.min(i + 1, ticketsList.length - 1),
+        ),
+      k: () => setFocusedIndex((i) => Math.max(i - 1, 0)),
+      x: () => {
+        if (focusedTicket) toggleSelected(focusedTicket.id, !selectedIds.has(focusedTicket.id));
+      },
+      Enter: () => {
+        if (focusedTicket) navigate(`/tickets/${focusedTicket.id}`);
+      },
+      Escape: () => {
+        if (selectedIds.size > 0) clearSelection();
+        else setFocusedIndex(-1);
+      },
+      "?": () => setShowShortcuts(true),
+    },
+    { enabled: !showCreateModal && !showStatsModal },
+  );
 
   const handleCreate = (formData: {
     title: string;
@@ -363,6 +408,7 @@ export function TicketListPage() {
           viewMode={viewMode}
           selectedIds={selectedIds}
           onToggleSelect={toggleSelected}
+          focusedId={focusedTicket?.id ?? null}
         />
 
         {selectedIds.size > 0 && (
@@ -412,6 +458,112 @@ export function TicketListPage() {
           onClose={() => setShowStatsModal(false)}
         />
       )}
+
+      {/* Keyboard-shortcut help button + modal */}
+      <button
+        type="button"
+        title="Keyboard shortcuts (?)"
+        aria-label="Keyboard shortcuts"
+        onClick={() => setShowShortcuts(true)}
+        className="fixed bottom-4 right-4 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white text-sm font-mono text-gray-500 shadow-md hover:bg-gray-50 hover:text-gray-700"
+      >
+        ?
+      </button>
+      {showShortcuts && (
+        <ShortcutHelpModal onClose={() => setShowShortcuts(false)} />
+      )}
+    </div>
+  );
+}
+
+// ── Keyboard Shortcut Help Modal ──────────────────────────────────────
+
+const SHORTCUT_GROUPS: { title: string; items: { keys: string[]; label: string }[] }[] = [
+  {
+    title: "Navigation",
+    items: [
+      { keys: ["j"], label: "Focus next ticket" },
+      { keys: ["k"], label: "Focus previous ticket" },
+      { keys: ["Enter"], label: "Open focused ticket" },
+      { keys: ["Esc"], label: "Clear selection / focus" },
+    ],
+  },
+  {
+    title: "Selection",
+    items: [
+      { keys: ["x"], label: "Toggle selection on focused ticket" },
+    ],
+  },
+  {
+    title: "Help",
+    items: [{ keys: ["?"], label: "Show this dialog" }],
+  },
+];
+
+function ShortcutHelpModal({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900">
+            Keyboard shortcuts
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="space-y-4">
+          {SHORTCUT_GROUPS.map((group) => (
+            <div key={group.title}>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                {group.title}
+              </h3>
+              <ul className="space-y-1.5">
+                {group.items.map((item) => (
+                  <li
+                    key={item.label}
+                    className="flex items-center justify-between gap-3 text-sm"
+                  >
+                    <span className="text-gray-700">{item.label}</span>
+                    <span className="flex gap-1">
+                      {item.keys.map((k) => (
+                        <kbd
+                          key={k}
+                          className="rounded border border-gray-300 bg-gray-50 px-2 py-0.5 font-mono text-xs text-gray-700 shadow-sm"
+                        >
+                          {k}
+                        </kbd>
+                      ))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <p className="mt-4 text-[11px] text-gray-400">
+          Shortcuts are disabled while typing in inputs and modals.
+        </p>
+      </div>
     </div>
   );
 }

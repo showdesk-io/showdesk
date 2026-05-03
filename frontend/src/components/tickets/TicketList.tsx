@@ -444,15 +444,18 @@ function SelectCheckbox({
 interface RowProps {
   ticket: TicketListItem;
   selected?: boolean;
+  focused?: boolean;
   onToggleSelected?: (next: boolean) => void;
 }
 
-function CompactRow({ ticket, selected, onToggleSelected }: RowProps) {
+function CompactRow({ ticket, selected, focused, onToggleSelected }: RowProps) {
   return (
     <div
+      data-ticket-row={ticket.id}
       className={clsx(
         "flex items-center gap-4 px-6 py-3 transition-colors",
         selected ? "bg-primary-50/60 hover:bg-primary-50" : "hover:bg-gray-50",
+        focused && "ring-2 ring-inset ring-primary-400",
       )}
     >
       {onToggleSelected && (
@@ -502,7 +505,7 @@ function CompactRow({ ticket, selected, onToggleSelected }: RowProps) {
 
 // ── Expanded Row ──────────────────────────────────────────────────────
 
-function ExpandedRow({ ticket, selected, onToggleSelected }: RowProps) {
+function ExpandedRow({ ticket, selected, focused, onToggleSelected }: RowProps) {
   const descriptionPreview = ticket.description
     ? ticket.description.length > 160
       ? ticket.description.slice(0, 160) + "..."
@@ -511,9 +514,11 @@ function ExpandedRow({ ticket, selected, onToggleSelected }: RowProps) {
 
   return (
     <div
+      data-ticket-row={ticket.id}
       className={clsx(
         "px-6 py-4 transition-colors",
         selected ? "bg-primary-50/60 hover:bg-primary-50" : "hover:bg-gray-50",
+        focused && "ring-2 ring-inset ring-primary-400",
       )}
     >
       <div className="flex items-start gap-4">
@@ -581,6 +586,8 @@ interface TicketListProps {
    */
   selectedIds?: Set<string>;
   onToggleSelect?: (ticketId: string, next: boolean) => void;
+  /** Ticket id currently in keyboard focus (rendered with a ring). */
+  focusedId?: string | null;
 }
 
 export function TicketList({
@@ -589,6 +596,7 @@ export function TicketList({
   viewMode = "compact",
   selectedIds,
   onToggleSelect,
+  focusedId,
 }: TicketListProps) {
   if (isLoading) {
     return (
@@ -615,6 +623,7 @@ export function TicketList({
           key={ticket.id}
           ticket={ticket}
           selected={selectedIds?.has(ticket.id)}
+          focused={focusedId === ticket.id}
           onToggleSelected={
             onToggleSelect
               ? (next) => onToggleSelect(ticket.id, next)

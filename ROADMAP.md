@@ -147,7 +147,15 @@ Everything needed before writing real feature code. **All done.**
 - [x] File attachment upload on messages
 - [x] Tag management (CRUD in Settings, assign on tickets, filter in list)
 - [ ] SLA policy editor
-- [ ] Keyboard shortcuts
+- [x] Keyboard shortcuts -- ticket list now supports Linear/GitHub-style
+      navigation: `j` / `k` to focus next/previous ticket, `Enter` to
+      open the focused ticket, `x` to toggle its selection, `Esc` to
+      clear selection / focus, `?` to open a help dialog. Built on a
+      tiny in-house `useKeyboardShortcuts` hook (no external dep) that
+      ignores key events from inputs, textareas, contenteditable, and
+      modifier-only chords (Cmd/Ctrl/Alt). Auto-disables while a modal
+      is open. Help dialog is reachable via the `?` key and a floating
+      bottom-right button. 10 Vitest cases pin the hook contract.
 - [x] Bulk actions on ticket list -- new `POST /tickets/bulk_update/`
       action accepts `{ids, status?, priority?, assigned_agent_id?}`
       and applies the update in a single transaction (org-scoped, so
