@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-05-02
+> Last updated: 2026-10-28
 
 ---
 
@@ -189,8 +189,9 @@ Everything needed before writing real feature code. **All done.**
 
 - [x] CI pipeline (GitHub Actions: lint, test, build)
 - [x] Health check endpoint
-- [~] Docker image build + push in CI (workflow created, pending first run)
-- [ ] Automated migrations on deploy
+- [x] Docker image build + push in CI (`docker-publish.yml` → `ghcr.io/showdesk-io/showdesk-{backend,frontend}`, green on every push to `main`)
+- [x] Continuous deploy to prod -- `auto-update` sidecar polls GHCR digests and triggers a Portainer stack redeploy (app.showdesk.io serves the 2026-05-03 build)
+- [x] Automated migrations on deploy (one-shot `migrate` service in `docker-compose.prod.yml`, gated by `RUN_MIGRATIONS`, app services `depends_on` it)
 - [ ] Logging and monitoring (structured JSON)
 - [ ] Backup strategy docs
 - [ ] Publish widget to npmjs.com (`@showdesk/widget`) + CDN via unpkg/jsdelivr
@@ -495,14 +496,14 @@ a DNS challenge.
 
 ### Email Design & Branding (Priority 1)
 
-Goal: a consistent, branded, HTML-rich rendering with a plain-text fallback, shared across all transactional emails. **Mostly done in commits `478b130` and `0a75184`.**
+Goal: a consistent, branded, HTML-rich rendering with a plain-text fallback, shared across all transactional emails. **Done** (commits `478b130`, `0a75184`, `43aef86`, `d0f432c`).
 
 - [x] Shared base email template (`backend/templates/emails/base.html`) with header logo, body slot, brand-colored footer, inline CSS, dark-mode-friendly.
 - [x] Per-email Django templates (`*.html` + `*.txt`) for: new ticket, agent reply, ticket assigned, ticket resolved, OTP login, agent invitation, signup welcome, join request submitted/approved/rejected, **domain verified, domain ownership transferred** (13 templates total).
-- [x] `send_branded_email()` helper in `apps/core/email.py` -- renders HTML + text, sets `EmailMultiAlternatives`, embeds the logo via CID (multipart/related) so the image renders inline without an external fetch.
+- [x] `send_branded_email()` helper in `apps/core/email.py` -- renders HTML + text, sets `EmailMultiAlternatives`, references the logo by external URL (`{SITE_URL}/static/brand/logo.png`) -- CID embedding was tried then reverted in `43aef86` because Gmail shows it as an attachment.
 - [~] All `send_mail()` call sites refactored to use the helper -- 18 of 19 done; the lone holdout is `apps/core/management/commands/sendtestemail.py` (intentional, dev-only command using stock `send_mail`).
 - [x] CTA buttons (`backend/templates/emails/_button.html`) rendered as bulletproof table-based HTML with inline styles + bgcolor fallback.
-- [x] Per-org branding hook: `_brand_for(org)` reads `Organization.logo` (ImageField) and primary color, with graceful fallback to `BRAND_*` defaults. Per-org logos are also embedded as CID.
+- [x] Per-org branding hook: `_brand_for(org)` reads `Organization.logo` (ImageField) and primary color, with graceful fallback to `BRAND_*` defaults. Per-org logos are served by URL as well.
 - [x] Email preview tool -- shipped as a `preview_email` management
       command (`python manage.py preview_email --list` /
       `preview_email <template> --to <addr> [--org <slug>]`). Renders
@@ -704,6 +705,33 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 
 ---
 
+## Phase 3.5 -- Channels & Integrations (next up)
+
+Nothing implemented yet -- only research notes in `docs/brainstorm/`.
+Today Showdesk sends transactional email (Mailjet via `django-anymail`)
+but cannot **receive** email: `Ticket.source = "email"` exists in the
+model, no inbound pipeline feeds it.
+
+### Email channel (send + receive) -- see `docs/brainstorm/multi-channel-communication.md`
+
+- [ ] Inbound provider + webhook endpoint (Postmark Inbound / Mailjet Parse / SES), signature-verified, idempotent
+- [ ] Per-org inbound address (`{org_slug}@inbound.showdesk.io`) + optional custom forward (`support@acme.com` → Showdesk)
+- [ ] Threading: stable `Message-ID` on every outbound reply, `Reply-To: reply+{token}@inbound…` token, `In-Reply-To`/`References` + `[SD-123]` subject fallback
+- [ ] Inbound parsing: quote/signature stripping, attachments to S3, auto-responder / bounce / loop detection, `Fwd:` → new ticket
+- [ ] Agent replies on email tickets go out as email from the org's address (sender domain / DKIM per org)
+- [ ] Requester identity unification (email requester ↔ widget `external_user_id`)
+- [ ] Model refactor decision: keep `Ticket → TicketMessage` + `channel` field, or move to `Conversation → Message + Channel` before adding WhatsApp/Slack
+
+### MCP server -- see `docs/brainstorm/mcp-server.md`
+
+- [ ] MVP: hosted Streamable HTTP server (FastMCP mounted in the Django ASGI app), org-scoped
+- [ ] Auth: OAuth 2.1 + DCR (per-org API token as a stop-gap)
+- [ ] ~10 read-only tools (search/get tickets, messages, technical context, video transcript) + "draft only" reply tools (human validation)
+- [ ] Prompt-injection mitigations: tool annotations, human-in-the-loop on requester-visible actions, audit log
+- [ ] Gate behind a plan feature flag (`mcp`)
+
+---
+
 ## Phase 4 -- Post-MVP Enhancements
 
 - [ ] Knowledge base: public portal
@@ -740,37 +768,33 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 
 ## Summary
 
+*Status audited on 2026-10-28 against code, commits and prod. Last code commit: 2026-05-03 (`9c14a17`); app.showdesk.io serves that build.*
+
 | Area | Progress | What's done | What's left |
 |------|----------|-------------|-------------|
-| Scaffolding | **100%** | All infra, Docker, CI, docs | -- |
-| Backend API | **~99%** | Models, views, tasks, seeds, WebSocket, rate limiting, Celery Beat, file validation, custom priorities, saved views, stats, S3 fix, external_user_id, context_metadata, issue_type, widget_tickets, platform admin, impersonation, WidgetSession + messaging, message-delete notify, internal-org provisioning + identity-hash, **OTP-first 4-step signup, OrgJoinRequest, OrganizationDomain (DNS + admin-email verification, ownership transfer, periodic recheck), branded HTML emails (CID logo)** | Video duration validation, ticket-reply email body as HTML |
-| Frontend | **~97%** | Auth, tickets CRUD, assignment, status, settings, teams, WebSocket, tags, inline actions, view modes, priorities, video player, attachments, saved views, stats modal, filters, inline tag creation, technical context panel, issue type badge, platform admin, org switcher, fixed embed snippet, widget preview button, chat-style ticket detail, in-app widget dogfooding, **/signup page (5 internal steps + auto-resume), /onboarding wizard (3 steps, resumable), Settings > Domains, dashboard onboarding nudge** | Shortcuts, bulk actions, agent video reply, SLA editor, Branding tab |
-| Widget | **~99%** | Full messaging UI (chat + history tabs, session system, audio messages, message deletion with undo, attachment menu), recording (screen + camera PiP + screenshot), upload, e2e tests, console/network collectors, user identity (API + data-user-*), API URL auto-detect, /cdn/widget.js distribution, MPA popup recording incl. audio, contact nudge, FAB unread badge + mark-as-read, **`Showdesk.reset()` for clean user-switch (fixes session leakage between users on the same browser)** | Retry, i18n, accessibility |
-| Tests | **~88%** | 155+ pytest tests (incl. 27 signup cases, identity-hash, branded emails, OrganizationDomain, widget session resume) + 15 Vitest + 19 Playwright | Vitest for SignupPage / OnboardingPage, widget messaging tests, video API tests |
-| Widget UX (Phase 2) | **~92%** | P0: distribution/API URL + messaging refactor (100%). P1: wizard, auto context, user identity, camera PiP (100%). P2: MPA recording persistence incl. audio, ticket history (100%). Screenshot capture (basic, no annotation). | Screenshot annotation, multi-attach, session replay, video markers, News/Ideas tabs |
-| Signup & Onboarding (Phase 2.5) | **~95%** | All P0 backend (OTP-first signup, slug/domain check, 409 guard, OrgJoinRequest, onboarding state) + frontend (/signup, /onboarding wizard, join-requests panel on Team page, dashboard nudge) + 27+ pytest cases | Widget install detection in onboarding step 3 (`widget_first_seen_at`), Vitest for the signup/onboarding UI |
-| Verified Domains (Phase 2.6) | **100%** | OrganizationDomain model + migrations 0008-0010 (backfill + drop legacy scalars), DNS TXT + admin-email verification, ownership transfer, Celery recheck task, full CRUD + verify/regenerate-token actions, Settings UI, signup wizard integration, transfer email | -- |
-| Email branding (Phase 3) | **~85%** | Shared base template, 13 transactional templates (HTML + txt), `send_branded_email()` helper, CID inline logo, per-org logo + colour, bulletproof CTA buttons, snapshot tests, 18/19 call sites refactored | Email preview in Django admin, ticket reply body as HTML, refactor `sendtestemail` command (low priority) |
-| Admin (org) | **~65%** | Agent/team CRUD, widget config, tags, custom priorities, canned responses (templates + slash picker + variables), Domains section | Branding tab (primary_color + email_from_name + per-org logo upload UI), SLA editor (backend model exists, no UI), audit log |
-| Admin (platform) | **~45%** | Org list (CRUD, suspend, delete), org detail with stats, impersonation (org switcher + middleware), conditional sidebar, in-app dogfooding (internal org + identity-hash) | Usage/quotas dashboard, billing, feature flags, monitoring |
-| Post-MVP | **0%** | -- | Everything |
-| AI | **0%** | Models/flags ready | All implementation (auto-categorization, topic-change detection, title/description generation) |
+| Scaffolding & DevOps | **~90%** | Infra, Docker, CI (lint/test/build), GHCR images, auto-redeploy via Portainer | Structured logs/monitoring, backups doc |
+| Backend API | **~99%** | Everything listed in Phases 0-3 incl. signup, verified domains, branded emails, SLA CRUD, bulk update, usage dashboard, plans + feature flags + live gates | Video duration validation |
+| Frontend | **~99%** | Full agent app incl. shortcuts, bulk actions, SLA editor, Branding tab, onboarding wizard with widget-ping detection, platform admin (usage, plans, flags) | Agent video reply |
+| Widget | **~99%** | Messaging, recording, identity, MPA, `Showdesk.reset()` | Retry, i18n, accessibility |
+| Tests | **~92%** | 263 pytest tests + Vitest (signup, onboarding, shortcuts) + Playwright e2e | Widget messaging tests, video API tests |
+| Widget UX (Phase 2) | **~92%** | P0/P1 done, P2 mostly done | Screenshot annotation, multi-attach, session replay, video markers |
+| Signup & Onboarding (Phase 2.5) | **100%** | -- | -- |
+| Verified Domains (Phase 2.6) | **100%** | -- | -- |
+| Email branding (Phase 3) | **100%** | Templates, helper, per-org branding, preview command, HTML reply body | (`sendtestemail` left on stock `send_mail`, intentional) |
+| Admin (org) | **~75%** | Agents, teams, widget, tags, priorities, canned responses, domains, branding, SLA | Agent groups, notification prefs, audit log, custom domain, widget code examples |
+| Admin (platform) | **~70%** | Orgs CRUD, impersonation, usage dashboard, plans + feature flags + gates | **Billing**, global monitoring, announcements |
+| Notifications | **~10%** | Basic emails + in-app WebSocket | SLA breach detection, preferences, webhooks, Slack |
+| Channels & Integrations (3.5) | **0%** | Research notes only | Inbound/outbound email channel, MCP server |
+| Post-MVP / AI | **0%** | Models/flags ready | Everything |
 
 ### Next priorities
 
-1. ~~Widget distribution & API URL~~ -- **Done**
-2. ~~Widget messaging refactor + FAB unread badge~~ -- **Done**
-3. ~~Phase 2.5 P0 (signup, onboarding, join requests)~~ -- **Done**
-4. ~~Phase 2.6 verified domains~~ -- **Done**
-5. ~~Branded HTML emails (P1)~~ -- **Mostly done** (Django-admin preview + ticket-reply HTML body still TODO)
-6. ~~Widget session leakage fix (in-app dogfooding)~~ -- **Done**
-7. **Phase 2.5 leftover P1**: widget install detection in onboarding step 3 (`Organization.widget_first_seen_at` + poll on the wizard).
-8. **Phase 3 Org Admin -- Branding tab** (logo upload + primary_color + email_from_name; the per-org plumbing already exists, only the UI is missing).
-9. **Phase 2 P2 remaining**: screenshot annotation overlay, multi-attachments.
-10. **AI layer kickoff**: ticket auto-categorization, AI title/description generation (Phase 5, behind feature flag).
-11. Platform admin console (P1: usage/quotas dashboard, billing, feature flags).
-12. Keyboard shortcuts + bulk actions on the ticket list.
-13. Frontend Vitest coverage of signup / onboarding flows.
+1. **Email channel (send + receive)** -- turns Showdesk from "widget only" into a real helpdesk; most requested.
+2. **Billing on top of plans** (Stripe Checkout + Customer Portal → `Organization.plan`) -- plans and gates already exist, only the money part is missing.
+3. **MCP server MVP** (read-only + draft tools) -- strong differentiator for the dev-first segment; ~3 weeks.
+4. SLA breach detection + notifications (badges, warning/breach emails).
+5. Phase 2 P2 leftovers: screenshot annotation, multi-attachments.
+6. DevOps hardening: backups, monitoring (+ decide Portainer vs plain SSH deploy).
 
 ### Strategic backlog -- 2026-04-30 brainstorm
 
@@ -789,4 +813,4 @@ as input the next time we plan a major Phase 4+ initiative.
 
 ---
 
-*This roadmap is a living document. Last updated: 2026-05-02.*
+*This roadmap is a living document. Last updated: 2026-10-28.*
