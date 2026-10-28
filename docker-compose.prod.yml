@@ -1,15 +1,21 @@
 # =============================================================================
 # Showdesk Production Docker Compose
 # =============================================================================
-# Deploy via Portainer as a stack.
+# Deploy with `docker compose` directly (see deploy/README.md for an
+# SSH + GitHub Actions setup) or as a Portainer stack.
 #
 # Profiles:
 #   - (default)  Application services only. PostgreSQL, Redis, S3 are external.
 #   - local      Also include PostgreSQL, Redis, and MinIO containers.
+#   - redis      Only a local Redis (managed PostgreSQL + S3, local cache/broker).
+#   - portainer  Auto-update sidecar that redeploys a Portainer stack.
 #
 # Usage:
 #   docker compose -f docker-compose.prod.yml up -d                  # managed DB
 #   docker compose -f docker-compose.prod.yml --profile local up -d  # all-in-one
+#
+# Image version: set IMAGE_TAG to a git short SHA to pin a release
+# (default: latest).
 # =============================================================================
 
 # -- Shared environment for all backend services -----------------------------
@@ -48,6 +54,7 @@ configs:
   caddyfile:
     content: |
       ${SHOWDESK_DOMAIN:-localhost} {
+        ${CADDY_TLS_DIRECTIVE:-}
         header {
           X-Content-Type-Options nosniff
           X-Frame-Options DENY
@@ -102,6 +109,10 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+      # Optional custom certificate (e.g. a Cloudflare Origin certificate).
+      # Drop cert.pem + key.pem here and set
+      # CADDY_TLS_DIRECTIVE="tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem".
+      - ./certs:/etc/caddy/certs:ro
     depends_on:
       backend:
         condition: service_healthy
@@ -115,7 +126,7 @@ services:
   # Database Migrations (one-shot, runs before app services)
   # ---------------------------------------------------------------------------
   migrate:
-    image: ghcr.io/showdesk-io/showdesk-backend:latest
+    image: ghcr.io/showdesk-io/showdesk-backend:${IMAGE_TAG:-latest}
     command: migrate
     environment:
       <<: *backend-env
@@ -132,7 +143,7 @@ services:
   # Django Backend (Gunicorn + Uvicorn for WebSockets)
   # ---------------------------------------------------------------------------
   backend:
-    image: ghcr.io/showdesk-io/showdesk-backend:latest
+    image: ghcr.io/showdesk-io/showdesk-backend:${IMAGE_TAG:-latest}
     command: server
     environment:
       <<: *backend-env
@@ -153,7 +164,7 @@ services:
   # Celery Worker
   # ---------------------------------------------------------------------------
   celery-worker:
-    image: ghcr.io/showdesk-io/showdesk-backend:latest
+    image: ghcr.io/showdesk-io/showdesk-backend:${IMAGE_TAG:-latest}
     command: worker
     environment:
       <<: *backend-env
@@ -168,11 +179,15 @@ services:
   # Celery Beat (scheduler)
   # ---------------------------------------------------------------------------
   celery-beat:
-    image: ghcr.io/showdesk-io/showdesk-backend:latest
+    image: ghcr.io/showdesk-io/showdesk-backend:${IMAGE_TAG:-latest}
     command: beat
     environment:
       <<: *backend-env
       RUN_MIGRATIONS: "false"
+    # Exactly one beat must run per database. Set CELERY_BEAT_REPLICAS=0 on
+    # a node that shares its database with another running stack.
+    deploy:
+      replicas: ${CELERY_BEAT_REPLICAS:-1}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -182,22 +197,24 @@ services:
   # React Frontend (Nginx serving static build)
   # ---------------------------------------------------------------------------
   frontend:
-    image: ghcr.io/showdesk-io/showdesk-frontend:latest
+    image: ghcr.io/showdesk-io/showdesk-frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
   # Widget (Nginx serving built widget JS)
   # ---------------------------------------------------------------------------
   widget:
-    image: ghcr.io/showdesk-io/showdesk-widget:latest
+    image: ghcr.io/showdesk-io/showdesk-widget:${IMAGE_TAG:-latest}
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # Auto-update: check for new images and trigger Portainer redeploy
-  # Set PORTAINER_WEBHOOK_URL to enable. Checks every CHECK_INTERVAL seconds.
+  # Auto-update (profile: portainer): check for new :latest images and
+  # trigger a Portainer stack redeploy. Not needed when deploying with
+  # `docker compose` over SSH. Checks every CHECK_INTERVAL seconds.
   # ---------------------------------------------------------------------------
   auto-update:
     image: ghcr.io/showdesk-io/showdesk-auto-update:latest
+    profiles: [portainer]
     environment:
       PORTAINER_URL: ${PORTAINER_URL:-}
       PORTAINER_API_KEY: ${PORTAINER_API_KEY:-}
@@ -215,7 +232,7 @@ services:
   # ---------------------------------------------------------------------------
   redis:
     image: redis:8-alpine
-    profiles: [local]
+    profiles: [local, redis]
     volumes:
       - redis_data:/data
     restart: unless-stopped

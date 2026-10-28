@@ -1,0 +1,101 @@
+name: Release
+
+# main: CI -> build & push images (tagged with the short SHA) -> deploy.
+# A commit that fails CI is never built nor deployed.
+#
+# The deploy job is opt-in: it only runs when the repository variable
+# DEPLOY_ENABLED is "true", and reads everything else from the
+# "production" GitHub Environment (see deploy/README.md):
+#   secrets: DEPLOY_HOST, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS, ENV_FILE,
+#            TLS_CERT (optional), TLS_KEY (optional)
+#   vars:    DEPLOY_USER (default "deploy"), DEPLOY_PATH (default "/opt/showdesk")
+#
+# Rollback: run this workflow manually with the tag to redeploy.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (short SHA) to redeploy -- skips CI and build"
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  ci:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ci.yml
+
+  images:
+    if: github.event_name == 'push'
+    needs: ci
+    uses: ./.github/workflows/docker-publish.yml
+
+  deploy:
+    name: Deploy
+    needs: [ci, images]
+    if: >-
+      always() && vars.DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' || needs.images.result == 'success')
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      DEPLOY_USER: ${{ vars.DEPLOY_USER || 'deploy' }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/showdesk' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-${GITHUB_SHA::7}}"
+          [[ "$tag" =~ ^[0-9a-f]{7,40}$ ]] || { echo "invalid tag: $tag"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_deploy ~/.ssh/known_hosts
+
+      - name: Upload compose file, env and TLS material
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+          TLS_CERT: ${{ secrets.TLS_CERT }}
+          TLS_KEY: ${{ secrets.TLS_KEY }}
+        run: |
+          umask 077
+          mkdir -p bundle/certs
+          cp docker-compose.prod.yml deploy/remote-deploy.sh bundle/
+          printf '%s\n' "$ENV_FILE" > bundle/.env
+          if [ -n "$TLS_CERT" ]; then
+            printf '%s\n' "$TLS_CERT" > bundle/certs/cert.pem
+            printf '%s\n' "$TLS_KEY" > bundle/certs/key.pem
+          fi
+          chmod 755 bundle/remote-deploy.sh
+          scp -i ~/.ssh/id_deploy -rp bundle/. "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+      - name: Deploy ${{ steps.tag.outputs.tag }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_deploy "$DEPLOY_USER@$DEPLOY_HOST" \
+            "$DEPLOY_PATH/remote-deploy.sh ${{ steps.tag.outputs.tag }}"
