@@ -144,3 +144,6 @@ blob-report/
 *.css.map
 *.js.map
 business
+
+# pyinfra inventories (host-specific)
+deploy/pyinfra/inventory.py

@@ -274,7 +274,7 @@ make test-cov        # Backend tests with coverage
 
 ### Production Deployment
 
-The production stack uses pre-built images from `ghcr.io` and is designed for deployment via [Portainer](https://www.portainer.io/) or `docker compose`.
+The production stack uses pre-built images from `ghcr.io` and runs with plain `docker compose` or as a [Portainer](https://www.portainer.io/) stack. For a ready-made single-host setup (pyinfra provisioning + GitHub Actions deploy over SSH with health check and rollback), see [`deploy/README.md`](./deploy/README.md).
 
 ```bash
 # Copy and configure environment

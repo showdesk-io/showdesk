@@ -1,14 +1,8 @@
 name: Docker Publish
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "backend/**"
-      - "frontend/**"
-      - "widget/**"
-      - "auto-update/**"
-      - ".github/workflows/docker-publish.yml"
+  # Called by release.yml once CI is green. Manual runs rebuild the current ref.
+  workflow_call:
   workflow_dispatch:
 
 env:

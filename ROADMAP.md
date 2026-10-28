@@ -190,7 +190,9 @@ Everything needed before writing real feature code. **All done.**
 - [x] CI pipeline (GitHub Actions: lint, test, build)
 - [x] Health check endpoint
 - [x] Docker image build + push in CI (`docker-publish.yml` → `ghcr.io/showdesk-io/showdesk-{backend,frontend}`, green on every push to `main`)
-- [x] Continuous deploy to prod -- `auto-update` sidecar polls GHCR digests and triggers a Portainer stack redeploy (app.showdesk.io serves the 2026-05-03 build)
+- [x] Continuous deploy -- `release.yml`: CI → images tagged by short SHA → SSH deploy (`deploy/remote-deploy.sh`: pull, up, health check, auto-rollback). Opt-in via `DEPLOY_ENABLED` + `production` environment
+- [x] Host provisioning with pyinfra (`deploy/pyinfra/bootstrap.py`: Docker, deploy user, SSH hardening, UFW + DOCKER-USER allow-list, fail2ban, unattended upgrades)
+- [x] Portainer auto-update sidecar kept as opt-in compose profile `portainer`
 - [x] Automated migrations on deploy (one-shot `migrate` service in `docker-compose.prod.yml`, gated by `RUN_MIGRATIONS`, app services `depends_on` it)
 - [ ] Logging and monitoring (structured JSON)
 - [ ] Backup strategy docs
