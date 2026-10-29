@@ -28,7 +28,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install ruff
+          pip install "ruff>=0.15,<0.16"
 
       - name: Run ruff check
         run: ruff check backend/
