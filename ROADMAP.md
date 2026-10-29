@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-10-28
+> Last updated: 2026-10-29
 
 ---
 
@@ -88,7 +88,8 @@ Everything needed before writing real feature code. **All done.**
 
 - [x] **Auth: stale user after re-login** -- logging out then logging in with a different email shows the previous user's data (cached in Zustand/localStorage). Eventually switches to the correct user. The auth store should be fully cleared on logout and refreshed on login.
 - [x] **Team page: cross-org user visibility** -- non-superuser agents can see users from other organizations and superusers with no organization. The team list API should filter out users without an organization and scope to the current user's org only.
-- [~] **WebSocket fails on dev.showdesk.io** -- WSS connection to `/ws/tickets/` fails when accessed via Cloudflare proxy. **Root cause: Cloudflare tunnel configuration** -- the frontend code correctly derives WSS URL from `window.location` and Caddy handles WebSocket upgrades natively. Fix requires enabling WebSocket support in Cloudflare Zero Trust tunnel config (not a code issue). **Mitigated in-app**: ticket detail has 10 s polling fallback (`refetchInterval` on `useTicket`). Note: `VITE_WS_BASE_URL` env var is defined but unused (can be cleaned up).
+- [x] **WebSocket fails on dev.showdesk.io** -- root cause was the Cloudflare *tunnel* that used to front dev. Behind a regular Cloudflare proxy (no tunnel) the `/ws/tickets/` handshake returns `101 Switching Protocols` with a valid JWT. The 10 s polling fallback on ticket detail stays as a safety net. (`VITE_WS_BASE_URL` is still defined but unused -- can be cleaned up.)
+- [x] **Static files 404 in production** -- `/static/*` (Django admin assets, brand logo referenced by every email) had no server once `DEBUG=False`. Fixed with WhiteNoise + `collectstatic` at image build time (2026-10-29).
 - [x] **Widget: screen capture fails** -- screenshot button was disabled ("Coming soon"). Implemented full screenshot capture via getDisplayMedia single-frame, with overlay hiding, thumbnail previews, and backend widget attachment upload endpoint. Also fixed PipCompositor captureStream caching and added video track validation.
 - [x] **Widget: modal overlay blocks recording** -- when recording starts, the overlay and modal are now hidden and the FAB is replaced by a compact recording bar (dot + timer + PiP controls + stop) at the FAB position. User can interact freely with the page. On stop, the modal reappears with the recording preview.
 - [x] **Agent dashboard: no real-time updates** -- WebSocket `refetchQueries()` fix applied. Added 10s polling fallback on ticket detail view (`refetchInterval: 10_000` in `useTicket` hook) so updates work even when WebSocket connection fails (e.g. behind Cloudflare proxy).
@@ -187,15 +188,20 @@ Everything needed before writing real feature code. **All done.**
 
 ### DevOps
 
-- [x] CI pipeline (GitHub Actions: lint, test, build)
+- [x] CI pipeline (GitHub Actions: lint, test, build) -- tool versions pinned (ruff `>=0.17,<0.18`) so upstream releases cannot turn `main` red silently
 - [x] Health check endpoint
-- [x] Docker image build + push in CI (`docker-publish.yml` → `ghcr.io/showdesk-io/showdesk-{backend,frontend}`, green on every push to `main`)
-- [x] Continuous deploy -- `release.yml`: CI → images tagged by short SHA → SSH deploy (`deploy/remote-deploy.sh`: pull, up, health check, auto-rollback). Opt-in via `DEPLOY_ENABLED` + `production` environment
-- [x] Host provisioning with pyinfra (`deploy/pyinfra/bootstrap.py`: Docker, deploy user, SSH hardening, UFW + DOCKER-USER allow-list, fail2ban, unattended upgrades)
+- [x] Docker images built + pushed to GHCR, tagged by short SHA (+ `latest`)
+- [x] Continuous deploy -- `release.yml`: CI → images → SSH deploy (`deploy/remote-deploy.sh`: pull, up, health check, auto-rollback to the last good tag). `develop` → `development` environment, `main` → `production`. Opt-in via `DEPLOY_ENABLED`
+- [x] Deployment settings from **Scaleway Secret Manager** (`SECRETS_PROVIDER=scaleway`) or GitHub secrets -- readable, versioned config; GitHub only holds a read-only key
+- [x] Host provisioning with pyinfra (`deploy/pyinfra/bootstrap.py`: Docker, deploy user, SSH hardening, UFW + DOCKER-USER inbound allow-list, fail2ban, unattended upgrades)
+- [x] Automated migrations on deploy (one-shot `migrate` service)
+- [x] Caddy recreated automatically when the inline Caddyfile changes (compose does not do it on its own)
+- [x] PostgreSQL with **PITR**: WAL-G image (`deploy/postgres/`), continuous WAL archiving + daily encrypted base backups to S3, restore runbook + `pitr-rehearsal.sh` (end-to-end restore rehearsed on 2026-10-29)
+- [x] Staging email capture: `mailpit` compose profile, UI at `/mailpit/` restricted to an IP allow-list (`MAILPIT_ALLOWED_IPS`, Cloudflare-aware client IP)
 - [x] Portainer auto-update sidecar kept as opt-in compose profile `portainer`
-- [x] Automated migrations on deploy (one-shot `migrate` service in `docker-compose.prod.yml`, gated by `RUN_MIGRATIONS`, app services `depends_on` it)
-- [ ] Logging and monitoring (structured JSON)
-- [ ] Backup strategy docs
+- [x] Full dependency upgrade (2026-10-29): Django 6.1, Python 3.14, DRF 3.18, Celery 5.6, Vite 8, Tailwind 4, React Router 8, TypeScript 6, Node 26 LTS, latest GitHub Actions
+- [ ] Logging and monitoring (structured JSON, error tracking, uptime alerts)
+- [ ] Periodic PITR rehearsal (quarterly) -- procedure exists, schedule it
 - [ ] Publish widget to npmjs.com (`@showdesk/widget`) + CDN via unpkg/jsdelivr
 
 ### Tests
@@ -439,6 +445,11 @@ non-matching domains can still join, but only through explicit invitation.
 - Join-request expiration (auto-reject after N days): deferred to v1.1.
 
 ---
+
+### Signup follow-ups (2026-10-29)
+
+- [x] Claiming the founder's email domain at workspace creation is **opt-in** (unchecked checkbox) and limited to the founder's own company domain -- not editable; public webmail domains are never offered and rejected by the API (`public_domain`, `domain_mismatch`). Other domains are added from Settings with DNS verification.
+- [x] `manage.py seed` fixed (used the dropped `Organization.domain`) + regression test
 
 ## Phase 2.6 -- Organizations: Verified Domains
 
@@ -770,33 +781,33 @@ model, no inbound pipeline feeds it.
 
 ## Summary
 
-*Status audited on 2026-10-28 against code, commits and prod. Last code commit: 2026-05-03 (`9c14a17`); app.showdesk.io serves that build.*
+*Status as of 2026-10-29.*
 
 | Area | Progress | What's done | What's left |
 |------|----------|-------------|-------------|
-| Scaffolding & DevOps | **~90%** | Infra, Docker, CI (lint/test/build), GHCR images, auto-redeploy via Portainer | Structured logs/monitoring, backups doc |
-| Backend API | **~99%** | Everything listed in Phases 0-3 incl. signup, verified domains, branded emails, SLA CRUD, bulk update, usage dashboard, plans + feature flags + live gates | Video duration validation |
-| Frontend | **~99%** | Full agent app incl. shortcuts, bulk actions, SLA editor, Branding tab, onboarding wizard with widget-ping detection, platform admin (usage, plans, flags) | Agent video reply |
+| Scaffolding & DevOps | **~95%** | CI/CD with auto-rollback, staging + production environments, pyinfra provisioning, optional Secret Manager, PostgreSQL PITR (rehearsed), Mailpit for staging, full dependency upgrade | Monitoring / error tracking, scheduled PITR rehearsals |
+| Backend API | **~99%** | Everything in Phases 0-3 (signup, verified domains, branded emails, SLA CRUD, bulk update, usage dashboard, plans + feature gates) on Django 6.1 | Video duration validation |
+| Frontend | **~99%** | Full agent app on React 19 / Vite 8 / Tailwind 4 / React Router 8 | Agent video reply |
 | Widget | **~99%** | Messaging, recording, identity, MPA, `Showdesk.reset()` | Retry, i18n, accessibility |
-| Tests | **~92%** | 263 pytest tests + Vitest (signup, onboarding, shortcuts) + Playwright e2e | Widget messaging tests, video API tests |
+| Tests | **~92%** | 278 pytest + 39 Vitest + Playwright e2e | Widget messaging tests, video API tests |
 | Widget UX (Phase 2) | **~92%** | P0/P1 done, P2 mostly done | Screenshot annotation, multi-attach, session replay, video markers |
-| Signup & Onboarding (Phase 2.5) | **100%** | -- | -- |
-| Verified Domains (Phase 2.6) | **100%** | -- | -- |
-| Email branding (Phase 3) | **100%** | Templates, helper, per-org branding, preview command, HTML reply body | (`sendtestemail` left on stock `send_mail`, intentional) |
+| Signup & Onboarding (2.5) | **100%** | Incl. opt-in domain claim (2026-10-29) | -- |
+| Verified Domains (2.6) | **100%** | -- | -- |
+| Email branding (3) | **100%** | Templates, per-org branding, logo served by WhiteNoise | -- |
 | Admin (org) | **~75%** | Agents, teams, widget, tags, priorities, canned responses, domains, branding, SLA | Agent groups, notification prefs, audit log, custom domain, widget code examples |
-| Admin (platform) | **~70%** | Orgs CRUD, impersonation, usage dashboard, plans + feature flags + gates | **Billing**, global monitoring, announcements |
+| Admin (platform) | **~70%** | Orgs, impersonation, usage dashboard, plans + feature flags + gates | **Billing**, monitoring, announcements |
 | Notifications | **~10%** | Basic emails + in-app WebSocket | SLA breach detection, preferences, webhooks, Slack |
-| Channels & Integrations (3.5) | **0%** | Research notes only | Inbound/outbound email channel, MCP server |
+| Channels & Integrations (3.5) | **0%** | Research notes | Email channel (send + receive), MCP server |
 | Post-MVP / AI | **0%** | Models/flags ready | Everything |
 
 ### Next priorities
 
-1. **Email channel (send + receive)** -- turns Showdesk from "widget only" into a real helpdesk; most requested.
-2. **Billing on top of plans** (Stripe Checkout + Customer Portal → `Organization.plan`) -- plans and gates already exist, only the money part is missing.
-3. **MCP server MVP** (read-only + draft tools) -- strong differentiator for the dev-first segment; ~3 weeks.
-4. SLA breach detection + notifications (badges, warning/breach emails).
-5. Phase 2 P2 leftovers: screenshot annotation, multi-attachments.
-6. DevOps hardening: backups, monitoring (+ decide Portainer vs plain SSH deploy).
+1. **Email channel (send + receive)** -- inbound provider + per-org address, threading, agent replies by email (Phase 3.5). *Next up.*
+2. **Billing on top of plans** (Stripe Checkout + Customer Portal → `Organization.plan`).
+3. **MCP server MVP** (read-only + draft tools, plan-gated).
+4. SLA breach detection + notifications.
+5. Monitoring / error tracking for both environments.
+6. Phase 2 P2 leftovers: screenshot annotation, multi-attachments.
 
 ### Strategic backlog -- 2026-04-30 brainstorm
 
@@ -815,4 +826,4 @@ as input the next time we plan a major Phase 4+ initiative.
 
 ---
 
-*This roadmap is a living document. Last updated: 2026-10-28.*
+*This roadmap is a living document. Last updated: 2026-10-29.*
