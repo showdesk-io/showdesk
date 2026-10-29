@@ -44,6 +44,9 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Serves /static/ (admin assets, brand logo used in emails) without
+    # depending on the reverse proxy.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -224,7 +227,9 @@ STORAGES = {
         },
     },
     "staticfiles": {
-        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        # Compressed copies (gzip/brotli) without hashed names: emails link
+        # to stable URLs such as /static/brand/logo.png.
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
     },
 }
 

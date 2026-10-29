@@ -123,10 +123,24 @@ CADDY_TLS_DIRECTIVE="tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem"
 
 Add `mailpit` to `COMPOSE_PROFILES` and point `EMAIL_HOST=mailpit`,
 `EMAIL_PORT=1025`, `EMAIL_USE_SSL=False`, `EMAIL_USE_TLS=False`: no email
-leaves the host. The Mailpit UI only listens on the host's loopback:
+leaves the host.
+
+The Mailpit UI is served at `https://<domain>/mailpit/` **only** to the
+source addresses listed in `MAILPIT_ALLOWED_IPS` (space-separated CIDRs);
+everyone else gets a 404. Behind a proxy, Caddy must know the real client
+IP -- e.g. behind Cloudflare:
 
 ```bash
-ssh -L 8025:127.0.0.1:8025 deploy@<host>   # then open http://localhost:8025
+CADDY_TRUSTED_PROXIES="<Cloudflare ranges from https://www.cloudflare.com/ips>"
+CADDY_CLIENT_IP_HEADERS=CF-Connecting-IP
+MAILPIT_ALLOWED_IPS="198.51.100.7/32 2001:db8:1234:5678::/64"
+```
+
+From anywhere else, use an SSH tunnel (the UI also listens on the host's
+loopback):
+
+```bash
+ssh -L 8025:127.0.0.1:8025 deploy@<host>   # then open http://localhost:8025/mailpit/
 ```
 
 ## Running two stacks on one database

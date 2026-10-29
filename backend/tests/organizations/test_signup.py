@@ -209,18 +209,48 @@ class TestSignupCreateOrg:
         )
         assert response.status_code == status.HTTP_201_CREATED, response.data
         org = Organization.objects.get(slug="brand-new")
+        # Email-routing domain is opt-in: nothing is claimed by default.
+        assert response.data["email_domain"] == ""
+        assert response.data["email_domain_status"] is None
+        assert not org.domains.exists()
+        user = User.objects.get(email="alice@brand-new.com")
+        assert user.organization == org
+        assert user.role == User.Role.ADMIN
+        assert user.is_staff is True
+
+    def test_create_org_opt_in_founder_domain_is_auto_verified(
+        self, api_client
+    ) -> None:
+        data = _request_and_verify(api_client, "alice@brand-new.com", "Alice")
+        client = _auth_client(data)
+        response = client.post(
+            "/api/v1/auth/signup/create-org/",
+            {
+                "org_name": "Brand New",
+                "org_slug": "brand-new",
+                "email_domain": "brand-new.com",
+            },
+        )
+        assert response.status_code == status.HTTP_201_CREATED, response.data
         assert response.data["email_domain"] == "brand-new.com"
         assert response.data["email_domain_status"] == "verified"
-        # Founder's domain auto-verified into a routing row.
+        org = Organization.objects.get(slug="brand-new")
         assert org.domains.filter(
             domain="brand-new.com",
             is_email_routing=True,
             status=OrganizationDomain.Status.VERIFIED,
         ).exists()
-        user = User.objects.get(email="alice@brand-new.com")
-        assert user.organization == org
-        assert user.role == User.Role.ADMIN
-        assert user.is_staff is True
+
+    def test_create_org_rejects_public_email_domain(self, api_client) -> None:
+        data = _request_and_verify(api_client, "alice@gmail.com")
+        client = _auth_client(data)
+        response = client.post(
+            "/api/v1/auth/signup/create-org/",
+            {"org_name": "Indie", "org_slug": "indie", "email_domain": "gmail.com"},
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["code"] == "public_domain"
+        assert not Organization.objects.filter(slug="indie").exists()
 
     def test_create_org_skips_domain_for_public_email(self, api_client) -> None:
         data = _request_and_verify(api_client, "alice@gmail.com")

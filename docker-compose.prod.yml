@@ -12,8 +12,9 @@
 #   - backup     WAL-G base-backup sidecar for the local PostgreSQL (PITR).
 #   - portainer  Auto-update sidecar that redeploys a Portainer stack.
 #   - mailpit    Catch-all SMTP server for staging/dev (no email leaves the
-#                host). Point EMAIL_HOST=mailpit, EMAIL_PORT=1025; the web UI
-#                listens on 127.0.0.1:8025 only (use an SSH tunnel).
+#                host). Point EMAIL_HOST=mailpit, EMAIL_PORT=1025. Web UI at
+#                https://<domain>/mailpit/ for MAILPIT_ALLOWED_IPS only, and
+#                on 127.0.0.1:8025/mailpit/ (SSH tunnel) for everyone else.
 #
 # Usage:
 #   docker compose -f docker-compose.prod.yml up -d                  # managed DB
@@ -70,6 +71,15 @@ x-walg-env: &walg-env
 configs:
   caddyfile:
     content: |
+      {
+        servers {
+          # Proxies allowed to set the client IP (e.g. Cloudflare's ranges
+          # when the host sits behind its proxy). Used by client_ip matchers.
+          trusted_proxies static ${CADDY_TRUSTED_PROXIES:-private_ranges}
+          client_ip_headers ${CADDY_CLIENT_IP_HEADERS:-X-Forwarded-For}
+        }
+      }
+
       ${SHOWDESK_DOMAIN:-localhost} {
         ${CADDY_TLS_DIRECTIVE:-}
         header {
@@ -104,6 +114,19 @@ configs:
         handle /widget-demo* {
           rewrite /widget-demo /widget-demo.html
           reverse_proxy widget:80
+        }
+
+        # Mailpit UI (profile: mailpit), only for MAILPIT_ALLOWED_IPS.
+        # Everyone else -- and every host without the variable -- gets a 404.
+        handle /mailpit* {
+          @mailpit_allowed client_ip ${MAILPIT_ALLOWED_IPS:-127.0.0.1/32}
+          handle @mailpit_allowed {
+            header X-Frame-Options SAMEORIGIN
+            reverse_proxy mailpit:8025
+          }
+          handle {
+            respond 404
+          }
         }
 
         handle {
@@ -250,6 +273,7 @@ services:
     image: axllent/mailpit:latest
     profiles: [mailpit]
     environment:
+      MP_WEBROOT: /mailpit/
       MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-5000}
       MP_DATABASE: /data/mailpit.db
     ports:

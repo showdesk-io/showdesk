@@ -18,6 +18,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Bake static files into the image so every container (backend, workers)
+# serves them, whatever RUN_MIGRATIONS is set to.
+RUN DJANGO_SETTINGS_MODULE=config.settings.base python manage.py collectstatic --noinput
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

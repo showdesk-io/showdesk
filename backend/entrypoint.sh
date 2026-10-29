@@ -2,14 +2,11 @@
 set -e
 
 # ---------------------------------------------------------------------------
-# Migration / collectstatic (runs for all modes unless RUN_MIGRATIONS=false)
+# Migrations (static files are collected at image build time)
 # ---------------------------------------------------------------------------
 if [ "${RUN_MIGRATIONS}" = "true" ]; then
     echo "[entrypoint] Applying database migrations..."
     python manage.py migrate --noinput
-
-    echo "[entrypoint] Collecting static files..."
-    python manage.py collectstatic --noinput
 elif [ "${RUN_MIGRATIONS}" = "false" ]; then
     echo "[entrypoint] Dry-run: checking for pending migrations..."
     python manage.py migrate --check

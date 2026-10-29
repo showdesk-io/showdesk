@@ -210,6 +210,56 @@ describe("SignupPage — wizard step submits and navigates", () => {
         expect.objectContaining({ org_name: "Acme", org_slug: "acme" }),
       );
     });
+    // Email-domain routing is opt-in: nothing claimed by default.
+    expect(
+      vi.mocked(signupApi.signupCreateOrg).mock.calls[0]?.[0].email_domain,
+    ).toBeUndefined();
     expect(navigateMock).toHaveBeenCalledWith("/onboarding");
+  });
+});
+
+
+async function reachCreateOrgStep(email: string, domain: string) {
+  vi.mocked(signupApi.signupVerifyOTP).mockResolvedValue({
+    access: "a", refresh: "r",
+    user: { id: "u1", email } as never,
+    next_step: "create_org",
+    domain,
+  });
+  vi.mocked(signupApi.signupCreateOrg).mockResolvedValue({
+    user: { id: "u1", email } as never,
+    organization: { id: "o1", slug: "acme", name: "Acme" },
+    email_domain: "",
+    email_domain_status: null,
+  });
+  const user = userEvent.setup();
+  renderSignup();
+  await user.type(await screen.findByLabelText(/full name/i), "Jane");
+  await user.type(screen.getByLabelText(/work email/i), email);
+  await user.click(screen.getByRole("button", { name: /send verification code/i }));
+  await user.type(await screen.findByLabelText(/verification code/i), "123456");
+  await user.click(screen.getByRole("button", { name: /verify and continue/i }));
+  await user.type(await screen.findByLabelText(/organization name/i), "Acme");
+  await waitFor(() => expect(signupApi.checkSlug).toHaveBeenCalled());
+  return user;
+}
+
+
+describe("SignupPage — email domain is opt-in", () => {
+  it("sends the founder's domain only when the checkbox is ticked", async () => {
+    const user = await reachCreateOrgStep("jane@acme.com", "acme.com");
+    await user.click(screen.getByLabelText(/@acme\.com/i));
+    await user.click(screen.getByRole("button", { name: /create my workspace/i }));
+    await waitFor(() =>
+      expect(signupApi.signupCreateOrg).toHaveBeenCalledWith(
+        expect.objectContaining({ email_domain: "acme.com" }),
+      ),
+    );
+  });
+
+  it("does not offer domain routing for public webmail", async () => {
+    await reachCreateOrgStep("jane@gmail.com", "");
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/email domain/i)).not.toBeInTheDocument();
   });
 });

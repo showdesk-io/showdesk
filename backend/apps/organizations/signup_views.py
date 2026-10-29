@@ -426,10 +426,11 @@ class SignupStateView(APIView):
 class CreateOrgSerializer(serializers.Serializer):
     """Validate the wizard create-org payload.
 
-    `email_domain` is optional. When omitted, defaults to the founder's
-    own email domain (auto-verified). When set to a different domain,
-    we still create the org but the domain row is created as pending
-    DNS-challenge — the founder finishes verification from Settings.
+    `email_domain` is opt-in: when omitted or blank, the workspace gets no
+    email-routing domain (several workspaces of one company must not all
+    capture its colleagues). When set to the founder's own domain it is
+    auto-verified; any other domain starts a DNS challenge the founder
+    finishes from Settings. Public webmail domains are rejected.
     """
 
     org_name = serializers.CharField(max_length=255)
@@ -478,16 +479,18 @@ class SignupCreateOrgView(APIView):
             )
 
         founder_domain = extract_email_domain(request.user.email)
-        # Client-provided email_domain wins; default to the founder's
-        # own domain (skipping public webmail). Empty value means "skip".
+        # Opt-in: an empty value means "no email-routing domain".
         requested_domain = (
             (serializer.validated_data.get("email_domain") or "").strip().lower()
         )
-        if not requested_domain:
-            requested_domain = (
-                founder_domain
-                if founder_domain and not is_public_email_domain(founder_domain)
-                else ""
+        if requested_domain and is_public_email_domain(requested_domain):
+            return Response(
+                {
+                    "detail": "Public email providers cannot be used as a "
+                    "workspace domain.",
+                    "code": "public_domain",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         org = Organization.objects.create(name=org_name, slug=org_slug)
@@ -500,9 +503,7 @@ class SignupCreateOrgView(APIView):
 
         domain_status: str | None = None
         if requested_domain:
-            if requested_domain == founder_domain and not is_public_email_domain(
-                requested_domain
-            ):
+            if requested_domain == founder_domain:
                 # Founder's own domain — auto-verify if eligible.
                 try:
                     services.try_admin_email_autoverify(
@@ -518,7 +519,7 @@ class SignupCreateOrgView(APIView):
                         org.slug,
                         exc,
                     )
-            elif not is_public_email_domain(requested_domain):
+            else:
                 # Different domain (or admin chose a custom one) — start
                 # a DNS challenge so the founder can finish from Settings.
                 services.start_dns_challenge(

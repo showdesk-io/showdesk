@@ -70,9 +70,12 @@ export function SignupPage() {
   // Email domain auto-derived by the backend from the verified email. Empty
   // string means a public webmail provider (gmail, etc.) — no auto-routing.
   const [signupDomain, setSignupDomain] = useState("");
-  // Editable override for the email_domain. Defaults to signupDomain on
-  // mount but the founder can swap to any custom domain — that path
-  // creates a pending DNS challenge instead of auto-verifying.
+  // Opt-in: claim an email domain so colleagues are routed to this
+  // workspace. Off by default (a company may run several workspaces) and
+  // never offered for public webmail.
+  const [claimEmailDomain, setClaimEmailDomain] = useState(false);
+  // Editable domain once claimed. Defaults to signupDomain; any other
+  // domain creates a pending DNS challenge instead of auto-verifying.
   const [emailDomainOverride, setEmailDomainOverride] = useState("");
 
   const [isLoading, setIsLoading] = useState(false);
@@ -225,7 +228,9 @@ export function SignupPage() {
       const data = await signupCreateOrg({
         org_name: orgName,
         org_slug: orgSlug,
-        email_domain: emailDomainOverride.trim().toLowerCase() || undefined,
+        email_domain: claimEmailDomain
+          ? emailDomainOverride.trim().toLowerCase() || signupDomain
+          : undefined,
       });
       if (data.email_domain_status === "pending_dns") {
         toast.success(
@@ -549,40 +554,62 @@ export function SignupPage() {
               )}
             </div>
 
-            <div>
-              <label
-                htmlFor="emailDomain"
-                className="mb-1 block text-sm font-medium text-gray-700"
-              >
-                Email domain
-              </label>
-              <input
-                id="emailDomain"
-                type="text"
-                value={emailDomainOverride}
-                onChange={(e) =>
-                  setEmailDomainOverride(
-                    e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ""),
-                  )
-                }
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
-                placeholder={signupDomain || "acme.com"}
-              />
-              <p className="mt-1.5 text-xs text-gray-500">
-                {(() => {
-                  const v = emailDomainOverride.trim();
-                  if (!v) {
-                    return signupDomain
-                      ? `Defaults to ${signupDomain}. Teammates with @${signupDomain} will be auto-routed.`
-                      : "Optional. Add later in Settings (DNS verification required).";
-                  }
-                  if (v === signupDomain) {
-                    return `Auto-verified from your email. Teammates with @${v} will be auto-routed.`;
-                  }
-                  return `Different from your email — you'll verify @${v} via DNS in Settings after creation.`;
-                })()}
-              </p>
-            </div>
+            {signupDomain && (
+              <div className="rounded-lg border border-gray-200 p-3">
+                <label
+                  htmlFor="claimEmailDomain"
+                  className="flex cursor-pointer items-start gap-2 text-sm text-gray-700"
+                >
+                  <input
+                    id="claimEmailDomain"
+                    type="checkbox"
+                    checked={claimEmailDomain}
+                    onChange={(e) => setClaimEmailDomain(e.target.checked)}
+                    className="mt-0.5 rounded border-gray-300 text-primary-500 focus:ring-primary-500"
+                  />
+                  <span>
+                    Let colleagues with an <strong>@{signupDomain}</strong>{" "}
+                    address find and join this workspace
+                  </span>
+                </label>
+                {claimEmailDomain ? (
+                  <div className="mt-3">
+                    <label
+                      htmlFor="emailDomain"
+                      className="mb-1 block text-sm font-medium text-gray-700"
+                    >
+                      Email domain
+                    </label>
+                    <input
+                      id="emailDomain"
+                      type="text"
+                      value={emailDomainOverride}
+                      onChange={(e) =>
+                        setEmailDomainOverride(
+                          e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ""),
+                        )
+                      }
+                      className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
+                      placeholder={signupDomain}
+                    />
+                    <p className="mt-1.5 text-xs text-gray-500">
+                      {(() => {
+                        const v = emailDomainOverride.trim() || signupDomain;
+                        if (v === signupDomain) {
+                          return `Auto-verified from your email. Teammates with @${v} will be routed here.`;
+                        }
+                        return `Different from your email — you'll verify @${v} via DNS in Settings after creation.`;
+                      })()}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-1.5 pl-6 text-xs text-gray-500">
+                    Optional. Leave it off if your company may have several
+                    workspaces — you can add a domain later in Settings.
+                  </p>
+                )}
+              </div>
+            )}
 
             <button
               type="submit"
