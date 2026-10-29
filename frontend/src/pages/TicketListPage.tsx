@@ -118,12 +118,12 @@ export function TicketListPage() {
     [savedViews, currentFilters],
   );
 
-  // When filters change manually, deselect active view if it no longer matches
-  useEffect(() => {
-    if (activeViewId && matchingView?.id !== activeViewId) {
-      setActiveViewId(matchingView?.id ?? null);
-    }
-  }, [matchingView, activeViewId]);
+  // When filters change manually, deselect active view if it no longer
+  // matches. Adjusted during render (not in an effect) so the stale chip is
+  // never committed; converges in one extra pass since the new id matches.
+  if (activeViewId && matchingView?.id !== activeViewId) {
+    setActiveViewId(matchingView?.id ?? null);
+  }
 
   const applyView = useCallback(
     (view: SavedView) => {
@@ -176,15 +176,17 @@ export function TicketListPage() {
   const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
   // Drop selections that fall off the page when filters / pagination
-  // change so the action bar count never overcounts ghosts.
-  useEffect(() => {
-    if (selectedIds.size === 0) return;
-    const visible = new Set((data?.results ?? []).map((t) => t.id));
-    const trimmed = new Set([...selectedIds].filter((id) => visible.has(id)));
-    if (trimmed.size !== selectedIds.size) setSelectedIds(trimmed);
-    // Intentionally omit selectedIds from deps -- we only react to data changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.results]);
+  // change so the action bar count never overcounts ghosts. Only reacts to
+  // a new result set (store-previous-value pattern, adjusted during render).
+  const [selectionResults, setSelectionResults] = useState(data?.results);
+  if (selectionResults !== data?.results) {
+    setSelectionResults(data?.results);
+    if (selectedIds.size > 0) {
+      const visible = new Set((data?.results ?? []).map((t) => t.id));
+      const trimmed = new Set([...selectedIds].filter((id) => visible.has(id)));
+      if (trimmed.size !== selectedIds.size) setSelectedIds(trimmed);
+    }
+  }
 
   const selectAllVisible = useCallback(() => {
     const visible = (data?.results ?? []).map((t) => t.id);
@@ -197,9 +199,11 @@ export function TicketListPage() {
   const ticketsList = data?.results ?? [];
 
   // Reset focus when the visible list changes (filter / pagination).
-  useEffect(() => {
+  const [focusListLength, setFocusListLength] = useState(ticketsList.length);
+  if (focusListLength !== ticketsList.length) {
+    setFocusListLength(ticketsList.length);
     setFocusedIndex(-1);
-  }, [ticketsList.length]);
+  }
 
   const focusedTicket = focusedIndex >= 0 ? ticketsList[focusedIndex] : null;
 
