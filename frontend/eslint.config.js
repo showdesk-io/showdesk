@@ -19,13 +19,5 @@ export default defineConfig([
       ecmaVersion: 2022,
       globals: globals.browser,
     },
-    rules: {
-      // React Compiler-oriented rules added to the recommended preset in
-      // eslint-plugin-react-hooks v7. Existing effects predate them; keep
-      // them visible as warnings until those components are refactored.
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/refs": "warn",
-      "react-hooks/immutability": "warn",
-    },
   },
 ]);
