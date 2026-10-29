@@ -17,7 +17,7 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
-def _download_to_temp(file_field) -> str:  # noqa: ANN001
+def _download_to_temp(file_field) -> str:
     """Download a file from storage (S3/MinIO) to a local temp file.
 
     S3-compatible storage backends don't support `.path` — files must
@@ -26,21 +26,19 @@ def _download_to_temp(file_field) -> str:  # noqa: ANN001
     Returns the path to the temp file. Caller is responsible for cleanup.
     """
     suffix = Path(file_field.name).suffix or ".webm"
-    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-    try:
-        for chunk in file_field.chunks():
-            tmp.write(chunk)
-        tmp.flush()
-        tmp.close()
-        return tmp.name
-    except Exception:
-        tmp.close()
-        Path(tmp.name).unlink(missing_ok=True)
-        raise
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        try:
+            for chunk in file_field.chunks():
+                tmp.write(chunk)
+        except Exception:
+            tmp.close()
+            Path(tmp.name).unlink(missing_ok=True)
+            raise
+    return tmp.name
 
 
 @shared_task(bind=True, queue="video_processing", max_retries=3)
-def process_video(self, video_id: str) -> dict:  # noqa: ANN001
+def process_video(self, video_id: str) -> dict:
     """Process an uploaded video recording.
 
     Pipeline:
@@ -116,7 +114,7 @@ def process_video(self, video_id: str) -> dict:  # noqa: ANN001
             Path(local_path).unlink(missing_ok=True)
 
 
-def _extract_metadata(video, local_path: str) -> None:  # noqa: ANN001
+def _extract_metadata(video, local_path: str) -> None:
     """Extract video metadata using ffprobe.
 
     Uses a local file path because ffprobe cannot read from S3 directly.
@@ -158,7 +156,7 @@ def _extract_metadata(video, local_path: str) -> None:  # noqa: ANN001
         logger.warning("ffprobe failed for video %s: %s", video.id, exc)
 
 
-def _generate_thumbnail(video, local_path: str) -> None:  # noqa: ANN001
+def _generate_thumbnail(video, local_path: str) -> None:
     """Generate a thumbnail from the video using FFmpeg.
 
     Uses a local file path because ffmpeg cannot read from S3 directly.
@@ -204,7 +202,7 @@ def _generate_thumbnail(video, local_path: str) -> None:  # noqa: ANN001
 
 
 @shared_task(bind=True, queue="video_processing", max_retries=2)
-def transcribe_video(self, video_id: str) -> dict:  # noqa: ANN001
+def transcribe_video(self, video_id: str) -> dict:
     """Transcribe a video's audio track using Whisper.
 
     This task is only triggered when AI_ENABLED and

@@ -54,7 +54,7 @@ def query_txt_records(
     return records
 
 
-def verify_domain_dns(domain_obj) -> bool:  # noqa: ANN001
+def verify_domain_dns(domain_obj) -> bool:
     """Return True iff the org's TXT challenge is currently published.
 
     The expected record format is `showdesk-verification=<token>` placed

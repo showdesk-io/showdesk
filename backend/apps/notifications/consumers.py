@@ -86,7 +86,7 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json(event["data"])
 
     @database_sync_to_async
-    def _get_organization_id(self, user) -> str | None:  # noqa: ANN001
+    def _get_organization_id(self, user) -> str | None:
         """Get the organization ID for a user."""
         if user.organization_id:
             return str(user.organization_id)

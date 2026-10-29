@@ -17,7 +17,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
     serializer_class = CategorySerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter categories by the active organization."""
         org = get_active_org(self.request)
         if org:
@@ -33,7 +33,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
     filterset_fields = ["category", "status"]
     search_fields = ["title", "body"]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter articles by the active organization."""
         org = get_active_org(self.request)
         if org:
@@ -41,7 +41,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
         return Article.objects.none()
 
     @action(detail=True, methods=["post"], permission_classes=[AllowAny])
-    def helpful(self, request, pk=None):  # noqa: ANN001, ANN201
+    def helpful(self, request, pk=None):
         """Mark an article as helpful."""
         article = self.get_object()
         article.helpful_count += 1
@@ -49,7 +49,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
         return Response({"helpful_count": article.helpful_count})
 
     @action(detail=True, methods=["post"], permission_classes=[AllowAny])
-    def not_helpful(self, request, pk=None):  # noqa: ANN001, ANN201
+    def not_helpful(self, request, pk=None):
         """Mark an article as not helpful."""
         article = self.get_object()
         article.not_helpful_count += 1

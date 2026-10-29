@@ -41,10 +41,10 @@ from apps.core.throttling import SignupCheckThrottle
 
 from . import services
 from .models import (
+    Organization,
     OrganizationDomain,
     OrgJoinRequest,
     OTPCode,
-    Organization,
     User,
     extract_email_domain,
     is_public_email_domain,

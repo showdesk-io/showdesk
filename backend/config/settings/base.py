@@ -78,7 +78,7 @@ WSGI_APPLICATION = "config.wsgi.application"
 AUTH_USER_MODEL = "organizations.User"
 
 # Database
-import dj_database_url  # noqa: E402
+import dj_database_url
 
 DATABASES = {
     "default": dj_database_url.config(

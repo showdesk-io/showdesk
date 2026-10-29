@@ -47,7 +47,7 @@ python-decouple>=3.8,<4.0
 python-dateutil>=2.9,<3.0
 
 # Dev & Testing
-ruff>=0.15,<0.16
+ruff>=0.17,<0.18
 pytest>=9.2,<10.0
 pytest-django>=4.14,<5.0
 pytest-cov>=7.1,<8.0

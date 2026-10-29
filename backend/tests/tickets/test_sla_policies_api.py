@@ -6,7 +6,6 @@ from rest_framework import status
 from apps.tickets.models import SLAPolicy
 from tests.factories import OrganizationFactory, SLAPolicyFactory
 
-
 URL = "/api/v1/sla-policies/"
 
 

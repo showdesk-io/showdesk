@@ -6,7 +6,7 @@ from rest_framework.permissions import BasePermission
 class IsPlatformAdmin(BasePermission):
     """Allow access only to platform administrators (superusers)."""
 
-    def has_permission(self, request, view):  # noqa: ANN001, ANN201
+    def has_permission(self, request, view):
         return (
             request.user and request.user.is_authenticated and request.user.is_superuser
         )
@@ -27,7 +27,7 @@ def has_feature(feature: str) -> type[BasePermission]:
     class _HasFeature(BasePermission):
         message = f"Your plan does not include the '{feature}' feature."
 
-        def has_permission(self, request, view):  # noqa: ANN001, ANN201
+        def has_permission(self, request, view):
             org = get_active_org(request)
             return org is not None and org.has_feature(feature)
 
@@ -35,7 +35,7 @@ def has_feature(feature: str) -> type[BasePermission]:
     return _HasFeature
 
 
-def get_active_org(request):  # noqa: ANN001, ANN201
+def get_active_org(request):
     """Return the effective organization for the current request.
 
     For superusers with an impersonated org (via X-Showdesk-Org header),

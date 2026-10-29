@@ -25,7 +25,7 @@ class UserCreationForm(forms.ModelForm):
         model = User
         fields = ("email", "first_name", "last_name", "role", "organization")
 
-    def save(self, commit=True):  # noqa: ANN001, ANN201, FBT002
+    def save(self, commit=True):
         user = super().save(commit=False)
         user.set_unusable_password()
         if commit:

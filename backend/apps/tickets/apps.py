@@ -23,7 +23,7 @@ class TicketsConfig(AppConfig):
         )
 
 
-def _seed_priorities_on_org_create(sender, instance, created, **kwargs) -> None:  # noqa: ANN001
+def _seed_priorities_on_org_create(sender, instance, created, **kwargs) -> None:
     """Seed default priority levels when a new organization is created."""
     if created:
         from .models import PriorityLevel

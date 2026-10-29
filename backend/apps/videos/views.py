@@ -6,6 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+
 from apps.core.throttling import WidgetUploadThrottle
 from apps.organizations.models import Organization
 
@@ -25,7 +26,7 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter videos by user's organization tickets."""
         from apps.core.permissions import get_active_org
 
@@ -41,7 +42,7 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
         serializer_class=VideoUploadSerializer,
         throttle_classes=[WidgetUploadThrottle],
     )
-    def widget_upload(self, request):  # noqa: ANN001, ANN201
+    def widget_upload(self, request):
         """Upload a video recording from the widget.
 
         Authenticates via X-Widget-Token header. Triggers async

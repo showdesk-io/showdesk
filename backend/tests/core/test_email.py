@@ -23,7 +23,6 @@ from tests.factories import (
     UserFactory,
 )
 
-
 pytestmark = pytest.mark.django_db
 
 

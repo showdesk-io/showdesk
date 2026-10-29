@@ -10,7 +10,6 @@ from django.core.management.base import CommandError
 from apps.core.management.commands.preview_email import SAMPLES
 from tests.factories import OrganizationFactory
 
-
 pytestmark = pytest.mark.django_db
 
 

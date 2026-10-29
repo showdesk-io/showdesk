@@ -1,13 +1,13 @@
 """Development settings for Showdesk."""
 
-from .base import *  # noqa: F401, F403
+from .base import *
 
 DEBUG = True
 
 ALLOWED_HOSTS = ["*"]
 
 # Add browsable API in development
-REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"] = (  # noqa: F405
+REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"] = (
     "rest_framework.renderers.JSONRenderer",
     "rest_framework.renderers.BrowsableAPIRenderer",
 )

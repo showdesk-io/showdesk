@@ -19,12 +19,12 @@ logger = logging.getLogger(__name__)
 SITE_URL = getattr(settings, "SITE_URL", "http://localhost")
 
 
-def _ticket_url(ticket) -> str:  # noqa: ANN001
+def _ticket_url(ticket) -> str:
     """Build the frontend URL for a ticket."""
     return f"{SITE_URL}/tickets/{ticket.id}"
 
 
-def _priority_label(ticket) -> str:  # noqa: ANN001
+def _priority_label(ticket) -> str:
     """Resolve the human-readable priority name.
 
     Custom per-org priorities live in ``PriorityLevel``; built-in slugs map
@@ -45,7 +45,7 @@ def _priority_label(ticket) -> str:  # noqa: ANN001
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_ticket_created_email(self, ticket_id: str) -> None:  # noqa: ANN001
+def send_ticket_created_email(self, ticket_id: str) -> None:
     """Notify agents when a new ticket is created.
 
     If the ticket has an assigned agent, only that agent is notified.
@@ -112,12 +112,12 @@ def send_ticket_created_email(self, ticket_id: str) -> None:  # noqa: ANN001
             len(recipients),
         )
     except Exception as exc:
-        logger.error("Failed to send email for ticket %s: %s", ticket.reference, exc)
+        logger.exception("Failed to send email for ticket %s", ticket.reference)
         raise self.retry(exc=exc)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_ticket_reply_email(self, message_id: str) -> None:  # noqa: ANN001
+def send_ticket_reply_email(self, message_id: str) -> None:
     """Notify the relevant party when a reply is added.
 
     - If an agent replies -> notify the requester
@@ -204,12 +204,12 @@ def send_ticket_reply_email(self, message_id: str) -> None:  # noqa: ANN001
             len(recipients),
         )
     except Exception as exc:
-        logger.error("Failed to send reply email for %s: %s", ticket.reference, exc)
+        logger.exception("Failed to send reply email for %s", ticket.reference)
         raise self.retry(exc=exc)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_ticket_assigned_email(self, ticket_id: str) -> None:  # noqa: ANN001
+def send_ticket_assigned_email(self, ticket_id: str) -> None:
     """Notify an agent when a ticket is assigned to them."""
     from apps.tickets.models import Ticket
 
@@ -247,14 +247,12 @@ def send_ticket_assigned_email(self, ticket_id: str) -> None:  # noqa: ANN001
             },
         )
     except Exception as exc:
-        logger.error(
-            "Failed to send assignment email for %s: %s", ticket.reference, exc
-        )
+        logger.exception("Failed to send assignment email for %s", ticket.reference)
         raise self.retry(exc=exc)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_ticket_resolved_email(self, ticket_id: str) -> None:  # noqa: ANN001
+def send_ticket_resolved_email(self, ticket_id: str) -> None:
     """Notify the requester when their ticket is resolved."""
     from apps.tickets.models import Ticket
 
@@ -278,5 +276,5 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:  # noqa: ANN001
             },
         )
     except Exception as exc:
-        logger.error("Failed to send resolved email for %s: %s", ticket.reference, exc)
+        logger.exception("Failed to send resolved email for %s", ticket.reference)
         raise self.retry(exc=exc)

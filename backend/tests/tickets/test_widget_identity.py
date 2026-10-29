@@ -9,7 +9,6 @@ from rest_framework.test import APIClient
 from apps.organizations.models import SHOWDESK_INTERNAL_ORG_SLUG, Organization
 from tests.factories import OrganizationFactory, UserFactory
 
-
 URL = "/api/v1/widget/identity-hash/"
 
 

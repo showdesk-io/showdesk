@@ -14,6 +14,7 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from apps.knowledge_base.models import Article, Category
 from apps.organizations.models import (
     SHOWDESK_INTERNAL_ORG_SLUG,
     Organization,
@@ -22,7 +23,6 @@ from apps.organizations.models import (
     User,
 )
 from apps.tickets.models import SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
-from apps.knowledge_base.models import Article, Category
 
 
 class Command(BaseCommand):
@@ -30,7 +30,7 @@ class Command(BaseCommand):
 
     help = "Seed the database with demo data (organization, agents, tickets, etc.)"
 
-    def add_arguments(self, parser) -> None:  # noqa: ANN001
+    def add_arguments(self, parser) -> None:
         """Add command arguments."""
         parser.add_argument(
             "--flush",
@@ -38,7 +38,7 @@ class Command(BaseCommand):
             help="Delete all existing data before seeding.",
         )
 
-    def handle(self, *args, **options) -> None:  # noqa: ANN002, ANN003
+    def handle(self, *args, **options) -> None:
         """Execute the seed command."""
         if options["flush"]:
             self.stdout.write("Flushing existing data...")

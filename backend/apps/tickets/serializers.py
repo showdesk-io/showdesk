@@ -96,26 +96,28 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
     MAX_FILE_SIZE = 20 * 1024 * 1024
 
     # Blocked extensions (executable, dangerous)
-    BLOCKED_EXTENSIONS = {
-        ".exe",
-        ".bat",
-        ".cmd",
-        ".com",
-        ".msi",
-        ".scr",
-        ".pif",
-        ".vbs",
-        ".vbe",
-        ".js",
-        ".jse",
-        ".wsf",
-        ".wsh",
-        ".ps1",
-        ".sh",
-        ".csh",
-        ".dll",
-        ".sys",
-    }
+    BLOCKED_EXTENSIONS = frozenset(
+        {
+            ".exe",
+            ".bat",
+            ".cmd",
+            ".com",
+            ".msi",
+            ".scr",
+            ".pif",
+            ".vbs",
+            ".vbe",
+            ".js",
+            ".jse",
+            ".wsf",
+            ".wsh",
+            ".ps1",
+            ".sh",
+            ".csh",
+            ".dll",
+            ".sys",
+        }
+    )
 
     class Meta:
         model = TicketAttachment
@@ -132,7 +134,7 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at"]
 
-    def validate_file(self, value):  # noqa: ANN001, ANN201
+    def validate_file(self, value):
         """Validate file size and type."""
         if value.size > self.MAX_FILE_SIZE:
             max_mb = self.MAX_FILE_SIZE // (1024 * 1024)
@@ -360,7 +362,7 @@ class SavedViewSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    def validate_name(self, value):  # noqa: ANN001, ANN201
+    def validate_name(self, value):
         """Ensure the name is unique within the organization."""
         request = self.context.get("request")
         if not request or not request.user.organization:
@@ -406,7 +408,7 @@ class CannedResponseSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    def validate_name(self, value):  # noqa: ANN001, ANN201
+    def validate_name(self, value):
         request = self.context.get("request")
         if not request:
             return value
@@ -457,7 +459,7 @@ class WidgetMessageCreateSerializer(serializers.Serializer):
     )
     context = serializers.JSONField(required=False, default=dict)
 
-    def validate(self, attrs):  # noqa: ANN001, ANN201
+    def validate(self, attrs):
         body = attrs.get("body", "")
         body_type = attrs.get("body_type", "text")
         if body_type == "text" and not body.strip():

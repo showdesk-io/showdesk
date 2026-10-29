@@ -7,10 +7,11 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+
 from apps.core.permissions import get_active_org, has_feature
-from rest_framework.parsers import FormParser, MultiPartParser
 from apps.core.throttling import (
     WidgetMessageThrottle,
     WidgetSessionThrottle,
@@ -138,20 +139,20 @@ class TicketViewSet(viewsets.ModelViewSet):
     search_fields = ["title", "description", "reference", "requester_email"]
     ordering_fields = ["created_at", "updated_at", "priority", "status"]
 
-    def get_serializer_class(self):  # noqa: ANN201
+    def get_serializer_class(self):
         """Use list serializer for list action."""
         if self.action == "list":
             return TicketListSerializer
         return TicketSerializer
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter tickets by the active organization."""
         org = get_active_org(self.request)
         if org:
             return Ticket.objects.filter(organization=org)
         return Ticket.objects.none()
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         """Set organization and reference on creation."""
         org = get_active_org(self.request)
         ticket = serializer.save(
@@ -166,7 +167,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         send_ticket_created_email.delay(str(ticket.id))
 
     @action(detail=False, methods=["get"])
-    def stats(self, request):  # noqa: ANN001, ANN201
+    def stats(self, request):
         """Return aggregated statistics for the current filtered queryset.
 
         Accepts the same filter params as the list endpoint (status, priority,
@@ -237,7 +238,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         permission_classes=[AllowAny],
         throttle_classes=[WidgetSubmitThrottle],
     )
-    def widget_submit(self, request):  # noqa: ANN001, ANN201
+    def widget_submit(self, request):
         """Submit a ticket from the embeddable widget.
 
         Authenticates via organization API token passed in the
@@ -285,7 +286,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         throttle_classes=[WidgetUploadThrottle],
         parser_classes=[MultiPartParser, FormParser],
     )
-    def widget_upload_attachment(self, request):  # noqa: ANN001, ANN201
+    def widget_upload_attachment(self, request):
         """Upload a file attachment from the widget.
 
         Authenticates via X-Widget-Token header.
@@ -343,7 +344,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         methods=["get"],
         permission_classes=[AllowAny],
     )
-    def widget_tickets(self, request):  # noqa: ANN001, ANN201
+    def widget_tickets(self, request):
         """Fetch tickets for a user from the widget.
 
         Authenticates via X-Widget-Token header.
@@ -404,7 +405,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
-    def assign(self, request, pk=None):  # noqa: ANN001, ANN201
+    def assign(self, request, pk=None):
         """Assign a ticket to an agent or team."""
         ticket = self.get_object()
         agent_id = request.data.get("agent_id")
@@ -431,7 +432,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         return Response(TicketSerializer(ticket).data)
 
     @action(detail=True, methods=["post"])
-    def resolve(self, request, pk=None):  # noqa: ANN001, ANN201
+    def resolve(self, request, pk=None):
         """Mark a ticket as resolved."""
         ticket = self.get_object()
         ticket.status = Ticket.Status.RESOLVED
@@ -448,7 +449,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         return Response(TicketSerializer(ticket).data)
 
     @action(detail=True, methods=["post"])
-    def close(self, request, pk=None):  # noqa: ANN001, ANN201
+    def close(self, request, pk=None):
         """Close a ticket."""
         ticket = self.get_object()
         ticket.status = Ticket.Status.CLOSED
@@ -463,7 +464,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         return Response(TicketSerializer(ticket).data)
 
     @action(detail=True, methods=["post"])
-    def reopen(self, request, pk=None):  # noqa: ANN001, ANN201
+    def reopen(self, request, pk=None):
         """Reopen a resolved or closed ticket."""
         ticket = self.get_object()
         ticket.status = Ticket.Status.OPEN
@@ -479,7 +480,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         return Response(TicketSerializer(ticket).data)
 
     @action(detail=True, methods=["post"])
-    def set_tags(self, request, pk=None):  # noqa: ANN001, ANN201
+    def set_tags(self, request, pk=None):
         """Set tags on a ticket (replaces existing tags)."""
         ticket = self.get_object()
         tag_ids = request.data.get("tag_ids", [])
@@ -504,7 +505,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         url_path="bulk_update",
         permission_classes=[IsAuthenticated, has_feature("bulk_actions")],
     )
-    def bulk_update(self, request):  # noqa: ANN001, ANN201
+    def bulk_update(self, request):
         """Apply a single update to many tickets at once.
 
         Body: ``{"ids": [uuid, ...], "status"?, "priority"?,
@@ -609,7 +610,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         throttle_classes=[WidgetSessionThrottle],
         url_path="widget_session",
     )
-    def widget_session(self, request):  # noqa: ANN001, ANN201
+    def widget_session(self, request):
         """Create, resume, or update a widget session.
 
         POST: Create a new session or resume an existing one.
@@ -729,7 +730,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         throttle_classes=[WidgetMessageThrottle],
         url_path="widget_message",
     )
-    def widget_message(self, request):  # noqa: ANN001, ANN201
+    def widget_message(self, request):
         """Send a chat message from the widget.
 
         Creates a ticket on the first message (when ticket_id is null).
@@ -835,7 +836,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         parser_classes=[MultiPartParser, FormParser],
         url_path="widget_message_attachment",
     )
-    def widget_message_attachment(self, request):  # noqa: ANN001, ANN201
+    def widget_message_attachment(self, request):
         """Upload a media attachment as a chat message from the widget.
 
         Supports screenshots, audio messages, images, and video recordings.
@@ -957,7 +958,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         permission_classes=[AllowAny],
         url_path="widget_conversation",
     )
-    def widget_conversation(self, request):  # noqa: ANN001, ANN201
+    def widget_conversation(self, request):
         """Fetch messages for a specific conversation from the widget."""
         org, err = _get_widget_org(request)
         if err:
@@ -1008,7 +1009,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         permission_classes=[AllowAny],
         url_path="widget_history",
     )
-    def widget_history(self, request):  # noqa: ANN001, ANN201
+    def widget_history(self, request):
         """Fetch conversation history for the current widget session."""
         org, err = _get_widget_org(request)
         if err:
@@ -1035,7 +1036,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         permission_classes=[AllowAny],
         url_path="widget_mark_read",
     )
-    def widget_mark_read(self, request):  # noqa: ANN001, ANN201
+    def widget_mark_read(self, request):
         """Mark a widget conversation as read up to `now`.
 
         The end-user has just opened this ticket in the widget, so agent
@@ -1077,7 +1078,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         permission_classes=[AllowAny],
         url_path="widget_message_delete",
     )
-    def widget_message_delete(self, request):  # noqa: ANN001, ANN201
+    def widget_message_delete(self, request):
         """Delete a user message from the widget.
 
         Only the session that created the message can delete it.
@@ -1140,14 +1141,14 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
     serializer_class = TicketMessageSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter messages by the active organization's tickets."""
         org = get_active_org(self.request)
         if org:
             return TicketMessage.objects.filter(ticket__organization=org)
         return TicketMessage.objects.none()
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         """Set author on creation and send notifications."""
         message = serializer.save(author=self.request.user)
 
@@ -1160,7 +1161,7 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         # Email notification (async via Celery)
         send_ticket_reply_email.delay(str(message.id))
 
-    def perform_destroy(self, instance) -> None:  # noqa: ANN001
+    def perform_destroy(self, instance) -> None:
         """Delete message and send WebSocket notification."""
         ticket = instance.ticket
         message_id = str(instance.id)
@@ -1179,14 +1180,14 @@ class TicketAttachmentViewSet(viewsets.ModelViewSet):
     serializer_class = TicketAttachmentSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter attachments by the active organization's tickets."""
         org = get_active_org(self.request)
         if org:
             return TicketAttachment.objects.filter(ticket__organization=org)
         return TicketAttachment.objects.none()
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         """Set uploaded_by on creation."""
         serializer.save(uploaded_by=self.request.user)
 
@@ -1197,14 +1198,14 @@ class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter tags by the active organization."""
         org = get_active_org(self.request)
         if org:
             return Tag.objects.filter(organization=org)
         return Tag.objects.none()
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         """Set organization from the active org."""
         serializer.save(organization=get_active_org(self.request))
 
@@ -1215,14 +1216,14 @@ class PriorityLevelViewSet(viewsets.ModelViewSet):
     serializer_class = PriorityLevelSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter priority levels by the active organization."""
         org = get_active_org(self.request)
         if org:
             return PriorityLevel.objects.filter(organization=org)
         return PriorityLevel.objects.none()
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         """Set organization from the active org."""
         serializer.save(organization=get_active_org(self.request))
 
@@ -1239,7 +1240,7 @@ class SLAPolicyViewSet(viewsets.ModelViewSet):
     serializer_class = SLAPolicySerializer
     permission_classes = [IsAuthenticated, has_feature("sla_policies")]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         org = get_active_org(self.request)
         if org:
             from .models import SLAPolicy
@@ -1250,22 +1251,23 @@ class SLAPolicyViewSet(viewsets.ModelViewSet):
         return SLAPolicy.objects.none()
 
     def _require_admin(self) -> None:
-        from apps.organizations.models import User
         from rest_framework.exceptions import PermissionDenied
+
+        from apps.organizations.models import User
 
         user = self.request.user
         if user.role != User.Role.ADMIN and not user.is_superuser:
             raise PermissionDenied("Only admins can manage SLA policies.")
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         self._require_admin()
         serializer.save(organization=get_active_org(self.request))
 
-    def perform_update(self, serializer) -> None:  # noqa: ANN001
+    def perform_update(self, serializer) -> None:
         self._require_admin()
         serializer.save()
 
-    def perform_destroy(self, instance) -> None:  # noqa: ANN001
+    def perform_destroy(self, instance) -> None:
         self._require_admin()
         instance.delete()
 
@@ -1280,7 +1282,7 @@ class SavedViewViewSet(viewsets.ModelViewSet):
     serializer_class = SavedViewSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Return personal views + shared views from the active org."""
         user = self.request.user
         org = get_active_org(self.request)
@@ -1292,14 +1294,14 @@ class SavedViewViewSet(viewsets.ModelViewSet):
             )
         return SavedView.objects.none()
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         """Set organization and creator."""
         serializer.save(
             organization=get_active_org(self.request),
             created_by=self.request.user,
         )
 
-    def perform_update(self, serializer) -> None:  # noqa: ANN001
+    def perform_update(self, serializer) -> None:
         """Only the creator can update a saved view."""
         if serializer.instance.created_by != self.request.user:
             from rest_framework.exceptions import PermissionDenied
@@ -1307,7 +1309,7 @@ class SavedViewViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You can only edit your own saved views.")
         serializer.save()
 
-    def perform_destroy(self, instance) -> None:  # noqa: ANN001
+    def perform_destroy(self, instance) -> None:
         """Only the creator can delete a saved view."""
         if instance.created_by != self.request.user:
             from rest_framework.exceptions import PermissionDenied
@@ -1328,7 +1330,7 @@ class CannedResponseViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "shortcut", "body"]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Return personal templates + shared templates from the active org."""
         user = self.request.user
         org = get_active_org(self.request)
@@ -1340,14 +1342,14 @@ class CannedResponseViewSet(viewsets.ModelViewSet):
             )
         return CannedResponse.objects.none()
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         """Set organization and creator."""
         serializer.save(
             organization=get_active_org(self.request),
             created_by=self.request.user,
         )
 
-    def perform_update(self, serializer) -> None:  # noqa: ANN001
+    def perform_update(self, serializer) -> None:
         """Only the creator can update a canned response."""
         if serializer.instance.created_by != self.request.user:
             from rest_framework.exceptions import PermissionDenied
@@ -1357,7 +1359,7 @@ class CannedResponseViewSet(viewsets.ModelViewSet):
             )
         serializer.save()
 
-    def perform_destroy(self, instance) -> None:  # noqa: ANN001
+    def perform_destroy(self, instance) -> None:
         """Only the creator can delete a canned response."""
         if instance.created_by != self.request.user:
             from rest_framework.exceptions import PermissionDenied
@@ -1368,7 +1370,7 @@ class CannedResponseViewSet(viewsets.ModelViewSet):
         instance.delete()
 
     @action(detail=True, methods=["post"], url_path="record-use")
-    def record_use(self, request, pk=None):  # noqa: ANN001, ANN201, ARG002
+    def record_use(self, request, pk=None):
         """Increment usage_count when a template is inserted."""
         instance = self.get_object()
         CannedResponse.objects.filter(pk=instance.pk).update(

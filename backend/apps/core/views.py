@@ -12,6 +12,6 @@ class HealthCheckView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
-    def get(self, request) -> Response:  # noqa: ANN001
+    def get(self, request) -> Response:
         """Return health status."""
         return Response({"status": "healthy"}, status=status.HTTP_200_OK)

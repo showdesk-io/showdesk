@@ -1,0 +1,18 @@
+# Ruff configuration for the Django backend.
+#
+# Ruff 0.16+ ships a larger default rule set (see the "Default rules" section
+# of the Ruff changelog); we keep those defaults and only carve out the
+# framework-specific false positives below.
+
+[lint.per-file-ignores]
+# RUF012 (mutable class attributes should be annotated with ClassVar) does not
+# fit Django / DRF declarative configuration: model and serializer ``Meta``
+# options, ``ModelAdmin`` options and ``APIView`` attributes such as
+# ``permission_classes`` are read by the framework and never mutated.
+# Migrations are generated code.
+"**/migrations/*.py" = ["RUF012"]
+"apps/*/models.py" = ["RUF012"]
+"apps/*/admin.py" = ["RUF012"]
+"apps/*/serializers.py" = ["RUF012"]
+"apps/*/views.py" = ["RUF012"]
+"apps/*/*_views.py" = ["RUF012"]

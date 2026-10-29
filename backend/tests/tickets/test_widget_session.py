@@ -9,7 +9,6 @@ from rest_framework.test import APIClient
 from apps.tickets.models import WidgetSession
 from tests.factories import OrganizationFactory
 
-
 URL = "/api/v1/tickets/widget_session/"
 
 

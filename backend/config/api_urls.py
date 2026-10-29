@@ -4,6 +4,9 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from apps.core.setup_views import SetupInitializeView, SetupStatusView
+from apps.core.views import HealthCheckView
+from apps.knowledge_base.views import ArticleViewSet, CategoryViewSet
 from apps.organizations.auth_views import RequestOTPView, VerifyOTPView
 from apps.organizations.signup_views import (
     CheckDomainView,
@@ -34,9 +37,6 @@ from apps.tickets.views import (
 )
 from apps.tickets.widget_views import InternalWidgetIdentityView
 from apps.videos.views import VideoRecordingViewSet
-from apps.knowledge_base.views import ArticleViewSet, CategoryViewSet
-from apps.core.views import HealthCheckView
-from apps.core.setup_views import SetupStatusView, SetupInitializeView
 
 router = DefaultRouter()
 

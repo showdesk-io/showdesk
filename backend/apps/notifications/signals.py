@@ -8,7 +8,7 @@ from channels.layers import get_channel_layer
 logger = logging.getLogger(__name__)
 
 
-def notify_ticket_update(ticket) -> None:  # noqa: ANN001
+def notify_ticket_update(ticket) -> None:
     """Send a ticket update notification to the organization channel."""
     channel_layer = get_channel_layer()
     group_name = f"org_{ticket.organization_id}"
@@ -28,7 +28,7 @@ def notify_ticket_update(ticket) -> None:  # noqa: ANN001
     )
 
 
-def notify_new_ticket(ticket) -> None:  # noqa: ANN001
+def notify_new_ticket(ticket) -> None:
     """Send a new ticket notification to the organization channel."""
     channel_layer = get_channel_layer()
     group_name = f"org_{ticket.organization_id}"
@@ -48,7 +48,7 @@ def notify_new_ticket(ticket) -> None:  # noqa: ANN001
     )
 
 
-def notify_new_message(message) -> None:  # noqa: ANN001
+def notify_new_message(message) -> None:
     """Send a new message notification to the organization channel.
 
     Also broadcasts to the widget session group if the ticket was created
@@ -99,7 +99,7 @@ def notify_new_message(message) -> None:  # noqa: ANN001
         )
 
 
-def notify_message_deleted(ticket, message_id: str) -> None:  # noqa: ANN001
+def notify_message_deleted(ticket, message_id: str) -> None:
     """Notify agent dashboard and widget that a message was deleted."""
     channel_layer = get_channel_layer()
 
