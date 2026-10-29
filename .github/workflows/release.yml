@@ -1,25 +1,41 @@
 name: Release
 
-# main: CI -> build & push images (tagged with the short SHA) -> deploy.
-# A commit that fails CI is never built nor deployed.
+# Push to main or develop: CI -> build & push images (tagged with the short
+# SHA) -> deploy. A commit that fails CI is never built nor deployed.
+#
+#   main    -> GitHub Environment "production"
+#   develop -> GitHub Environment "development"
 #
 # The deploy job is opt-in: it only runs when the repository variable
-# DEPLOY_ENABLED is "true", and reads everything else from the
-# "production" GitHub Environment (see deploy/README.md):
-#   secrets: DEPLOY_HOST, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS, ENV_FILE,
-#            TLS_CERT (optional), TLS_KEY (optional)
-#   vars:    DEPLOY_USER (default "deploy"), DEPLOY_PATH (default "/opt/showdesk")
+# DEPLOY_ENABLED is "true". Deployment settings come from the target
+# environment, from one of two sources (environment variable SECRETS_PROVIDER):
 #
-# Rollback: run this workflow manually with the tag to redeploy.
+#   github (default) -- environment secrets:
+#     DEPLOY_HOST, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS, ENV_FILE,
+#     TLS_CERT (optional), TLS_KEY (optional)
+#
+#   scaleway -- Scaleway Secret Manager, secrets named host, ssh-key,
+#     known-hosts, env, tls-cert (optional), tls-key (optional) under
+#     SCW_SECRETS_PATH (default /deploy) in project SCW_PROJECT_ID.
+#     GitHub only holds SCW_SECRET_KEY (an API key restricted to reading
+#     those secrets); vars: SCW_PROJECT_ID, SCW_REGION (default fr-par).
+#
+# Other vars: DEPLOY_USER (default "deploy"), DEPLOY_PATH (default "/opt/showdesk").
+# Rollback / manual deploy: run this workflow with a tag and an environment.
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag (short SHA) to redeploy -- skips CI and build"
+        description: "Image tag (short SHA) to deploy -- skips CI and build"
         required: true
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [production, development]
+        default: production
 
 concurrency:
   group: release-${{ github.ref }}
@@ -40,15 +56,15 @@ jobs:
     uses: ./.github/workflows/docker-publish.yml
 
   deploy:
-    name: Deploy
+    name: Deploy (${{ inputs.environment || (github.ref_name == 'main' && 'production' || 'development') }})
     needs: [ci, images]
     if: >-
       always() && vars.DEPLOY_ENABLED == 'true' &&
       (github.event_name == 'workflow_dispatch' || needs.images.result == 'success')
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ inputs.environment || (github.ref_name == 'main' && 'production' || 'development') }}
     concurrency:
-      group: deploy-production
+      group: deploy-${{ inputs.environment || (github.ref_name == 'main' && 'production' || 'development') }}
       cancel-in-progress: false
     env:
       DEPLOY_USER: ${{ vars.DEPLOY_USER || 'deploy' }}
@@ -65,37 +81,80 @@ jobs:
           [[ "$tag" =~ ^[0-9a-f]{7,40}$ ]] || { echo "invalid tag: $tag"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Configure SSH
+      - name: Load deployment secrets
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          SECRETS_PROVIDER: ${{ vars.SECRETS_PROVIDER || 'github' }}
+          # github provider
+          GH_DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          GH_DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          GH_DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          GH_ENV_FILE: ${{ secrets.ENV_FILE }}
+          GH_TLS_CERT: ${{ secrets.TLS_CERT }}
+          GH_TLS_KEY: ${{ secrets.TLS_KEY }}
+          # scaleway provider
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_PROJECT_ID: ${{ vars.SCW_PROJECT_ID }}
+          SCW_REGION: ${{ vars.SCW_REGION || 'fr-par' }}
+          SCW_SECRETS_PATH: ${{ vars.SCW_SECRETS_PATH || '/deploy' }}
         run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          set -euo pipefail
+          umask 077
+          mkdir -p bundle/certs ~/.ssh
+          chmod 700 ~/.ssh
+
+          case "$SECRETS_PROVIDER" in
+            github)
+              get() {
+                case "$1" in
+                  host) printf '%s' "$GH_DEPLOY_HOST" ;;
+                  ssh-key) printf '%s' "$GH_DEPLOY_SSH_KEY" ;;
+                  known-hosts) printf '%s' "$GH_DEPLOY_KNOWN_HOSTS" ;;
+                  env) printf '%s' "$GH_ENV_FILE" ;;
+                  tls-cert) printf '%s' "$GH_TLS_CERT" ;;
+                  tls-key) printf '%s' "$GH_TLS_KEY" ;;
+                esac
+              }
+              ;;
+            scaleway)
+              get() {
+                local url="https://api.scaleway.com/secret-manager/v1beta1/regions/${SCW_REGION}/secrets-by-path/versions/latest/access"
+                local body
+                body=$(curl -sS -G -H "X-Auth-Token: ${SCW_SECRET_KEY}" "$url" \
+                  --data-urlencode "project_id=${SCW_PROJECT_ID}" \
+                  --data-urlencode "secret_path=${SCW_SECRETS_PATH}" \
+                  --data-urlencode "secret_name=$1" \
+                  -w '\n%{http_code}')
+                case "${body##*$'\n'}" in
+                  200) printf '%s' "${body%$'\n'*}" | jq -r .data | base64 -d ;;
+                  404) return 0 ;;  # optional secret not defined
+                  *) echo "Secret Manager: cannot read $1 (HTTP ${body##*$'\n'})" >&2; return 1 ;;
+                esac
+              }
+              ;;
+            *) echo "unknown SECRETS_PROVIDER: $SECRETS_PROVIDER" >&2; exit 1 ;;
+          esac
+
+          host="$(get host)"
+          [ -n "$host" ] || { echo "deployment host is not configured" >&2; exit 1; }
+          echo "::add-mask::$host"
+          echo "DEPLOY_HOST=$host" >> "$GITHUB_ENV"
+
+          get ssh-key > ~/.ssh/id_deploy; echo >> ~/.ssh/id_deploy
+          get known-hosts > ~/.ssh/known_hosts; echo >> ~/.ssh/known_hosts
+          get env > bundle/.env; echo >> bundle/.env
+          get tls-cert > bundle/certs/cert.pem
+          get tls-key > bundle/certs/key.pem
+          for f in bundle/certs/*.pem; do [ -s "$f" ] || rm -f "$f"; done
           chmod 600 ~/.ssh/id_deploy ~/.ssh/known_hosts
+          [ -s bundle/.env ] || { echo "env is empty" >&2; exit 1; }
 
       - name: Upload compose file, env and TLS material
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          ENV_FILE: ${{ secrets.ENV_FILE }}
-          TLS_CERT: ${{ secrets.TLS_CERT }}
-          TLS_KEY: ${{ secrets.TLS_KEY }}
         run: |
-          umask 077
-          mkdir -p bundle/certs
           cp docker-compose.prod.yml deploy/remote-deploy.sh bundle/
-          printf '%s\n' "$ENV_FILE" > bundle/.env
-          if [ -n "$TLS_CERT" ]; then
-            printf '%s\n' "$TLS_CERT" > bundle/certs/cert.pem
-            printf '%s\n' "$TLS_KEY" > bundle/certs/key.pem
-          fi
           chmod 755 bundle/remote-deploy.sh
           scp -i ~/.ssh/id_deploy -rp bundle/. "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
 
       - name: Deploy ${{ steps.tag.outputs.tag }}
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
           ssh -i ~/.ssh/id_deploy "$DEPLOY_USER@$DEPLOY_HOST" \
             "$DEPLOY_PATH/remote-deploy.sh ${{ steps.tag.outputs.tag }}"

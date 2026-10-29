@@ -11,6 +11,9 @@
 #   - postgres   Only a local PostgreSQL (WAL-G image, see deploy/postgres/).
 #   - backup     WAL-G base-backup sidecar for the local PostgreSQL (PITR).
 #   - portainer  Auto-update sidecar that redeploys a Portainer stack.
+#   - mailpit    Catch-all SMTP server for staging/dev (no email leaves the
+#                host). Point EMAIL_HOST=mailpit, EMAIL_PORT=1025; the web UI
+#                listens on 127.0.0.1:8025 only (use an SSH tunnel).
 #
 # Usage:
 #   docker compose -f docker-compose.prod.yml up -d                  # managed DB
@@ -241,6 +244,21 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # Mailpit (profile: mailpit) -- captures all outgoing email.
+  # ---------------------------------------------------------------------------
+  mailpit:
+    image: axllent/mailpit:latest
+    profiles: [mailpit]
+    environment:
+      MP_MAX_MESSAGES: ${MAILPIT_MAX_MESSAGES:-5000}
+      MP_DATABASE: /data/mailpit.db
+    ports:
+      - "127.0.0.1:8025:8025"
+    volumes:
+      - mailpit_data:/data
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # Redis (profile: local)
   # When using managed Redis, set REDIS_URL / CELERY_BROKER_URL.
   # ---------------------------------------------------------------------------
@@ -326,6 +344,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  mailpit_data:
   caddy_data:
   caddy_config:
   auto_update_state:

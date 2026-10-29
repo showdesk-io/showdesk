@@ -1,11 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [develop]
   pull_request:
     branches: [main, develop]
-  # Pushes to main run CI through release.yml (CI -> images -> deploy).
+  # Pushes to main / develop run CI through release.yml (CI -> images -> deploy).
   workflow_call:
 
 env:

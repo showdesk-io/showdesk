@@ -46,27 +46,58 @@ the Cloudflare proxy, set `http_allow_cidrs = "cloudflare"` so ports 80/443
 only accept Cloudflare's ranges (enforced in the `DOCKER-USER` chain,
 since Docker-published ports bypass UFW).
 
-## 2. Configure the GitHub Environment
+## 2. Configure the GitHub Environments
 
-Create an environment named `production` (Settings → Environments),
-restrict it to the `main` branch, then add:
+`main` deploys to the `production` environment, `develop` to
+`development`. Create the environments you need (Settings → Environments),
+restrict each one to its branch, and set the repository variable
+`DEPLOY_ENABLED=true`.
+
+Deployment settings are read from one of two sources, selected per
+environment by the variable `SECRETS_PROVIDER`.
+
+### Option A -- GitHub secrets (`SECRETS_PROVIDER=github`, default)
 
 | Kind | Name | Value |
 |---|---|---|
-| Variable (repository) | `DEPLOY_ENABLED` | `true` |
 | Secret | `DEPLOY_HOST` | server hostname or IP |
 | Secret | `DEPLOY_SSH_KEY` | private key whose public half is in `deploy_authorized_keys` |
 | Secret | `DEPLOY_KNOWN_HOSTS` | output of `ssh-keyscan -t ed25519 <host>` |
-| Secret | `ENV_FILE` | the full production `.env` (see `.env.example`) |
+| Secret | `ENV_FILE` | the full `.env` (see `.env.example`) |
 | Secret | `TLS_CERT` / `TLS_KEY` | optional custom certificate (PEM) |
-| Variable | `DEPLOY_USER` / `DEPLOY_PATH` | optional, default `deploy` / `/opt/showdesk` |
+
+Simple, but GitHub secrets are write-only: you cannot read back what is
+deployed.
+
+### Option B -- Scaleway Secret Manager (`SECRETS_PROVIDER=scaleway`)
+
+Keep the configuration readable and versioned in Secret Manager; GitHub
+only stores a read-only API key.
+
+1. In a Scaleway project dedicated to the environment, create opaque
+   secrets under the path `/deploy`: `host`, `ssh-key`, `known-hosts`,
+   `env`, and optionally `tls-cert`, `tls-key` (same contents as option A).
+2. Create an IAM application with the `SecretManagerSecretAccess` and
+   `SecretManagerReadOnly` permission sets on that project only, and an
+   API key for it.
+3. In the GitHub environment: secret `SCW_SECRET_KEY` (the API key's
+   secret), variables `SCW_PROJECT_ID`, and optionally `SCW_REGION`
+   (default `fr-par`) and `SCW_SECRETS_PATH` (default `/deploy`).
+
+Changing the configuration = adding a new secret version, then re-running
+the deploy. Previous versions stay available for rollback.
+
+| Variable | Default |
+|---|---|
+| `DEPLOY_USER` / `DEPLOY_PATH` | `deploy` / `/opt/showdesk` |
 
 Secrets are never exposed to workflows triggered from forks, and are
 masked in logs.
 
 ## 3. Deploy
 
-Every push to `main` runs `.github/workflows/release.yml`:
+Every push to `main` (production) or `develop` (development) runs
+`.github/workflows/release.yml`:
 
 1. CI (lint + tests) -- a red commit stops here;
 2. images built and pushed to GHCR, tagged with the short SHA (and `latest`);
@@ -74,7 +105,8 @@ Every push to `main` runs `.github/workflows/release.yml`:
    are copied to the host, which pulls the tag, restarts the stack, waits
    for the backend health check and rolls back to the previous tag on failure.
 
-**Rollback**: Actions → Release → Run workflow, with the tag to redeploy.
+**Rollback / manual deploy**: Actions → Release → Run workflow, with the tag
+and the target environment.
 
 ## TLS
 
@@ -85,6 +117,16 @@ By default Caddy obtains a Let's Encrypt certificate for
 
 ```bash
 CADDY_TLS_DIRECTIVE="tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem"
+```
+
+## Staging / development hosts
+
+Add `mailpit` to `COMPOSE_PROFILES` and point `EMAIL_HOST=mailpit`,
+`EMAIL_PORT=1025`, `EMAIL_USE_SSL=False`, `EMAIL_USE_TLS=False`: no email
+leaves the host. The Mailpit UI only listens on the host's loopback:
+
+```bash
+ssh -L 8025:127.0.0.1:8025 deploy@<host>   # then open http://localhost:8025
 ```
 
 ## Running two stacks on one database
