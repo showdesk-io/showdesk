@@ -8,7 +8,7 @@ on:
 
 env:
   PYTHON_VERSION: "3.14"
-  NODE_VERSION: "22"
+  NODE_VERSION: "26"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -18,9 +18,9 @@ jobs:
     name: Backend Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -70,14 +70,14 @@ jobs:
       DJANGO_SETTINGS_MODULE: config.settings.development
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: pip-${{ hashFiles('backend/requirements.txt') }}
@@ -104,14 +104,14 @@ jobs:
     name: Frontend Lint & Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: frontend/node_modules
           key: node-${{ hashFiles('frontend/package-lock.json', 'frontend/package.json') }}
@@ -138,14 +138,14 @@ jobs:
     name: Widget Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: widget/node_modules
           key: node-widget-${{ hashFiles('widget/package-lock.json', 'widget/package.json') }}
