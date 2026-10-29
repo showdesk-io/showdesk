@@ -104,9 +104,19 @@ export function TicketDetail({
     recordUseMutation.mutate(cr.id);
   };
 
-  // Sync drafts when ticket data changes externally
-  useEffect(() => { setTitleDraft(ticket.title); }, [ticket.title]);
-  useEffect(() => { setDescDraft(ticket.description); }, [ticket.description]);
+  // Sync drafts when ticket data changes externally (adjust state during
+  // render rather than in an effect, see react.dev "You Might Not Need an
+  // Effect" — storing information from previous renders).
+  const [syncedTitle, setSyncedTitle] = useState(ticket.title);
+  if (syncedTitle !== ticket.title) {
+    setSyncedTitle(ticket.title);
+    setTitleDraft(ticket.title);
+  }
+  const [syncedDesc, setSyncedDesc] = useState(ticket.description);
+  if (syncedDesc !== ticket.description) {
+    setSyncedDesc(ticket.description);
+    setDescDraft(ticket.description);
+  }
 
   // Auto-focus on edit
   useEffect(() => { if (editingTitle) titleInputRef.current?.focus(); }, [editingTitle]);
