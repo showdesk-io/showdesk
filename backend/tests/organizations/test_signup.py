@@ -168,7 +168,8 @@ class TestSignupVerifyOTP:
         OrganizationFactory(slug="weird")
         data = _request_and_verify(api_client, "alice@gmail.com")
         assert data["next_step"] == "create_org"
-        assert data["domain"] == "gmail.com"
+        # Public webmail is never offered as a claimable workspace domain.
+        assert data["domain"] == ""
 
     def test_verify_invalid_code(self, api_client) -> None:
         api_client.post("/api/v1/auth/signup/request-otp/", {"email": "alice@x.io"})
@@ -265,9 +266,7 @@ class TestSignupCreateOrg:
         assert not org.domains.filter(is_email_routing=True).exists()
         assert response.data["email_domain"] == ""
 
-    def test_create_org_with_custom_email_domain_starts_dns_challenge(
-        self, api_client
-    ) -> None:
+    def test_create_org_rejects_other_email_domain(self, api_client) -> None:
         data = _request_and_verify(api_client, "alice@personal.io")
         client = _auth_client(data)
         response = client.post(
@@ -278,14 +277,9 @@ class TestSignupCreateOrg:
                 "email_domain": "acme-corp.fr",
             },
         )
-        assert response.status_code == status.HTTP_201_CREATED, response.data
-        assert response.data["email_domain"] == "acme-corp.fr"
-        assert response.data["email_domain_status"] == "pending_dns"
-        org = Organization.objects.get(slug="acme")
-        row = org.domains.get(domain="acme-corp.fr")
-        assert row.status == OrganizationDomain.Status.PENDING
-        assert row.verification_method == OrganizationDomain.VerificationMethod.DNS_TXT
-        assert row.verification_token != ""
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["code"] == "domain_mismatch"
+        assert not Organization.objects.filter(slug="acme").exists()
 
     def test_create_org_rejects_taken_slug(self, api_client) -> None:
         OrganizationFactory(slug="taken")

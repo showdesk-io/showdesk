@@ -248,7 +248,11 @@ async function reachCreateOrgStep(email: string, domain: string) {
 describe("SignupPage — email domain is opt-in", () => {
   it("sends the founder's domain only when the checkbox is ticked", async () => {
     const user = await reachCreateOrgStep("jane@acme.com", "acme.com");
-    await user.click(screen.getByLabelText(/@acme\.com/i));
+    const checkbox = screen.getByLabelText(/@acme\.com/i);
+    expect(checkbox).not.toBeChecked();
+    await user.click(checkbox);
+    // The domain is the founder's own -- never editable.
+    expect(screen.queryByRole("textbox", { name: /email domain/i })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /create my workspace/i }));
     await waitFor(() =>
       expect(signupApi.signupCreateOrg).toHaveBeenCalledWith(

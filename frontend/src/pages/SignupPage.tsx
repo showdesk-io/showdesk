@@ -70,13 +70,10 @@ export function SignupPage() {
   // Email domain auto-derived by the backend from the verified email. Empty
   // string means a public webmail provider (gmail, etc.) — no auto-routing.
   const [signupDomain, setSignupDomain] = useState("");
-  // Opt-in: claim an email domain so colleagues are routed to this
-  // workspace. Off by default (a company may run several workspaces) and
-  // never offered for public webmail.
+  // Opt-in: claim the founder's own email domain so colleagues are routed
+  // to this workspace. Off by default (a company may run several
+  // workspaces), not editable, and never offered for public webmail.
   const [claimEmailDomain, setClaimEmailDomain] = useState(false);
-  // Editable domain once claimed. Defaults to signupDomain; any other
-  // domain creates a pending DNS challenge instead of auto-verifying.
-  const [emailDomainOverride, setEmailDomainOverride] = useState("");
 
   const [isLoading, setIsLoading] = useState(false);
   const [resumeChecked, setResumeChecked] = useState(false);
@@ -93,7 +90,6 @@ export function SignupPage() {
       .then((data) => {
         setEmail(data.user.email);
         setSignupDomain(data.domain || "");
-        setEmailDomainOverride(data.domain || "");
         if (data.next_step === "has_org") {
           navigate("/", { replace: true });
           return;
@@ -173,7 +169,6 @@ export function SignupPage() {
       const data = await signupVerifyOTP(email, code);
       setTokens(data.access, data.refresh);
       setSignupDomain(data.domain || "");
-      setEmailDomainOverride(data.domain || "");
       if (data.next_step === "has_org") {
         navigate("/");
         return;
@@ -225,18 +220,11 @@ export function SignupPage() {
     if (!orgName.trim() || !orgSlug || slugResult?.available === false) return;
     setIsLoading(true);
     try {
-      const data = await signupCreateOrg({
+      await signupCreateOrg({
         org_name: orgName,
         org_slug: orgSlug,
-        email_domain: claimEmailDomain
-          ? emailDomainOverride.trim().toLowerCase() || signupDomain
-          : undefined,
+        email_domain: claimEmailDomain ? signupDomain : undefined,
       });
-      if (data.email_domain_status === "pending_dns") {
-        toast.success(
-          `Workspace created. Verify ${data.email_domain} via DNS in Settings.`,
-        );
-      }
       navigate("/onboarding");
     } catch (err) {
       if (
@@ -572,42 +560,11 @@ export function SignupPage() {
                     address find and join this workspace
                   </span>
                 </label>
-                {claimEmailDomain ? (
-                  <div className="mt-3">
-                    <label
-                      htmlFor="emailDomain"
-                      className="mb-1 block text-sm font-medium text-gray-700"
-                    >
-                      Email domain
-                    </label>
-                    <input
-                      id="emailDomain"
-                      type="text"
-                      value={emailDomainOverride}
-                      onChange={(e) =>
-                        setEmailDomainOverride(
-                          e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ""),
-                        )
-                      }
-                      className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
-                      placeholder={signupDomain}
-                    />
-                    <p className="mt-1.5 text-xs text-gray-500">
-                      {(() => {
-                        const v = emailDomainOverride.trim() || signupDomain;
-                        if (v === signupDomain) {
-                          return `Auto-verified from your email. Teammates with @${v} will be routed here.`;
-                        }
-                        return `Different from your email — you'll verify @${v} via DNS in Settings after creation.`;
-                      })()}
-                    </p>
-                  </div>
-                ) : (
-                  <p className="mt-1.5 pl-6 text-xs text-gray-500">
-                    Optional. Leave it off if your company may have several
-                    workspaces — you can add a domain later in Settings.
-                  </p>
-                )}
+                <p className="mt-1.5 pl-6 text-xs text-gray-500">
+                  {claimEmailDomain
+                    ? `Anyone signing up with an @${signupDomain} address will be able to request to join.`
+                    : "Optional. Leave it off if your company may have several workspaces — you can add a domain later in Settings."}
+                </p>
               </div>
             )}
 

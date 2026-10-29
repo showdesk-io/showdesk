@@ -241,7 +241,10 @@ def _resolve_next_step(user: User) -> dict[str, Any]:
             "org_name": match.name,
             "domain": domain,
         }
-    return {"next_step": "create_org", "domain": domain or ""}
+    # Only a company domain can be claimed by the new workspace; public
+    # webmail is never offered.
+    claimable = domain if domain and not is_public_email_domain(domain) else ""
+    return {"next_step": "create_org", "domain": claimable}
 
 
 def _split_full_name(full_name: str) -> tuple[str, str]:
@@ -428,9 +431,9 @@ class CreateOrgSerializer(serializers.Serializer):
 
     `email_domain` is opt-in: when omitted or blank, the workspace gets no
     email-routing domain (several workspaces of one company must not all
-    capture its colleagues). When set to the founder's own domain it is
-    auto-verified; any other domain starts a DNS challenge the founder
-    finishes from Settings. Public webmail domains are rejected.
+    capture its colleagues). When set, it must be the founder's own
+    (non-webmail) email domain and is auto-verified. Other domains are
+    added later from Settings, with DNS verification.
     """
 
     org_name = serializers.CharField(max_length=255)
@@ -492,6 +495,15 @@ class SignupCreateOrgView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if requested_domain and requested_domain != founder_domain:
+            return Response(
+                {
+                    "detail": "Only your own email domain can be claimed at "
+                    "signup. Add other domains from Settings.",
+                    "code": "domain_mismatch",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         org = Organization.objects.create(name=org_name, slug=org_slug)
 
@@ -503,31 +515,21 @@ class SignupCreateOrgView(APIView):
 
         domain_status: str | None = None
         if requested_domain:
-            if requested_domain == founder_domain:
-                # Founder's own domain — auto-verify if eligible.
-                try:
-                    services.try_admin_email_autoverify(
-                        organization=org,
-                        domain=requested_domain,
-                        is_email_routing=True,
-                    )
-                    domain_status = "verified"
-                except services.DomainVerificationError as exc:
-                    logger.info(
-                        "Signup: auto-verify of %s for %s skipped (%s)",
-                        requested_domain,
-                        org.slug,
-                        exc,
-                    )
-            else:
-                # Different domain (or admin chose a custom one) — start
-                # a DNS challenge so the founder can finish from Settings.
-                services.start_dns_challenge(
+            # Founder's own domain -- auto-verify if eligible.
+            try:
+                services.try_admin_email_autoverify(
                     organization=org,
                     domain=requested_domain,
                     is_email_routing=True,
                 )
-                domain_status = "pending_dns"
+                domain_status = "verified"
+            except services.DomainVerificationError as exc:
+                logger.info(
+                    "Signup: auto-verify of %s for %s skipped (%s)",
+                    requested_domain,
+                    org.slug,
+                    exc,
+                )
 
         _record_signup_success(request)
         _send_welcome_email(user, org)
