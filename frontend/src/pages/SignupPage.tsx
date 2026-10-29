@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { isAxiosError } from "axios";
 import toast from "react-hot-toast";
 import {
@@ -345,7 +345,7 @@ export function SignupPage() {
                 required
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 autoFocus
               />
             </div>
@@ -363,7 +363,7 @@ export function SignupPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value.toLowerCase())}
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="you@company.com"
               />
               {domainResult?.matches_org && (
@@ -416,7 +416,7 @@ export function SignupPage() {
                 onChange={(e) =>
                   setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
                 }
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-center font-mono text-2xl tracking-[0.5em] focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-center font-mono text-2xl tracking-[0.5em] focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="------"
               />
               <p className="mt-2 text-xs text-gray-400">
@@ -500,7 +500,7 @@ export function SignupPage() {
                 required
                 value={orgName}
                 onChange={(e) => setOrgName(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="Acme Inc"
                 autoFocus
               />
@@ -528,7 +528,7 @@ export function SignupPage() {
                       e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
                     );
                   }}
-                  className="flex-1 px-3 py-2.5 text-sm focus:outline-none"
+                  className="flex-1 px-3 py-2.5 text-sm focus:outline-hidden"
                   placeholder="acme"
                 />
               </div>
@@ -565,7 +565,7 @@ export function SignupPage() {
                     e.target.value.toLowerCase().replace(/[^a-z0-9.-]/g, ""),
                   )
                 }
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder={signupDomain || "acme.com"}
               />
               <p className="mt-1.5 text-xs text-gray-500">

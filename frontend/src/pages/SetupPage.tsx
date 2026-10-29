@@ -7,7 +7,7 @@
  */
 
 import { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import toast from "react-hot-toast";
 import { initializeInstance } from "@/api/setup";
 import { verifyOTP } from "@/api/auth";
@@ -96,7 +96,7 @@ export function SetupPage() {
                   required
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                   autoFocus
                 />
               </div>
@@ -112,7 +112,7 @@ export function SetupPage() {
                   type="text"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 />
               </div>
             </div>
@@ -130,7 +130,7 @@ export function SetupPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="admin@showdesk.io"
               />
             </div>
@@ -164,7 +164,7 @@ export function SetupPage() {
                 onChange={(e) =>
                   setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
                 }
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-center text-2xl font-mono tracking-[0.5em] focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-center text-2xl font-mono tracking-[0.5em] focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="------"
               />
               <p className="mt-2 text-xs text-gray-400">

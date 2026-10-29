@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useEffect } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router";
 import { clsx } from "clsx";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/authStore";
@@ -242,13 +242,13 @@ function SidebarBrandMark({ org }: { org: Organization | undefined }) {
         src={org.logo}
         alt=""
         aria-hidden="true"
-        className="h-8 w-8 rounded object-contain"
+        className="h-8 w-8 rounded-sm object-contain"
       />
     );
   }
   if (org?.name) {
     return (
-      <div className="flex h-8 w-8 items-center justify-center rounded bg-primary-100 text-sm font-semibold text-primary-700">
+      <div className="flex h-8 w-8 items-center justify-center rounded-sm bg-primary-100 text-sm font-semibold text-primary-700">
         {org.name.charAt(0).toUpperCase()}
       </div>
     );

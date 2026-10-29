@@ -1,4 +1,4 @@
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router";
 
 import { AuthGuard } from "./components/common/AuthGuard";
 import { AdminGuard } from "./components/common/AdminGuard";

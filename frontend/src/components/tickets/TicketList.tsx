@@ -7,7 +7,7 @@
  */
 
 import { useState, useRef, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { clsx } from "clsx";
 import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -322,7 +322,7 @@ function TagsMenu({ ticket }: { ticket: TicketListItem }) {
               }}
               onClick={(e) => e.stopPropagation()}
               placeholder="Search or create tag..."
-              className="w-full rounded border border-gray-200 px-2 py-1 text-xs focus:border-primary-400 focus:outline-none"
+              className="w-full rounded-sm border border-gray-200 px-2 py-1 text-xs focus:border-primary-400 focus:outline-hidden"
               autoFocus
             />
           </div>
@@ -434,7 +434,7 @@ function SelectCheckbox({
       onChange={(e) => onToggle(e.target.checked)}
       // Don't bubble through to the row link / hover styling.
       onClick={(e) => e.stopPropagation()}
-      className="h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+      className="h-4 w-4 shrink-0 cursor-pointer rounded-sm border-gray-300 text-primary-600 focus:ring-primary-500"
     />
   );
 }

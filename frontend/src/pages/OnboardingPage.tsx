@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Navigate, Link, useNavigate } from "react-router-dom";
+import { Navigate, Link, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import toast from "react-hot-toast";
@@ -98,7 +98,7 @@ export function OnboardingPage() {
 
         <Stepper current={step} />
 
-        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-xs">
           {step === 0 && (
             <WidgetStep
               org={org}
@@ -203,7 +203,7 @@ function WidgetStep({
             type="color"
             value={color}
             onChange={(e) => setColor(e.target.value)}
-            className="h-10 w-16 cursor-pointer rounded border border-gray-300"
+            className="h-10 w-16 cursor-pointer rounded-sm border border-gray-300"
           />
           <input
             type="text"
@@ -432,7 +432,7 @@ function EmbedStep({
         </h2>
         <p className="mt-1 text-sm text-gray-500">
           Paste this snippet into your site's HTML, just before
-          <code className="mx-1 rounded bg-gray-100 px-1 text-xs">
+          <code className="mx-1 rounded-sm bg-gray-100 px-1 text-xs">
             {`</body>`}
           </code>
           .
@@ -446,7 +446,7 @@ function EmbedStep({
         <button
           type="button"
           onClick={copy}
-          className="absolute right-2 top-2 rounded bg-gray-700 px-2 py-1 text-xs text-white hover:bg-gray-600"
+          className="absolute right-2 top-2 rounded-sm bg-gray-700 px-2 py-1 text-xs text-white hover:bg-gray-600"
         >
           {copied ? "Copied!" : "Copy"}
         </button>

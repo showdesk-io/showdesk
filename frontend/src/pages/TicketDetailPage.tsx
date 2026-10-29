@@ -2,7 +2,7 @@
  * Ticket detail page.
  */
 
-import { useParams } from "react-router-dom";
+import { useParams } from "react-router";
 import toast from "react-hot-toast";
 import { TicketDetail } from "@/components/tickets/TicketDetail";
 import { useTicket, useCreateMessage } from "@/hooks/useTickets";

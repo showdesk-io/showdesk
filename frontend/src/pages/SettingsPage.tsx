@@ -227,7 +227,7 @@ function AgentsTab({ isAdmin }: { isAdmin: boolean }) {
                 type="email"
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
                 required
                 autoFocus
               />
@@ -475,7 +475,7 @@ function TagsTab({ isAdmin }: { isAdmin: boolean }) {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
                 placeholder="e.g. Bug, Feature, Billing..."
                 required
                 autoFocus
@@ -549,14 +549,14 @@ function TagsTab({ isAdmin }: { isAdmin: boolean }) {
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleEdit(tag)}
-                      className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                      className="rounded-sm px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
                     >
                       Edit
                     </button>
                     <button
                       onClick={() => handleDelete(tag)}
                       disabled={deleteTag.isPending}
-                      className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 hover:text-red-700"
+                      className="rounded-sm px-2 py-1 text-xs text-red-500 hover:bg-red-50 hover:text-red-700"
                     >
                       Delete
                     </button>
@@ -709,7 +709,7 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
                 type="text"
                 value={name}
                 onChange={(e) => handleNameChange(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
                 placeholder="e.g. Critical, Blocker..."
                 required
                 autoFocus
@@ -723,7 +723,7 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
                 type="text"
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:border-primary-500 focus:outline-hidden"
                 placeholder="e.g. critical"
                 required
               />
@@ -736,7 +736,7 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
                 type="number"
                 value={position}
                 onChange={(e) => setPosition(parseInt(e.target.value, 10) || 0)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
                 min={0}
               />
             </div>
@@ -746,7 +746,7 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
                   type="checkbox"
                   checked={isDefault}
                   onChange={(e) => setIsDefault(e.target.checked)}
-                  className="rounded border-gray-300 text-primary-500 focus:ring-primary-500"
+                  className="rounded-sm border-gray-300 text-primary-500 focus:ring-primary-500"
                 />
                 Default priority
               </label>
@@ -778,7 +778,7 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
                 type="color"
                 value={color}
                 onChange={(e) => setColor(e.target.value)}
-                className="ml-2 h-8 w-8 cursor-pointer rounded border border-gray-300"
+                className="ml-2 h-8 w-8 cursor-pointer rounded-sm border border-gray-300"
               />
               <span className="ml-1 font-mono text-xs text-gray-400">{color}</span>
             </div>
@@ -820,7 +820,7 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
                   {p.position}
                 </span>
                 <span
-                  className="h-4 w-4 rounded-full flex-shrink-0"
+                  className="h-4 w-4 rounded-full shrink-0"
                   style={{ backgroundColor: p.color }}
                 />
                 <span className="flex-1 text-sm font-medium text-gray-900">
@@ -841,14 +841,14 @@ function PrioritiesTab({ isAdmin }: { isAdmin: boolean }) {
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleEdit(p)}
-                      className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                      className="rounded-sm px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
                     >
                       Edit
                     </button>
                     <button
                       onClick={() => handleDelete(p)}
                       disabled={deletePriority.isPending}
-                      className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 hover:text-red-700"
+                      className="rounded-sm px-2 py-1 text-xs text-red-500 hover:bg-red-50 hover:text-red-700"
                     >
                       Delete
                     </button>
@@ -983,7 +983,7 @@ function CannedResponsesTab({ currentUser }: { currentUser: User | undefined }) 
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search…"
-            className="w-48 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+            className="w-48 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"
           />
           <button
             onClick={() => {
@@ -998,7 +998,7 @@ function CannedResponsesTab({ currentUser }: { currentUser: User | undefined }) 
       </div>
 
       <p className="mb-4 text-xs text-gray-500">
-        Use <code className="rounded bg-gray-100 px-1">{"{{variable}}"}</code>{" "}
+        Use <code className="rounded-sm bg-gray-100 px-1">{"{{variable}}"}</code>{" "}
         placeholders in the body — they will be expanded when the template is
         inserted into a reply. Shared templates are visible to all agents.
       </p>
@@ -1017,7 +1017,7 @@ function CannedResponsesTab({ currentUser }: { currentUser: User | undefined }) 
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
                 placeholder="e.g. Greeting, Resolved, Need more info..."
                 required
                 autoFocus
@@ -1037,7 +1037,7 @@ function CannedResponsesTab({ currentUser }: { currentUser: User | undefined }) 
                       .replace(/[^a-z0-9_-]/g, ""),
                   )
                 }
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
                 placeholder="e.g. hello"
               />
             </div>
@@ -1052,7 +1052,7 @@ function CannedResponsesTab({ currentUser }: { currentUser: User | undefined }) 
               value={body}
               onChange={(e) => setBody(e.target.value)}
               rows={6}
-              className="w-full resize-y rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:outline-none"
+              className="w-full resize-y rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:outline-hidden"
               placeholder={"Hi {{requester_name}}, thanks for reaching out!"}
               required
             />
@@ -1077,7 +1077,7 @@ function CannedResponsesTab({ currentUser }: { currentUser: User | undefined }) 
                 type="checkbox"
                 checked={isShared}
                 onChange={(e) => setIsShared(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
+                className="h-4 w-4 rounded-sm border-gray-300"
               />
               Share with the whole organization
             </label>
@@ -1125,7 +1125,7 @@ function CannedResponsesTab({ currentUser }: { currentUser: User | undefined }) 
                         {cr.name}
                       </span>
                       {cr.shortcut && (
-                        <span className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-600">
+                        <span className="rounded-sm bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-600">
                           /{cr.shortcut}
                         </span>
                       )}
@@ -1152,14 +1152,14 @@ function CannedResponsesTab({ currentUser }: { currentUser: User | undefined }) 
                     <div className="flex shrink-0 gap-2">
                       <button
                         onClick={() => handleEdit(cr)}
-                        className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                        className="rounded-sm px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => handleDelete(cr)}
                         disabled={deleteResponse.isPending}
-                        className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 hover:text-red-700"
+                        className="rounded-sm px-2 py-1 text-xs text-red-500 hover:bg-red-50 hover:text-red-700"
                       >
                         Delete
                       </button>
@@ -1248,7 +1248,7 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
                 type="color"
                 value={widgetColor}
                 onChange={(e) => setWidgetColor(e.target.value)}
-                className="h-10 w-10 cursor-pointer rounded border border-gray-300"
+                className="h-10 w-10 cursor-pointer rounded-sm border border-gray-300"
                 disabled={!isAdmin}
               />
               <input
@@ -1326,7 +1326,7 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
               void navigator.clipboard.writeText(snippet);
               toast.success("Copied to clipboard!");
             }}
-            className="absolute right-2 top-2 rounded bg-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-600"
+            className="absolute right-2 top-2 rounded-sm bg-gray-700 px-2 py-1 text-xs text-gray-300 hover:bg-gray-600"
           >
             Copy
           </button>
@@ -1389,7 +1389,7 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
           </label>
           <p className="mb-2 text-xs text-gray-400">
             Used server-side to compute{" "}
-            <code className="rounded bg-gray-100 px-1">
+            <code className="rounded-sm bg-gray-100 px-1">
               HMAC-SHA256(secret, user_id)
             </code>{" "}
             for identity verification in the widget.
@@ -1703,7 +1703,7 @@ function SLAPolicyForm({
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
             placeholder="e.g. Standard urgent"
           />
         </div>
@@ -1715,7 +1715,7 @@ function SLAPolicyForm({
             value={priority}
             onChange={(e) => setPriority(e.target.value as SLAPriority)}
             disabled={availablePriorities.length === 0}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
           >
             {availablePriorities.map((p) => (
               <option key={p.value} value={p.value}>
@@ -1730,7 +1730,7 @@ function SLAPolicyForm({
               type="checkbox"
               checked={isActive}
               onChange={(e) => setIsActive(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              className="h-4 w-4 rounded-sm border-gray-300 text-primary-600 focus:ring-primary-500"
             />
             Active (applied to new tickets)
           </label>
@@ -1747,7 +1747,7 @@ function SLAPolicyForm({
             onChange={(e) =>
               setFirstResponseMinutes(parseInt(e.target.value, 10) || 0)
             }
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
           />
           <p className="mt-1 text-[10px] text-gray-400">
             = {formatMinutes(firstResponseMinutes)}
@@ -1765,7 +1765,7 @@ function SLAPolicyForm({
             onChange={(e) =>
               setResolutionMinutes(parseInt(e.target.value, 10) || 0)
             }
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
           />
           <p className="mt-1 text-[10px] text-gray-400">
             = {formatMinutes(resolutionMinutes)}

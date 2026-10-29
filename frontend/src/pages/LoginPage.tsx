@@ -7,7 +7,7 @@
  */
 
 import { useState, useRef, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import toast from "react-hot-toast";
 import { requestOTP, verifyOTP } from "@/api/auth";
 import { useAuthStore } from "@/store/authStore";
@@ -94,7 +94,7 @@ export function LoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="agent@company.com"
                 autoFocus
               />
@@ -139,7 +139,7 @@ export function LoginPage() {
                 onChange={(e) =>
                   setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
                 }
-                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-center text-2xl font-mono tracking-[0.5em] focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-center text-2xl font-mono tracking-[0.5em] focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="------"
               />
               <p className="mt-2 text-xs text-gray-400">

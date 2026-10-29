@@ -68,7 +68,6 @@ const debug = (...args: unknown[]): void => {
     typeof window !== "undefined" &&
     window.localStorage?.getItem("__WS_DEBUG__")
   ) {
-    // eslint-disable-next-line no-console
     console.debug("[WS]", ...args);
   }
 };

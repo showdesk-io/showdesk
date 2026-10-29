@@ -102,7 +102,7 @@ export function CannedResponsePicker({
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKey}
           placeholder="Search templates…"
-          className="w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+          className="w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"
         />
       </div>
       <div className="max-h-72 overflow-y-auto">
@@ -129,7 +129,7 @@ export function CannedResponsePicker({
                   {cr.name}
                 </span>
                 {cr.shortcut && (
-                  <span className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-600">
+                  <span className="rounded-sm bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-600">
                     /{cr.shortcut}
                   </span>
                 )}
