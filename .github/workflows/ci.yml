@@ -98,7 +98,8 @@ jobs:
           python -m pytest -v --tb=short
 
   # ---------------------------------------------------------------------------
-  # Frontend: lint + build
+  # Frontend: lint + type check + test + build
+  # (job id / name kept stable so existing required checks keep matching)
   # ---------------------------------------------------------------------------
   frontend-lint:
     name: Frontend Lint & Build
@@ -121,10 +122,20 @@ jobs:
           cd frontend
           npm install
 
+      - name: Lint
+        run: |
+          cd frontend
+          npm run lint
+
       - name: Type check
         run: |
           cd frontend
           npx tsc --noEmit
+
+      - name: Test
+        run: |
+          cd frontend
+          npm test
 
       - name: Build
         run: |
