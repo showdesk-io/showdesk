@@ -31,9 +31,8 @@ import {
   signupRequestJoin,
   signupRequestOTP,
   signupVerifyOTP,
-  type CheckDomainResponse,
-  type CheckSlugResponse,
 } from "@/api/signup";
+import { useDebouncedCheck } from "@/hooks/useDebouncedCheck";
 import { useAuthStore } from "@/store/authStore";
 
 type Step = "email" | "otp" | "join_confirm" | "join_done" | "wizard";
@@ -58,15 +57,11 @@ export function SignupPage() {
   const [fullName, setFullName] = useState("");
   const [code, setCode] = useState("");
 
-  const [domainResult, setDomainResult] = useState<CheckDomainResponse | null>(
-    null,
-  );
   const [matchedOrgName, setMatchedOrgName] = useState("");
 
   const [orgName, setOrgName] = useState("");
   const [orgSlug, setOrgSlug] = useState("");
   const [orgSlugDirty, setOrgSlugDirty] = useState(false);
-  const [slugResult, setSlugResult] = useState<CheckSlugResponse | null>(null);
   // Email domain auto-derived by the backend from the verified email. Empty
   // string means a public webmail provider (gmail, etc.) — no auto-routing.
   const [signupDomain, setSignupDomain] = useState("");
@@ -76,16 +71,15 @@ export function SignupPage() {
   const [claimEmailDomain, setClaimEmailDomain] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
-  const [resumeChecked, setResumeChecked] = useState(false);
+  // Only an already-authenticated visitor needs to wait for the resume
+  // check; an anonymous one can see the email step right away.
+  const [resumeChecked, setResumeChecked] = useState(() => !isAuthenticated);
   const codeInputRef = useRef<HTMLInputElement>(null);
 
   // ─── Resume flow on mount ──────────────────────────────────────────────
   // If an authenticated user lands here, ask the backend where they are.
   useEffect(() => {
-    if (!isAuthenticated) {
-      setResumeChecked(true);
-      return;
-    }
+    if (!isAuthenticated) return;
     fetchSignupState()
       .then((data) => {
         setEmail(data.user.email);
@@ -107,38 +101,24 @@ export function SignupPage() {
       .finally(() => setResumeChecked(true));
   }, [isAuthenticated, navigate]);
 
-  // ─── Auto-derive slug from org name ────────────────────────────────────
-  useEffect(() => {
-    if (!orgSlugDirty) setOrgSlug(suggestSlug(orgName));
-  }, [orgName, orgSlugDirty]);
+  // The org slug is auto-derived from the org name in the name input's
+  // change handler (until the user edits the slug by hand).
 
   // ─── Live domain check (email step only) ───────────────────────────────
-  useEffect(() => {
-    if (step !== "email" || !email.includes("@")) {
-      setDomainResult(null);
-      return;
-    }
-    const handle = window.setTimeout(() => {
-      checkDomain(email)
-        .then(setDomainResult)
-        .catch(() => setDomainResult(null));
-    }, 400);
-    return () => window.clearTimeout(handle);
-  }, [email, step]);
+  const domainResult = useDebouncedCheck(
+    email,
+    step === "email" && email.includes("@"),
+    400,
+    checkDomain,
+  );
 
   // ─── Live slug check (wizard step only) ────────────────────────────────
-  useEffect(() => {
-    if (step !== "wizard" || !orgSlug) {
-      setSlugResult(null);
-      return;
-    }
-    const handle = window.setTimeout(() => {
-      checkSlug(orgSlug)
-        .then(setSlugResult)
-        .catch(() => setSlugResult(null));
-    }, 300);
-    return () => window.clearTimeout(handle);
-  }, [orgSlug, step]);
+  const slugResult = useDebouncedCheck(
+    orgSlug,
+    step === "wizard" && !!orgSlug,
+    300,
+    checkSlug,
+  );
 
   // ─── Auto-focus OTP input ──────────────────────────────────────────────
   useEffect(() => {
@@ -492,7 +472,11 @@ export function SignupPage() {
                 type="text"
                 required
                 value={orgName}
-                onChange={(e) => setOrgName(e.target.value)}
+                onChange={(e) => {
+                  setOrgName(e.target.value);
+                  // Auto-derive the slug until the user edits it by hand.
+                  if (!orgSlugDirty) setOrgSlug(suggestSlug(e.target.value));
+                }}
                 className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="Acme Inc"
                 autoFocus

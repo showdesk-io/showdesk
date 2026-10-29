@@ -23,6 +23,24 @@ export function CannedResponsePicker({
   onSelect,
   onClose,
 }: Props) {
+  if (!open) return null;
+  // Remount the panel whenever the seed query changes so its local state
+  // (search text, highlighted row) starts fresh — same as reopening it.
+  return (
+    <PickerPanel
+      key={initialQuery}
+      initialQuery={initialQuery}
+      onSelect={onSelect}
+      onClose={onClose}
+    />
+  );
+}
+
+function PickerPanel({
+  initialQuery,
+  onSelect,
+  onClose,
+}: Omit<Props, "open" | "initialQuery"> & { initialQuery: string }) {
   const { data: responses } = useCannedResponses();
   const [query, setQuery] = useState(initialQuery);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -30,12 +48,9 @@ export function CannedResponsePicker({
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (open) {
-      setQuery(initialQuery);
-      setActiveIdx(0);
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
-  }, [open, initialQuery]);
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   const filtered = useMemo(() => {
     const list = responses ?? [];
@@ -53,11 +68,6 @@ export function CannedResponsePicker({
   }, [responses, query]);
 
   useEffect(() => {
-    setActiveIdx(0);
-  }, [query]);
-
-  useEffect(() => {
-    if (!open) return;
     const handle = (e: MouseEvent) => {
       if (
         containerRef.current &&
@@ -68,9 +78,7 @@ export function CannedResponsePicker({
     };
     document.addEventListener("mousedown", handle);
     return () => document.removeEventListener("mousedown", handle);
-  }, [open, onClose]);
-
-  if (!open) return null;
+  }, [onClose]);
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
@@ -99,7 +107,10 @@ export function CannedResponsePicker({
           ref={inputRef}
           type="text"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setActiveIdx(0);
+          }}
           onKeyDown={handleKey}
           placeholder="Search templates…"
           className="w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"

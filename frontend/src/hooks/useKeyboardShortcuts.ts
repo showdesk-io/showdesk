@@ -17,7 +17,7 @@
  * Pass ``enabled: false`` to opt a page out without unmounting.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useEffectEvent } from "react";
 
 export type ShortcutHandler = (e: KeyboardEvent) => void;
 export type ShortcutMap = Record<string, ShortcutHandler>;
@@ -43,23 +43,22 @@ export function useKeyboardShortcuts(
   options: ShortcutOptions = {},
 ): void {
   const { enabled = true } = options;
-  // Stash the latest map in a ref so handlers don't need to re-bind on
-  // every render (parents that pass closures would otherwise thrash).
-  const mapRef = useRef<ShortcutMap>(shortcuts);
-  mapRef.current = shortcuts;
+  // ``useEffectEvent`` always sees the latest ``shortcuts`` without being an
+  // effect dependency, so the listener doesn't re-bind on every render
+  // (parents that pass closures would otherwise thrash).
+  const onKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (isTextInput(e.target)) return;
+    const fn = shortcuts[e.key];
+    if (fn) {
+      e.preventDefault();
+      fn(e);
+    }
+  });
 
   useEffect(() => {
     if (!enabled) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isTextInput(e.target)) return;
-      const key = e.key;
-      const fn = mapRef.current[key];
-      if (fn) {
-        e.preventDefault();
-        fn(e);
-      }
-    };
+    const handler = (e: KeyboardEvent) => onKeyDown(e);
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [enabled]);
