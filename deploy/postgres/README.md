@@ -74,5 +74,24 @@ dc logs -f postgres-backup
    (`dc up -d postgres-backup` does it on start) since recovery opens a new
    timeline.
 
+## Rehearsing
+
 Rehearse a restore on a scratch host periodically -- an untested backup is
-not a backup.
+not a backup. `pitr-rehearsal.sh` restores into a throwaway container and
+prints row counts:
+
+```bash
+./pitr-rehearsal.sh walg.env '2026-01-31 14:05:00+00'
+```
+
+Since PostgreSQL 13, recovery to a time target fails with *"recovery ended
+before configured recovery target was reached"* if no archived COMMIT
+exists after the target: recovery cannot prove it reached that point. On a
+quiet database, create one before testing -- in **separate** transactions,
+otherwise the switch happens before the commit is written:
+
+```bash
+psql -c "select now()"                       # use this as the target
+psql -c "create temp table pitr_marker()"    # a committed transaction
+psql -c "select pg_switch_wal()"             # close and archive the segment
+```
