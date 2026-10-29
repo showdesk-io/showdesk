@@ -21,6 +21,20 @@ HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
 up() {
   IMAGE_TAG="$1" "${COMPOSE[@]}" pull --quiet
   IMAGE_TAG="$1" "${COMPOSE[@]}" up -d --remove-orphans
+  recreate_on_config_change
+}
+
+# Compose does not recreate a container when only the content of an inline
+# `configs:` entry changes (e.g. the Caddyfile), so track its hash ourselves.
+recreate_on_config_change() {
+  local current previous=""
+  current="$("${COMPOSE[@]}" config | sed -n '/^configs:/,/^[a-z]/p' | sha256sum | cut -d' ' -f1)"
+  [[ -f .configs.sha256 ]] && previous="$(cat .configs.sha256)"
+  if [[ "$current" != "$previous" ]]; then
+    echo "==> Inline configs changed, recreating caddy"
+    "${COMPOSE[@]}" up -d --no-deps --force-recreate caddy
+    echo "$current" >.configs.sha256
+  fi
 }
 
 wait_healthy() {
