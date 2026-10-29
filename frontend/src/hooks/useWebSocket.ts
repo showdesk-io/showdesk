@@ -186,100 +186,102 @@ export function useWebSocket(): WebSocketStatus {
     }
   }, []);
 
-  const connect = useCallback(() => {
-    if (!accessToken || !isAuthenticated) return;
+  useEffect(() => {
+    // Declared inside the effect so the reconnect timer can call it
+    // recursively and it always closes over this run's token / org.
+    function connect(): void {
+      if (!accessToken || !isAuthenticated) return;
 
-    // Tear down any existing socket. Tag it so its onclose knows it was
-    // retired by us and does not schedule a reconnect — scoped to the socket
-    // object so a stale onclose from a previous tear-down can't cancel the
-    // heartbeat of the new socket.
-    const prev = wsRef.current as (WebSocket & { _retired?: boolean }) | null;
-    if (prev) {
-      retire(prev);
-      wsRef.current = null;
-    }
-    clearHeartbeat();
+      // Tear down any existing socket. Tag it so its onclose knows it was
+      // retired by us and does not schedule a reconnect — scoped to the socket
+      // object so a stale onclose from a previous tear-down can't cancel the
+      // heartbeat of the new socket.
+      const prev = wsRef.current as (WebSocket & { _retired?: boolean }) | null;
+      if (prev) {
+        retire(prev);
+        wsRef.current = null;
+      }
+      clearHeartbeat();
 
-    const url = buildWsUrl(accessToken, activeOrgId);
-    setStatus("connecting");
-    const ws = new WebSocket(url) as WebSocket & { _retired?: boolean };
-    wsRef.current = ws;
+      const url = buildWsUrl(accessToken, activeOrgId);
+      setStatus("connecting");
+      const ws = new WebSocket(url) as WebSocket & { _retired?: boolean };
+      wsRef.current = ws;
 
-    ws.onopen = () => {
-      debug("open");
-      setStatus("open");
-      reconnectAttemptsRef.current = 0;
+      ws.onopen = () => {
+        debug("open");
+        setStatus("open");
+        reconnectAttemptsRef.current = 0;
 
-      heartbeatIntervalRef.current = setInterval(() => {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        try {
-          ws.send(JSON.stringify({ type: "ping" }));
-          debug("ping sent");
-        } catch {
-          return;
-        }
+        heartbeatIntervalRef.current = setInterval(() => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          try {
+            ws.send(JSON.stringify({ type: "ping" }));
+            debug("ping sent");
+          } catch {
+            return;
+          }
 
+          if (heartbeatTimeoutRef.current) {
+            clearTimeout(heartbeatTimeoutRef.current);
+          }
+          heartbeatTimeoutRef.current = setTimeout(() => {
+            if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
+              debug("heartbeat timeout — closing");
+              ws.close(4000, "Heartbeat timeout");
+            }
+          }, HEARTBEAT_TIMEOUT_MS);
+        }, HEARTBEAT_INTERVAL_MS);
+      };
+
+      ws.onmessage = (event) => {
         if (heartbeatTimeoutRef.current) {
           clearTimeout(heartbeatTimeoutRef.current);
+          heartbeatTimeoutRef.current = undefined;
         }
-        heartbeatTimeoutRef.current = setTimeout(() => {
-          if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
-            debug("heartbeat timeout — closing");
-            ws.close(4000, "Heartbeat timeout");
-          }
-        }, HEARTBEAT_TIMEOUT_MS);
-      }, HEARTBEAT_INTERVAL_MS);
-    };
 
-    ws.onmessage = (event) => {
-      if (heartbeatTimeoutRef.current) {
-        clearTimeout(heartbeatTimeoutRef.current);
-        heartbeatTimeoutRef.current = undefined;
-      }
+        try {
+          const data = JSON.parse(event.data) as WebSocketEvent;
+          debug("recv", data);
+          handleEvent(data);
+        } catch {
+          // Ignore malformed messages
+        }
+      };
 
-      try {
-        const data = JSON.parse(event.data) as WebSocketEvent;
-        debug("recv", data);
-        handleEvent(data);
-      } catch {
-        // Ignore malformed messages
-      }
-    };
+      ws.onclose = (event) => {
+        debug("close", { code: event.code, reason: event.reason, retired: ws._retired });
+        // If this socket was retired (replaced by a newer one, or closed by
+        // the effect cleanup), do not touch shared state or reconnect.
+        if (ws._retired) return;
 
-    ws.onclose = (event) => {
-      debug("close", { code: event.code, reason: event.reason, retired: ws._retired });
-      // If this socket was retired (replaced by a newer one, or closed by
-      // the effect cleanup), do not touch shared state or reconnect.
-      if (ws._retired) return;
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+          clearHeartbeat();
+          setStatus("closed");
+        }
 
-      if (wsRef.current === ws) {
-        wsRef.current = null;
-        clearHeartbeat();
-        setStatus("closed");
-      }
+        if (!useAuthStore.getState().isAuthenticated) return;
 
-      if (!useAuthStore.getState().isAuthenticated) return;
+        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(
+            BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttemptsRef.current),
+            MAX_RECONNECT_DELAY,
+          );
+          reconnectAttemptsRef.current += 1;
+          debug("reconnecting in", delay, "ms");
 
-      if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
-        const delay = Math.min(
-          BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttemptsRef.current),
-          MAX_RECONNECT_DELAY,
-        );
-        reconnectAttemptsRef.current += 1;
-        debug("reconnecting in", delay, "ms");
+          reconnectTimeoutRef.current = setTimeout(() => {
+            connect();
+          }, delay);
+        }
+      };
 
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connect();
-        }, delay);
-      }
-    };
+      ws.onerror = () => {
+        // onclose will handle reconnection
+      };
+    }
 
-    ws.onerror = () => {
-      // onclose will handle reconnection
-    };
-  }, [accessToken, isAuthenticated, activeOrgId, handleEvent, clearHeartbeat]);
-
-  useEffect(() => {
     if (isAuthenticated && accessToken) {
       connect();
     }
@@ -315,7 +317,7 @@ export function useWebSocket(): WebSocketStatus {
         wsRef.current = null;
       }
     };
-  }, [isAuthenticated, accessToken, activeOrgId, connect, clearHeartbeat]);
+  }, [isAuthenticated, accessToken, activeOrgId, handleEvent, clearHeartbeat]);
 
   return status;
 }
