@@ -213,6 +213,9 @@ if cidr_source:
 # Managed by pyinfra (deploy/pyinfra/bootstrap.py). Restricts ports 80/443
 # published by Docker to an allow-list of source CIDRs.
 set -eu
+# Only filter traffic entering through the external interface: containers
+# must still reach the internet on 80/443 (package mirrors, APIs, S3).
+EXT_IF=$(ip route show default | awk '{{print $5; exit}}')
 CIDRS=$({cidr_source} | grep -v '^$')
 for ipt in iptables ip6tables; do
   $ipt -N DOCKER-USER 2>/dev/null || true
@@ -223,9 +226,9 @@ for ipt in iptables ip6tables; do
       *:*) [ "$ipt" = ip6tables ] || continue ;;
       *) [ "$ipt" = iptables ] || continue ;;
     esac
-    $ipt -A DOCKER-USER -p tcp -m multiport --dports 80,443 -s "$cidr" -j RETURN
+    $ipt -A DOCKER-USER -i "$EXT_IF" -p tcp -m multiport --dports 80,443 -s "$cidr" -j RETURN
   done
-  $ipt -A DOCKER-USER -p tcp -m multiport --dports 80,443 -j DROP
+  $ipt -A DOCKER-USER -i "$EXT_IF" -p tcp -m multiport --dports 80,443 -j DROP
   $ipt -A DOCKER-USER -j RETURN
 done
 """
