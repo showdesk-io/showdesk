@@ -8,7 +8,7 @@
  * so the user can resume mid-flow. If completed, the page redirects to /.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Navigate, Link, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
@@ -31,13 +31,12 @@ export function OnboardingPage() {
     queryFn: fetchOrganization,
   });
 
-  const [step, setStep] = useState(0);
-
-  useEffect(() => {
-    if (org && org.onboarding_step > 0 && step === 0) {
-      setStep(Math.min(org.onboarding_step, STEP_LABELS.length - 1));
-    }
-  }, [org, step]);
+  // Until the user advances, resume from the step persisted on the org;
+  // once they move on, their local choice wins.
+  const [chosenStep, setStep] = useState<number | null>(null);
+  const step =
+    chosenStep ??
+    (org ? Math.min(Math.max(org.onboarding_step, 0), STEP_LABELS.length - 1) : 0);
 
   const updateMutation = useMutation({
     mutationFn: (data: Partial<Organization>) => {
