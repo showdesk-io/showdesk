@@ -15,7 +15,6 @@ from tests.factories import (
     UserFactory,
 )
 
-
 URL = "/api/v1/platform/organizations/usage/"
 
 
@@ -72,6 +71,7 @@ class TestPlatformUsage:
 
     def test_period_month_filters_old_data(self, superuser_client):
         from datetime import timedelta
+
         from django.utils import timezone
 
         org = OrganizationFactory(slug="acme-month")

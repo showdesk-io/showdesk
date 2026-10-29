@@ -5,6 +5,7 @@ import hmac
 import secrets
 import uuid
 from datetime import timedelta
+from typing import ClassVar
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
@@ -307,7 +308,7 @@ class UserManager(BaseUserManager):
         self,
         email: str,
         password: str | None = None,
-        **extra_fields,  # noqa: ANN003
+        **extra_fields,
     ) -> "User":
         """Create and return a regular user."""
         if not email:
@@ -322,7 +323,7 @@ class UserManager(BaseUserManager):
         self,
         email: str,
         password: str | None = None,
-        **extra_fields,  # noqa: ANN003
+        **extra_fields,
     ) -> "User":
         """Create and return a superuser."""
         extra_fields.setdefault("is_staff", True)
@@ -376,7 +377,7 @@ class User(AbstractUser):
     objects = UserManager()
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = []
+    REQUIRED_FIELDS: ClassVar[list[str]] = []
 
     class Meta:
         ordering = ["email"]

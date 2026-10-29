@@ -16,7 +16,7 @@ class OrgImpersonationMiddleware(MiddlewareMixin):
     to pick up this override.
     """
 
-    def process_request(self, request):  # noqa: ANN001, ANN201
+    def process_request(self, request):
         request.impersonated_org = None
 
         org_id = request.META.get("HTTP_X_SHOWDESK_ORG")

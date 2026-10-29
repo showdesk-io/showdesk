@@ -8,13 +8,13 @@ fallback alongside the HTML body.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from email.utils import formataddr, parseaddr
-from typing import Any, Iterable
+from typing import Any
 
 from django.conf import settings
-from django.template.loader import render_to_string
-
 from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def _brand_for(organization: Any | None) -> dict[str, Any]:
     if org_logo and getattr(org_logo, "name", ""):
         try:
             brand["logo_url"] = org_logo.url
-        except Exception:  # noqa: BLE001 — keep default rather than crash
+        except Exception:
             logger.exception("org logo URL unavailable; using default")
 
     org_name = getattr(organization, "name", None)
@@ -112,7 +112,15 @@ def send_branded_email(
         reply_to=list(reply_to) if reply_to else None,
     )
     message.attach_alternative(html_body, "text/html")
-    return message.send(fail_silently=fail_silently)
+    if not fail_silently:
+        return message.send()
+    # Django 6.1 deprecated EmailMessage.send(fail_silently=...); swallow
+    # delivery errors here instead so callers keep the same contract.
+    try:
+        return message.send()
+    except Exception:
+        logger.exception("send_branded_email: failed to send %s", template)
+        return 0
 
 
 def _format_from_email(from_email: str | None, organization: Any | None) -> str:

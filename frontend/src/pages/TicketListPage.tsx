@@ -3,7 +3,7 @@
  */
 
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { TicketList, type ViewMode } from "@/components/tickets/TicketList";
@@ -335,12 +335,12 @@ export function TicketListPage() {
             placeholder="Search tickets..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-64 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            className="w-64 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
           />
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"
           >
             {statusOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -351,7 +351,7 @@ export function TicketListPage() {
           <select
             value={priorityFilter}
             onChange={(e) => setPriorityFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"
           >
             {priorityOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -362,7 +362,7 @@ export function TicketListPage() {
           <select
             value={agentFilter}
             onChange={(e) => setAgentFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"
           >
             <option value="">All Agents</option>
             {agents?.map((agent) => (
@@ -376,7 +376,7 @@ export function TicketListPage() {
           <select
             value={teamFilter}
             onChange={(e) => setTeamFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"
           >
             <option value="">All Teams</option>
             {teams?.map((team) => (
@@ -389,7 +389,7 @@ export function TicketListPage() {
             <select
               value={tagFilter}
               onChange={(e) => setTagFilter(e.target.value)}
-              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"
             >
               <option value="">All Tags</option>
               {tags.map((tag) => (
@@ -555,7 +555,7 @@ function ShortcutHelpModal({ onClose }: { onClose: () => void }) {
                       {item.keys.map((k) => (
                         <kbd
                           key={k}
-                          className="rounded border border-gray-300 bg-gray-50 px-2 py-0.5 font-mono text-xs text-gray-700 shadow-sm"
+                          className="rounded-sm border border-gray-300 bg-gray-50 px-2 py-0.5 font-mono text-xs text-gray-700 shadow-xs"
                         >
                           {k}
                         </kbd>
@@ -646,7 +646,7 @@ function ViewChip({
         onClick={onSelect}
         className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-all ${
           isActive
-            ? "bg-primary-500 text-white shadow-sm"
+            ? "bg-primary-500 text-white shadow-xs"
             : "border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50"
         }`}
       >
@@ -697,14 +697,14 @@ function ViewChip({
           <div className="flex items-center justify-end gap-2">
             <button
               onClick={() => setShowDeleteConfirm(false)}
-              className="rounded px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-100"
+              className="rounded-sm px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-100"
             >
               Cancel
             </button>
             <button
               onClick={handleDelete}
               disabled={deleteMutation.isPending}
-              className="rounded bg-red-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50"
+              className="rounded-sm bg-red-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50"
             >
               {deleteMutation.isPending ? "Deleting..." : "Delete"}
             </button>
@@ -776,7 +776,7 @@ function SaveViewButton({ filters }: { filters: SavedViewFilters }) {
               if (e.key === "Enter") handleSave();
             }}
             placeholder="View name..."
-            className="mb-3 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            className="mb-3 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
             autoFocus
           />
           <label className="mb-3 flex cursor-pointer items-center gap-2 text-xs text-gray-600">
@@ -784,21 +784,21 @@ function SaveViewButton({ filters }: { filters: SavedViewFilters }) {
               type="checkbox"
               checked={isShared}
               onChange={(e) => setIsShared(e.target.checked)}
-              className="rounded border-gray-300 text-primary-500 focus:ring-primary-500"
+              className="rounded-sm border-gray-300 text-primary-500 focus:ring-primary-500"
             />
             Shared with team
           </label>
           <div className="flex items-center justify-end gap-2">
             <button
               onClick={() => setOpen(false)}
-              className="rounded px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100"
+              className="rounded-sm px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100"
             >
               Cancel
             </button>
             <button
               onClick={handleSave}
               disabled={!name.trim() || createMutation.isPending}
-              className="rounded bg-primary-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+              className="rounded-sm bg-primary-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-600 disabled:opacity-50"
             >
               {createMutation.isPending ? "Saving..." : "Save"}
             </button>
@@ -1110,7 +1110,7 @@ function CreateTicketModal({
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
               placeholder="Brief description of the issue"
               autoFocus
               required
@@ -1124,7 +1124,7 @@ function CreateTicketModal({
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              className="w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
               rows={3}
               placeholder="Detailed description..."
             />
@@ -1139,7 +1139,7 @@ function CreateTicketModal({
                 type="text"
                 value={requesterName}
                 onChange={(e) => setRequesterName(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="John Doe"
               />
             </div>
@@ -1151,7 +1151,7 @@ function CreateTicketModal({
                 type="email"
                 value={requesterEmail}
                 onChange={(e) => setRequesterEmail(e.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
                 placeholder="john@example.com"
               />
             </div>
@@ -1164,7 +1164,7 @@ function CreateTicketModal({
             <select
               value={priority}
               onChange={(e) => setPriority(e.target.value as TicketPriority)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
             >
               <option value="low">Low</option>
               <option value="medium">Medium</option>

@@ -417,7 +417,6 @@ async function handleScreenshotCapture(
 
     const track = stream.getVideoTracks()[0];
     if (!track) throw new Error("No video track");
-    // @ts-expect-error ImageCapture is not in all TS defs
     const imageCapture = new ImageCapture(track);
     const bitmap = await imageCapture.grabFrame();
     track.stop();

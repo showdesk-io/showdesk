@@ -21,7 +21,7 @@ class InternalWidgetIdentityView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):  # noqa: ANN001, ANN201
+    def get(self, request):
         try:
             org = Organization.objects.get(
                 slug=SHOWDESK_INTERNAL_ORG_SLUG,

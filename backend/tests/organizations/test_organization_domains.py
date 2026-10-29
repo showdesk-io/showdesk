@@ -19,8 +19,8 @@ from django.db import IntegrityError, transaction
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.organizations.models import OrganizationDomain, User
 from apps.organizations import services
+from apps.organizations.models import OrganizationDomain, User
 from tests.factories import AdminFactory, OrganizationFactory
 
 
@@ -28,14 +28,13 @@ from tests.factories import AdminFactory, OrganizationFactory
 class TestOrganizationDomainModel:
     def test_at_least_one_purpose_required(self, organization) -> None:
         """The CHECK constraint forbids rows with neither purpose set."""
-        with pytest.raises(IntegrityError):
-            with transaction.atomic():
-                OrganizationDomain.objects.create(
-                    organization=organization,
-                    domain="acme.com",
-                    is_branding=False,
-                    is_email_routing=False,
-                )
+        with pytest.raises(IntegrityError), transaction.atomic():
+            OrganizationDomain.objects.create(
+                organization=organization,
+                domain="acme.com",
+                is_branding=False,
+                is_email_routing=False,
+            )
 
     def test_unique_per_org(self, organization) -> None:
         OrganizationDomain.objects.create(
@@ -43,13 +42,12 @@ class TestOrganizationDomainModel:
             domain="acme.com",
             is_email_routing=True,
         )
-        with pytest.raises(IntegrityError):
-            with transaction.atomic():
-                OrganizationDomain.objects.create(
-                    organization=organization,
-                    domain="acme.com",
-                    is_branding=True,
-                )
+        with pytest.raises(IntegrityError), transaction.atomic():
+            OrganizationDomain.objects.create(
+                organization=organization,
+                domain="acme.com",
+                is_branding=True,
+            )
 
     def test_one_verified_per_domain_globally(self) -> None:
         """At most one verified row exists per domain across all orgs."""
@@ -62,15 +60,14 @@ class TestOrganizationDomainModel:
             status=OrganizationDomain.Status.VERIFIED,
             verification_method=OrganizationDomain.VerificationMethod.ADMIN_EMAIL,
         )
-        with pytest.raises(IntegrityError):
-            with transaction.atomic():
-                OrganizationDomain.objects.create(
-                    organization=org_b,
-                    domain="shared.com",
-                    is_email_routing=True,
-                    status=OrganizationDomain.Status.VERIFIED,
-                    verification_method=OrganizationDomain.VerificationMethod.DNS_TXT,
-                )
+        with pytest.raises(IntegrityError), transaction.atomic():
+            OrganizationDomain.objects.create(
+                organization=org_b,
+                domain="shared.com",
+                is_email_routing=True,
+                status=OrganizationDomain.Status.VERIFIED,
+                verification_method=OrganizationDomain.VerificationMethod.DNS_TXT,
+            )
 
     def test_pending_can_coexist_across_orgs(self) -> None:
         """Pending rows for the same domain can exist on multiple orgs —
@@ -578,6 +575,7 @@ class TestPendingPollerTask:
 
     def test_skips_rows_outside_poll_window(self, organization) -> None:
         from datetime import timedelta
+
         from django.utils import timezone
 
         from apps.organizations.tasks import recheck_dns_pending_domains

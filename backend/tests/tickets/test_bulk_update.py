@@ -11,7 +11,6 @@ from rest_framework import status
 from apps.tickets.models import Ticket
 from tests.factories import OrganizationFactory, TicketFactory, UserFactory
 
-
 URL = "/api/v1/tickets/bulk_update/"
 
 

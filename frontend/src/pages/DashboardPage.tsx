@@ -6,7 +6,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { fetchOrganization, fetchTicketStats } from "@/api/users";
 import { useTickets } from "@/hooks/useTickets";
 import { useCurrentUser } from "@/hooks/useAuth";
@@ -99,7 +99,7 @@ export function DashboardPage() {
             </div>
             <p className="mt-2 text-3xl font-bold text-gray-900">
               {statsLoading ? (
-                <span className="inline-block h-9 w-12 animate-pulse rounded bg-gray-200" />
+                <span className="inline-block h-9 w-12 animate-pulse rounded-sm bg-gray-200" />
               ) : (
                 stat.value
               )}

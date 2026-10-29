@@ -27,7 +27,7 @@ def get_user_from_token(token_str: str):
         user_id = token["user_id"]
         return User.objects.get(id=user_id)
     except Exception:
-        logger.debug("WebSocket JWT authentication failed.")
+        logger.debug("WebSocket JWT authentication failed.", exc_info=True)
         return AnonymousUser()
 
 

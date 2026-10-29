@@ -205,12 +205,12 @@ export function TicketDetail({
                   if (e.key === "Enter") saveTitle();
                   if (e.key === "Escape") { setTitleDraft(ticket.title); setEditingTitle(false); }
                 }}
-                className="flex-1 rounded border border-primary-300 px-2 py-0.5 text-lg font-semibold text-gray-900 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="flex-1 rounded-sm border border-primary-300 px-2 py-0.5 text-lg font-semibold text-gray-900 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
               />
             ) : (
               <h1
                 onClick={() => setEditingTitle(true)}
-                className="cursor-pointer rounded px-1 text-lg font-semibold text-gray-900 hover:bg-gray-100"
+                className="cursor-pointer rounded-sm px-1 text-lg font-semibold text-gray-900 hover:bg-gray-100"
               >
                 {ticket.title}
               </h1>
@@ -226,20 +226,20 @@ export function TicketDetail({
               onKeyDown={(e) => {
                 if (e.key === "Escape") { setDescDraft(ticket.description); setEditingDesc(false); }
               }}
-              className="mt-1 w-full resize-none rounded border border-primary-300 px-2 py-1 text-sm text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              className="mt-1 w-full resize-none rounded-sm border border-primary-300 px-2 py-1 text-sm text-gray-600 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
               rows={2}
             />
           ) : ticket.description ? (
             <p
               onClick={() => setEditingDesc(true)}
-              className="mt-1 cursor-pointer rounded px-1 text-sm text-gray-600 hover:bg-gray-100"
+              className="mt-1 cursor-pointer rounded-sm px-1 text-sm text-gray-600 hover:bg-gray-100"
             >
               {ticket.description}
             </p>
           ) : (
             <p
               onClick={() => setEditingDesc(true)}
-              className="mt-1 cursor-pointer rounded px-1 text-sm text-gray-400 hover:bg-gray-100"
+              className="mt-1 cursor-pointer rounded-sm px-1 text-sm text-gray-400 hover:bg-gray-100"
             >
               Add description...
             </p>
@@ -366,7 +366,7 @@ export function TicketDetail({
                   ? "Write an internal note..."
                   : "Write a reply, or type / to insert a template..."
               }
-              className="w-full resize-none rounded-lg border border-gray-300 px-4 py-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              className="w-full resize-none rounded-lg border border-gray-300 px-4 py-3 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
               rows={3}
             />
           </div>
@@ -516,7 +516,7 @@ function ChatBubble({
       {/* Avatar */}
       <div
         className={clsx(
-          "flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white",
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white",
           isAgent ? "bg-indigo-500" : "bg-emerald-500",
         )}
       >
@@ -531,7 +531,7 @@ function ChatBubble({
             {senderName}
           </span>
           {isInternal && (
-            <span className="flex items-center gap-0.5 rounded bg-yellow-200 px-1.5 py-0.5 text-[10px] font-medium text-yellow-800">
+            <span className="flex items-center gap-0.5 rounded-sm bg-yellow-200 px-1.5 py-0.5 text-[10px] font-medium text-yellow-800">
               <LockIcon /> Internal
             </span>
           )}
@@ -737,7 +737,7 @@ function RecordingThumb({
         <PlayIcon />
       </div>
       {video.duration_seconds != null && (
-        <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
+        <span className="absolute bottom-2 right-2 rounded-sm bg-black/70 px-1.5 py-0.5 text-xs text-white">
           {formatDuration(video.duration_seconds)}
         </span>
       )}
@@ -931,7 +931,7 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
       <select
         value={ticket.assigned_agent ?? ""}
         onChange={(e) => handleAssignAgent(e.target.value)}
-        className="mb-4 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+        className="mb-4 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"
       >
         <option value="">Unassigned</option>
         {agents?.map((agent: User) => (
@@ -947,7 +947,7 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
       <select
         value={ticket.assigned_team ?? ""}
         onChange={(e) => handleAssignTeam(e.target.value)}
-        className="mb-6 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none"
+        className="mb-6 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden"
       >
         <option value="">No team</option>
         {teams?.map((team: Team) => (
@@ -1012,7 +1012,7 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
               {ticket.context_metadata.console_errors.map((entry, i) => (
                 <div
                   key={i}
-                  className="rounded bg-gray-50 p-2 font-mono text-xs"
+                  className="rounded-sm bg-gray-50 p-2 font-mono text-xs"
                 >
                   <span
                     className={
@@ -1046,7 +1046,7 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
               {ticket.context_metadata.network_errors.map((entry, i) => (
                 <div
                   key={i}
-                  className="rounded bg-gray-50 p-2 font-mono text-xs"
+                  className="rounded-sm bg-gray-50 p-2 font-mono text-xs"
                 >
                   <span className="text-red-600">
                     {entry.status} {entry.method} {entry.url}
@@ -1210,7 +1210,7 @@ function TicketTagPicker({ ticket }: { ticket: Ticket }) {
           onKeyDown={handleKeyDown}
           placeholder="Add tag..."
           className={clsx(
-            "w-20 rounded border-none bg-transparent px-1 py-0.5 text-xs text-gray-600 placeholder-gray-300 focus:outline-none focus:placeholder-gray-400",
+            "w-20 rounded-sm border-none bg-transparent px-1 py-0.5 text-xs text-gray-600 placeholder-gray-300 focus:outline-hidden focus:placeholder-gray-400",
             !focused && "opacity-0 group-hover/tags:opacity-100",
           )}
         />
@@ -1218,7 +1218,7 @@ function TicketTagPicker({ ticket }: { ticket: Ticket }) {
 
       {/* Dropdown suggestions */}
       {focused && search.trim() && (
-        <div className="mt-1 max-h-36 overflow-auto rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div className="mt-1 max-h-36 overflow-auto rounded-lg border border-gray-200 bg-white shadow-xs">
           {filteredTags.map((tag) => (
             <button
               key={tag.id}
@@ -1301,7 +1301,7 @@ function IssueTypeBadge({ type }: { type: string }) {
 function PlayIcon() {
   return (
     <svg
-      className="h-10 w-10 text-white drop-shadow"
+      className="h-10 w-10 text-white drop-shadow-sm"
       fill="currentColor"
       viewBox="0 0 24 24"
     >
@@ -1313,7 +1313,7 @@ function PlayIcon() {
 function ExpandIcon({ className }: { className?: string }) {
   return (
     <svg
-      className={clsx("h-5 w-5 text-white drop-shadow", className)}
+      className={clsx("h-5 w-5 text-white drop-shadow-sm", className)}
       fill="none"
       viewBox="0 0 24 24"
       stroke="currentColor"

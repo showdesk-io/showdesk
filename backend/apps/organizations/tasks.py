@@ -45,7 +45,7 @@ def recheck_dns_pending_domains() -> int:
         try:
             if perform_dns_check(row):
                 promoted += 1
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception(
                 "recheck_dns_pending_domains: failed for %s/%s",
                 row.organization_id,

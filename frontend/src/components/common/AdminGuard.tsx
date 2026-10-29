@@ -2,7 +2,7 @@
  * Route guard that redirects non-superusers to the dashboard.
  */
 
-import { Navigate } from "react-router-dom";
+import { Navigate } from "react-router";
 import { useCurrentUser } from "@/hooks/useAuth";
 
 interface AdminGuardProps {

@@ -266,7 +266,7 @@ function PurposeToggle({
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="h-3.5 w-3.5 rounded border-gray-300 text-primary-500 focus:ring-primary-500"
+        className="h-3.5 w-3.5 rounded-sm border-gray-300 text-primary-500 focus:ring-primary-500"
       />
       <span>{label}</span>
     </label>
@@ -398,13 +398,13 @@ function CopyRow({ label, value }: { label: string; value: string }) {
       <span className="w-28 shrink-0 text-xs font-medium text-amber-900">
         {label}
       </span>
-      <code className="flex-1 overflow-x-auto rounded border border-amber-200 bg-white px-2 py-1 font-mono text-xs text-gray-800">
+      <code className="flex-1 overflow-x-auto rounded-sm border border-amber-200 bg-white px-2 py-1 font-mono text-xs text-gray-800">
         {value}
       </code>
       <button
         type="button"
         onClick={copy}
-        className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 text-xs hover:bg-amber-100"
+        className="shrink-0 rounded-sm border border-amber-300 bg-white px-2 py-1 text-xs hover:bg-amber-100"
       >
         {copied ? "Copied" : "Copy"}
       </button>
@@ -516,7 +516,7 @@ function AddDomainModal({
                   type="checkbox"
                   checked={isBranding}
                   onChange={(e) => setIsBranding(e.target.checked)}
-                  className="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500"
+                  className="h-4 w-4 rounded-sm border-gray-300 text-primary-500 focus:ring-primary-500"
                 />
                 Branding (display this domain publicly)
               </label>
@@ -525,7 +525,7 @@ function AddDomainModal({
                   type="checkbox"
                   checked={isRouting}
                   onChange={(e) => setIsRouting(e.target.checked)}
-                  className="h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500"
+                  className="h-4 w-4 rounded-sm border-gray-300 text-primary-500 focus:ring-primary-500"
                 />
                 Email routing (auto-route signups from @{domain || "this domain"})
               </label>

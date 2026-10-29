@@ -11,6 +11,7 @@ function createPlugins() {
       tsconfig: "./tsconfig.json",
       declaration: false,
       declarationDir: undefined,
+      sourceMap: !isProduction,
     }),
     isProduction && terser({
       format: {

@@ -10,8 +10,8 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.development")
 
 django_asgi_app = get_asgi_application()
 
-from apps.notifications.consumers import TicketConsumer, WidgetConsumer  # noqa: E402
-from apps.notifications.middleware import (  # noqa: E402
+from apps.notifications.consumers import TicketConsumer, WidgetConsumer
+from apps.notifications.middleware import (
     JWTAuthMiddleware,
     WidgetAuthMiddleware,
 )

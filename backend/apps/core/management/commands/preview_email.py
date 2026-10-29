@@ -18,8 +18,9 @@ render.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
 

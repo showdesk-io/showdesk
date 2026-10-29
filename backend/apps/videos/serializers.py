@@ -65,12 +65,14 @@ class VideoUploadSerializer(serializers.ModelSerializer):
     # Max 500 MB per video (configurable via settings)
     MAX_FILE_SIZE = 500 * 1024 * 1024
 
-    ALLOWED_MIME_TYPES = {
-        "video/webm",
-        "video/mp4",
-        "video/ogg",
-        "video/quicktime",
-    }
+    ALLOWED_MIME_TYPES = frozenset(
+        {
+            "video/webm",
+            "video/mp4",
+            "video/ogg",
+            "video/quicktime",
+        }
+    )
 
     class Meta:
         model = VideoRecording
@@ -83,7 +85,7 @@ class VideoUploadSerializer(serializers.ModelSerializer):
             "mime_type",
         ]
 
-    def validate_original_file(self, value):  # noqa: ANN001, ANN201
+    def validate_original_file(self, value):
         """Validate video file size and type."""
         from django.conf import settings as django_settings
 

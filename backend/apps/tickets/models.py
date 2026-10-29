@@ -49,7 +49,7 @@ class PriorityLevel(TimestampedModel):
         return f"{self.name} ({self.organization})"
 
     @classmethod
-    def create_defaults(cls, organization) -> None:  # noqa: ANN001
+    def create_defaults(cls, organization) -> None:
         """Create the four default priority levels for an organization."""
         defaults = [
             {"name": "Low", "slug": "low", "color": "#6B7280", "position": 0},

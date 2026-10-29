@@ -105,7 +105,7 @@ function OrganizationsPanel() {
               setSearch(e.target.value);
               setPage(1);
             }}
-            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
           />
           <svg
             className="absolute left-3 top-2.5 h-4 w-4 text-gray-400"
@@ -213,7 +213,7 @@ function OrganizationsPanel() {
                     <button
                       onClick={() => suspendMutation.mutate(org.id)}
                       className={clsx(
-                        "mr-2 rounded px-2 py-1 text-xs font-medium",
+                        "mr-2 rounded-sm px-2 py-1 text-xs font-medium",
                         org.is_active
                           ? "bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
                           : "bg-green-100 text-green-800 hover:bg-green-200",
@@ -231,7 +231,7 @@ function OrganizationsPanel() {
                           deleteMutation.mutate(org.id);
                         }
                       }}
-                      className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-200"
+                      className="rounded-sm bg-red-100 px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-200"
                     >
                       Delete
                     </button>
@@ -252,7 +252,7 @@ function OrganizationsPanel() {
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1}
-                className="rounded border border-gray-300 px-3 py-1 text-sm disabled:opacity-50"
+                className="rounded-sm border border-gray-300 px-3 py-1 text-sm disabled:opacity-50"
               >
                 Previous
               </button>
@@ -262,7 +262,7 @@ function OrganizationsPanel() {
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={page === totalPages}
-                className="rounded border border-gray-300 px-3 py-1 text-sm disabled:opacity-50"
+                className="rounded-sm border border-gray-300 px-3 py-1 text-sm disabled:opacity-50"
               >
                 Next
               </button>
@@ -336,7 +336,7 @@ function CreateOrganizationModal({ onClose }: { onClose: () => void }) {
               value={name}
               onChange={(e) => handleNameChange(e.target.value)}
               required
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
             />
           </div>
           <div>
@@ -349,7 +349,7 @@ function CreateOrganizationModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setSlug(e.target.value)}
               required
               pattern="[a-z0-9-]+"
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500"
             />
           </div>
           <div className="flex justify-end gap-3 pt-2">
@@ -413,7 +413,7 @@ function OrganizationDetailPanel({
           <h2 className="text-lg font-semibold text-gray-900">{org.name}</h2>
           <button
             onClick={onClose}
-            className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            className="rounded-sm p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -559,7 +559,7 @@ function PlanFeatureFlagsEditor({
           <select
             value={plan}
             onChange={(e) => setPlan(e.target.value as Plan)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-hidden"
           >
             {PLAN_OPTIONS.map((p) => (
               <option key={p.value} value={p.value}>
@@ -593,7 +593,7 @@ function PlanFeatureFlagsEditor({
                       Plan default:{" "}
                       {planDefaults.has(flag) ? "on" : "off"}
                       {overridden && (
-                        <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                        <span className="ml-2 rounded-sm bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
                           Overridden
                         </span>
                       )}
@@ -604,7 +604,7 @@ function PlanFeatureFlagsEditor({
                       type="button"
                       onClick={() => setOverride(flag, true)}
                       className={clsx(
-                        "rounded px-2 py-0.5 text-[10px] font-medium",
+                        "rounded-sm px-2 py-0.5 text-[10px] font-medium",
                         isOn && (overridden || planDefaults.has(flag))
                           ? "bg-green-100 text-green-700"
                           : "text-gray-400 hover:bg-gray-100",
@@ -616,7 +616,7 @@ function PlanFeatureFlagsEditor({
                       type="button"
                       onClick={() => setOverride(flag, false)}
                       className={clsx(
-                        "rounded px-2 py-0.5 text-[10px] font-medium",
+                        "rounded-sm px-2 py-0.5 text-[10px] font-medium",
                         !isOn
                           ? "bg-red-100 text-red-700"
                           : "text-gray-400 hover:bg-gray-100",
@@ -629,7 +629,7 @@ function PlanFeatureFlagsEditor({
                       onClick={() => setOverride(flag, null)}
                       disabled={!overridden}
                       title="Reset to plan default"
-                      className="rounded px-2 py-0.5 text-[10px] text-gray-400 hover:bg-gray-100 disabled:opacity-30"
+                      className="rounded-sm px-2 py-0.5 text-[10px] text-gray-400 hover:bg-gray-100 disabled:opacity-30"
                     >
                       ↺
                     </button>

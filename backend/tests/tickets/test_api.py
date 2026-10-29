@@ -5,8 +5,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from rest_framework import status
 
-from apps.tickets.models import Ticket
-from apps.tickets.models import PriorityLevel
+from apps.tickets.models import PriorityLevel, Ticket
 from tests.factories import (
     OrganizationFactory,
     PriorityLevelFactory,

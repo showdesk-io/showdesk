@@ -128,7 +128,7 @@ showdesk/
 
 | Component | Technology |
 |---|---|
-| Backend | Django 5 · Django REST Framework · Celery |
+| Backend | Django 6 · Django REST Framework · Celery |
 | Database | PostgreSQL 17 |
 | Cache / Broker | Redis 8 |
 | Frontend | React 19 · TypeScript · Tailwind CSS · Vite |

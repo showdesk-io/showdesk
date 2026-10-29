@@ -18,8 +18,7 @@ class Command(BaseCommand):
                 message="If you receive this, your email configuration is working.",
                 from_email=None,  # uses DEFAULT_FROM_EMAIL
                 recipient_list=[recipient],
-                fail_silently=False,
             )
             self.stdout.write(self.style.SUCCESS(f"Email sent (result={result})."))
         except Exception as e:
-            raise CommandError(f"Failed to send email: {e}")
+            raise CommandError(f"Failed to send email: {e}") from e

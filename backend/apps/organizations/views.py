@@ -1,5 +1,6 @@
 """Views for organization-related models."""
 
+import logging
 import uuid
 
 from django.conf import settings
@@ -34,6 +35,8 @@ from .serializers import (
     UserSerializer,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class OrganizationViewSet(viewsets.ModelViewSet):
     """ViewSet for managing organizations (tenant-scoped)."""
@@ -46,18 +49,18 @@ class OrganizationViewSet(viewsets.ModelViewSet):
     # cannot edit them; the API returns 403 the moment they try.
     BRANDING_WRITABLE_FIELDS = ("logo", "primary_color", "email_from_name")
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter organizations by the active organization."""
         org = get_active_org(self.request)
         if org:
             return Organization.objects.filter(id=org.id)
         return Organization.objects.none()
 
-    def update(self, request, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def update(self, request, *args, **kwargs):
         self._reject_branding_writes_without_flag(request)
         return super().update(request, *args, **kwargs)
 
-    def partial_update(self, request, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def partial_update(self, request, *args, **kwargs):
         self._reject_branding_writes_without_flag(request)
         return super().partial_update(request, *args, **kwargs)
 
@@ -76,7 +79,7 @@ class OrganizationViewSet(viewsets.ModelViewSet):
             )
 
     @action(detail=True, methods=["post"])
-    def regenerate_token(self, request, pk=None):  # noqa: ANN001, ANN201
+    def regenerate_token(self, request, pk=None):
         """Regenerate the organization's widget API token."""
         org = self.get_object()
         if request.user.role != User.Role.ADMIN and not request.user.is_superuser:
@@ -89,7 +92,7 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         return Response(OrganizationSerializer(org).data)
 
     @action(detail=True, methods=["post"])
-    def revoke_credentials(self, request, pk=None):  # noqa: ANN001, ANN201
+    def revoke_credentials(self, request, pk=None):
         """Revoke and regenerate both API token and widget secret.
 
         This is an irreversible action: the old token and secret stop
@@ -113,7 +116,7 @@ class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter users by the current user's organization.
 
         Superusers with an org see their org's users.
@@ -135,12 +138,12 @@ class UserViewSet(viewsets.ModelViewSet):
         return qs
 
     @action(detail=False, methods=["get"])
-    def me(self, request):  # noqa: ANN001, ANN201
+    def me(self, request):
         """Return the currently authenticated user."""
         return Response(UserSerializer(request.user).data)
 
     @action(detail=False, methods=["post"])
-    def invite(self, request):  # noqa: ANN001, ANN201
+    def invite(self, request):
         """Invite a new agent to the current organization.
 
         Creates the user with an unusable password. They log in via OTP.
@@ -200,13 +203,13 @@ class UserViewSet(viewsets.ModelViewSet):
                 },
                 fail_silently=True,
             )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:
+            logger.exception("Failed to send invitation email to %s", user.email)
 
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
-    def toggle_active(self, request, pk=None):  # noqa: ANN001, ANN201
+    def toggle_active(self, request, pk=None):
         """Activate or deactivate a user."""
         if request.user.role != User.Role.ADMIN and not request.user.is_superuser:
             return Response(
@@ -242,7 +245,7 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
     serializer_class = OrganizationDomainSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         org = get_active_org(self.request)
         if not org:
             return OrganizationDomain.objects.none()
@@ -257,7 +260,7 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
             )
         return None
 
-    def create(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
+    def create(self, request, *args, **kwargs):
         if (forbidden := self._check_admin()) is not None:
             return forbidden
 
@@ -277,7 +280,7 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
             return self._create_with_admin_email(request, org)
         return self._create_with_dns_challenge(request, org)
 
-    def _create_with_admin_email(self, request, org):  # noqa: ANN001, ANN201
+    def _create_with_admin_email(self, request, org):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
@@ -296,7 +299,7 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
             )
         return Response(self.get_serializer(row).data, status=status.HTTP_201_CREATED)
 
-    def _create_with_dns_challenge(self, request, org):  # noqa: ANN001, ANN201
+    def _create_with_dns_challenge(self, request, org):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         domain = serializer.validated_data["domain"]
@@ -313,27 +316,27 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
         )
         return Response(self.get_serializer(row).data, status=status.HTTP_201_CREATED)
 
-    def update(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
+    def update(self, request, *args, **kwargs):
         if (forbidden := self._check_admin()) is not None:
             return forbidden
         return super().update(request, *args, **kwargs)
 
-    def partial_update(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
+    def partial_update(self, request, *args, **kwargs):
         if (forbidden := self._check_admin()) is not None:
             return forbidden
         return super().partial_update(request, *args, **kwargs)
 
-    def destroy(self, request, *args, **kwargs):  # noqa: ANN001, ANN201
+    def destroy(self, request, *args, **kwargs):
         if (forbidden := self._check_admin()) is not None:
             return forbidden
         return super().destroy(request, *args, **kwargs)
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         org = get_active_org(self.request)
         serializer.save(organization=org)
 
     @action(detail=True, methods=["post"])
-    def verify(self, request, pk=None):  # noqa: ANN001, ANN201
+    def verify(self, request, pk=None):
         """Run a verification check on a pending row.
 
         For DNS rows, performs a synchronous TXT lookup and either
@@ -372,7 +375,7 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"], url_path="regenerate-token")
-    def regenerate_token(self, request, pk=None):  # noqa: ANN001, ANN201
+    def regenerate_token(self, request, pk=None):
         """Issue a fresh DNS verification token (invalidates the old one)."""
         if (forbidden := self._check_admin()) is not None:
             return forbidden
@@ -395,14 +398,14 @@ class TeamViewSet(viewsets.ModelViewSet):
     serializer_class = TeamSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         """Filter teams by the active organization."""
         org = get_active_org(self.request)
         if org:
             return Team.objects.filter(organization=org)
         return Team.objects.none()
 
-    def perform_create(self, serializer) -> None:  # noqa: ANN001
+    def perform_create(self, serializer) -> None:
         """Set organization on creation."""
         serializer.save(organization=get_active_org(self.request))
 
@@ -413,14 +416,14 @@ class PlatformOrganizationViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
     queryset = Organization.objects.all()
 
-    def get_serializer_class(self):  # noqa: ANN201
+    def get_serializer_class(self):
         if self.action == "list":
             return PlatformOrganizationListSerializer
         if self.action == "create":
             return PlatformOrganizationCreateSerializer
         return PlatformOrganizationDetailSerializer
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         qs = Organization.objects.annotate(
             _agent_count=Count(
                 "users",
@@ -438,7 +441,7 @@ class PlatformOrganizationViewSet(viewsets.ModelViewSet):
         return qs.order_by("-created_at")
 
     @action(detail=True, methods=["post"])
-    def suspend(self, request, pk=None):  # noqa: ANN001, ANN201
+    def suspend(self, request, pk=None):
         """Toggle the active status of an organization."""
         org = self.get_object()
         org.is_active = not org.is_active
@@ -446,7 +449,7 @@ class PlatformOrganizationViewSet(viewsets.ModelViewSet):
         return Response(PlatformOrganizationDetailSerializer(org).data)
 
     @action(detail=False, methods=["get"])
-    def usage(self, request):  # noqa: ANN001, ANN201
+    def usage(self, request):
         """Platform-wide and per-org resource usage snapshot.
 
         Always live-computed from the source tables (no dependency on
@@ -456,6 +459,7 @@ class PlatformOrganizationViewSet(viewsets.ModelViewSet):
         volume, since the platform admin is the only consumer.
         """
         from django.db.models import Sum
+
         from apps.tickets.models import Ticket, TicketAttachment
         from apps.videos.models import VideoRecording
 
@@ -556,7 +560,7 @@ class PlatformOrganizationViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["get"])
-    def stats(self, request, pk=None):  # noqa: ANN001, ANN201
+    def stats(self, request, pk=None):
         """Return usage statistics for an organization."""
         org = self.get_object()
         tickets = org.tickets.all()
@@ -614,7 +618,7 @@ class JoinRequestViewSet(
     serializer_class = OrgJoinRequestSerializer
     permission_classes = [IsAuthenticated]
 
-    def get_queryset(self):  # noqa: ANN201
+    def get_queryset(self):
         org = get_active_org(self.request)
         if not org:
             return OrgJoinRequest.objects.none()
@@ -624,7 +628,7 @@ class JoinRequestViewSet(
             qs = qs.filter(status=status_filter)
         return qs
 
-    def _check_admin(self, request) -> Response | None:  # noqa: ANN001
+    def _check_admin(self, request) -> Response | None:
         if request.user.role != User.Role.ADMIN and not request.user.is_superuser:
             return Response(
                 {"error": "Only admins can manage join requests."},
@@ -633,7 +637,7 @@ class JoinRequestViewSet(
         return None
 
     @action(detail=True, methods=["post"])
-    def approve(self, request, pk=None):  # noqa: ANN001, ANN201
+    def approve(self, request, pk=None):
         """Approve a pending join request: create the user and notify them."""
         if (forbidden := self._check_admin(request)) is not None:
             return forbidden
@@ -729,7 +733,7 @@ class JoinRequestViewSet(
         return Response(OrgJoinRequestSerializer(join_request).data)
 
     @action(detail=True, methods=["post"])
-    def reject(self, request, pk=None):  # noqa: ANN001, ANN201
+    def reject(self, request, pk=None):
         """Reject a pending join request and notify the requester."""
         if (forbidden := self._check_admin(request)) is not None:
             return forbidden

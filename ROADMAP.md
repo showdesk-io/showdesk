@@ -34,7 +34,7 @@ Everything needed before writing real feature code. **All done.**
 - [x] Celery + Redis config
 - [x] ASGI + Django Channels (WebSocket)
 - [x] API routing (`/api/v1/`), JWT auth, S3 storage
-- [x] Dockerfile (Python 3.13, FFmpeg)
+- [x] Dockerfile (Python 3.14, FFmpeg)
 
 ### Backend -- Django Apps & Models
 

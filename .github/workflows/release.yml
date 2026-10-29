@@ -70,7 +70,7 @@ jobs:
       DEPLOY_USER: ${{ vars.DEPLOY_USER || 'deploy' }}
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/showdesk' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve image tag
         id: tag

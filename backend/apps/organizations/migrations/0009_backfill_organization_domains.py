@@ -23,7 +23,6 @@ import re
 
 from django.db import migrations
 
-
 # Mirrors apps.organizations.models.PUBLIC_EMAIL_DOMAINS at the time of
 # this migration. Frozen here on purpose: data migrations must not import
 # live model code (its shape may diverge).
@@ -78,7 +77,7 @@ def _looks_like_domain(value: str) -> bool:
     return bool(_DOMAIN_RE.match(value))
 
 
-def backfill(apps, schema_editor):  # noqa: ANN001
+def backfill(apps, schema_editor):
     Organization = apps.get_model("organizations", "Organization")
     OrganizationDomain = apps.get_model("organizations", "OrganizationDomain")
 
@@ -149,7 +148,7 @@ def backfill(apps, schema_editor):  # noqa: ANN001
             OrganizationDomain.objects.create(organization=org, **row)
 
 
-def unbackfill(apps, schema_editor):  # noqa: ANN001
+def unbackfill(apps, schema_editor):
     OrganizationDomain = apps.get_model("organizations", "OrganizationDomain")
     OrganizationDomain.objects.all().delete()
 
