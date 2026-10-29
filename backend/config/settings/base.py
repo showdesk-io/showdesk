@@ -271,18 +271,33 @@ TELEMETRY_ENABLED = config("TELEMETRY_ENABLED", default=False, cast=bool)
 # =============================================================================
 # Email
 # =============================================================================
-EMAIL_BACKEND = config(
+# Django 6.1 replaced the EMAIL_BACKEND / EMAIL_HOST / ... settings with
+# MAILERS. The environment variables keep their historical names so existing
+# deployments (.env, docker-compose) need no change; they are mapped onto the
+# "default" mailer here. Lowercase names keep them out of the settings
+# namespace (Django refuses the deprecated EMAIL_* settings next to MAILERS).
+email_backend = config(
     "EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"
 )
-DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@showdesk.io")
+email_options: dict[str, object] = {}
+if email_backend == "django.core.mail.backends.smtp.EmailBackend":
+    email_options = {
+        "host": config("EMAIL_HOST", default="smtp.example.com"),
+        "port": config("EMAIL_PORT", default=587, cast=int),
+        "use_tls": config("EMAIL_USE_TLS", default=False, cast=bool),
+        "use_ssl": config("EMAIL_USE_SSL", default=True, cast=bool),
+        "username": config("EMAIL_HOST_USER", default=""),
+        "password": config("EMAIL_HOST_PASSWORD", default=""),
+    }
+MAILERS = {
+    "default": {
+        "BACKEND": email_backend,
+        "OPTIONS": email_options,
+    },
+}
+del email_backend, email_options
 
-# SMTP settings (when using django.core.mail.backends.smtp.EmailBackend)
-EMAIL_HOST = config("EMAIL_HOST", default="smtp.example.com")
-EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
-EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=False, cast=bool)
-EMAIL_USE_SSL = config("EMAIL_USE_SSL", default=True, cast=bool)
-EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
-EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@showdesk.io")
 
 # Anymail settings (when using anymail.backends.mailjet.EmailBackend)
 ANYMAIL = {

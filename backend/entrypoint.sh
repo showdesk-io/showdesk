@@ -24,7 +24,7 @@ case "$MODE" in
     server)
         echo "[entrypoint] Starting gunicorn..."
         exec gunicorn config.asgi:application \
-            -k uvicorn.workers.UvicornWorker \
+            -k uvicorn_worker.UvicornWorker \
             --bind 0.0.0.0:8000 \
             --workers "${GUNICORN_WORKERS:-4}" \
             --timeout 120 \

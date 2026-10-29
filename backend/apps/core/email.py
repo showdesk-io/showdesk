@@ -112,7 +112,15 @@ def send_branded_email(
         reply_to=list(reply_to) if reply_to else None,
     )
     message.attach_alternative(html_body, "text/html")
-    return message.send(fail_silently=fail_silently)
+    if not fail_silently:
+        return message.send()
+    # Django 6.1 deprecated EmailMessage.send(fail_silently=...); swallow
+    # delivery errors here instead so callers keep the same contract.
+    try:
+        return message.send()
+    except Exception:
+        logger.exception("send_branded_email: failed to send %s", template)
+        return 0
 
 
 def _format_from_email(from_email: str | None, organization: Any | None) -> str:
