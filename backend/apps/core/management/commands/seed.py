@@ -17,6 +17,7 @@ from django.utils import timezone
 from apps.organizations.models import (
     SHOWDESK_INTERNAL_ORG_SLUG,
     Organization,
+    OrganizationDomain,
     Team,
     User,
 )
@@ -91,7 +92,6 @@ class Command(BaseCommand):
             slug="acme-corp",
             defaults={
                 "name": "Acme Corp",
-                "domain": "acme.example.com",
                 "widget_color": "#6366F1",
                 "widget_position": "bottom-right",
                 "widget_greeting": "Hi there! How can we help you today?",
@@ -103,7 +103,22 @@ class Command(BaseCommand):
             self.stdout.write(f"  Created organization: {org.name}")
         else:
             self.stdout.write(f"  Organization already exists: {org.name}")
+        self._ensure_verified_domain(org, "acme.example.com")
         return org
+
+    def _ensure_verified_domain(self, org: Organization, domain: str) -> None:
+        """Attach a verified branding + email-routing domain to the org."""
+        OrganizationDomain.objects.get_or_create(
+            organization=org,
+            domain=domain,
+            defaults={
+                "is_branding": True,
+                "is_email_routing": True,
+                "status": OrganizationDomain.Status.VERIFIED,
+                "verification_method": OrganizationDomain.VerificationMethod.ADMIN_EMAIL,
+                "verified_at": timezone.now(),
+            },
+        )
 
     def _create_agents(self, org: Organization) -> list[User]:
         """Create demo agent accounts."""
@@ -529,7 +544,6 @@ class Command(BaseCommand):
             slug=SHOWDESK_INTERNAL_ORG_SLUG,
             defaults={
                 "name": "Showdesk Internal",
-                "domain": "showdesk.local",
                 "widget_color": "#6366F1",
                 "widget_position": "bottom-right",
                 "widget_greeting": "Found a bug? Got an idea? Tell us.",
@@ -539,6 +553,7 @@ class Command(BaseCommand):
         )
         if created:
             self.stdout.write(f"  Created internal organization: {org.name}")
+        self._ensure_verified_domain(org, "showdesk.local")
         return org
 
     def _create_internal_staff(self, internal_org: Organization) -> User:
