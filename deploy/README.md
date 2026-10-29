@@ -8,6 +8,7 @@ on any Docker host works too (see the main README).
 
 ```
 deploy/
+├── postgres/                   # PostgreSQL + WAL-G image (PITR backups to S3)
 ├── pyinfra/
 │   ├── bootstrap.py            # one-off host preparation (idempotent)
 │   └── inventory.example.py    # copy to inventory.py and adapt
@@ -16,14 +17,14 @@ deploy/
 
 ## Recommended topology
 
-Keep the application host **stateless**: PostgreSQL and S3 on managed
-services (or a separate, backed-up host), Redis local to the stack as a
-cache / Celery broker. Replacing the host then only means re-running the
-bootstrap and the deploy job.
+Keep media on S3 and either use a managed PostgreSQL, or run PostgreSQL
+on the host with continuous WAL archiving to S3 (point-in-time recovery).
+Redis stays local to the stack as a cache / Celery broker.
 
 | Need | `.env` / profile |
 |---|---|
 | Managed PostgreSQL + S3, local Redis | `COMPOSE_PROFILES=redis` |
+| Local PostgreSQL with PITR backups, S3 for media | `COMPOSE_PROFILES=redis,postgres,backup` (see [postgres/README.md](postgres/README.md)) |
 | Everything on the host | `COMPOSE_PROFILES=local` |
 | Portainer stack with auto-redeploy | `COMPOSE_PROFILES=portainer` (+ `PORTAINER_*`) |
 

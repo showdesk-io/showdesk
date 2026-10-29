@@ -1,0 +1,50 @@
+name: Postgres Image
+
+# PostgreSQL + WAL-G image used by the `postgres` / `backup` compose
+# profiles. Built separately from the app images so that app deploys never
+# restart the database: the `17` tag only moves when deploy/postgres changes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/postgres/**"
+      - ".github/workflows/postgres-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build & Push Postgres
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/showdesk-io/showdesk-postgres
+          tags: |
+            type=raw,value=17
+            type=sha,prefix=17-
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./deploy/postgres
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

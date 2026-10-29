@@ -8,6 +8,8 @@
 #   - (default)  Application services only. PostgreSQL, Redis, S3 are external.
 #   - local      Also include PostgreSQL, Redis, and MinIO containers.
 #   - redis      Only a local Redis (managed PostgreSQL + S3, local cache/broker).
+#   - postgres   Only a local PostgreSQL (WAL-G image, see deploy/postgres/).
+#   - backup     WAL-G base-backup sidecar for the local PostgreSQL (PITR).
 #   - portainer  Auto-update sidecar that redeploys a Portainer stack.
 #
 # Usage:
@@ -49,6 +51,18 @@ x-backend-env: &backend-env
   LIVEKIT_URL: ${LIVEKIT_URL:-}
   LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
   LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+
+# -- WAL-G (PITR backups of the local PostgreSQL, see deploy/postgres/) -------
+x-walg-env: &walg-env
+  WALG_S3_PREFIX: ${WALG_S3_PREFIX:-}
+  AWS_ACCESS_KEY_ID: ${WALG_S3_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${WALG_S3_SECRET_ACCESS_KEY:-}
+  AWS_ENDPOINT: ${WALG_S3_ENDPOINT:-}
+  AWS_REGION: ${WALG_S3_REGION:-us-east-1}
+  AWS_S3_FORCE_PATH_STYLE: ${WALG_S3_FORCE_PATH_STYLE:-true}
+  WALG_COMPRESSION_METHOD: ${WALG_COMPRESSION_METHOD:-brotli}
+  WALG_LIBSODIUM_KEY: ${WALG_LIBSODIUM_KEY:-}
+  WALG_LIBSODIUM_KEY_TRANSFORM: ${WALG_LIBSODIUM_KEY_TRANSFORM:-hex}
 
 configs:
   caddyfile:
@@ -247,20 +261,54 @@ services:
   # When using managed PostgreSQL, set DATABASE_URL.
   # ---------------------------------------------------------------------------
   postgres:
-    image: postgres:17-alpine
-    profiles: [local]
+    image: ghcr.io/showdesk-io/showdesk-postgres:${POSTGRES_IMAGE_TAG:-17}
+    profiles: [local, postgres]
+    command: >-
+      postgres
+      -c wal_level=replica
+      -c archive_mode=on
+      -c archive_command='walg-archive %p'
+      -c archive_timeout=${WALG_ARCHIVE_TIMEOUT:-60}
     environment:
+      <<: *walg-env
       POSTGRES_DB: ${POSTGRES_DB:-showdesk}
       POSTGRES_USER: ${POSTGRES_USER:-showdesk}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-showdesk}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+    shm_size: 256mb
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-showdesk}"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ---------------------------------------------------------------------------
+  # WAL-G base backups (profile: backup) -- requires WALG_S3_PREFIX.
+  # Together with continuous WAL archiving this enables point-in-time
+  # recovery; see deploy/postgres/README.md for the restore procedure.
+  # ---------------------------------------------------------------------------
+  postgres-backup:
+    image: ghcr.io/showdesk-io/showdesk-postgres:${POSTGRES_IMAGE_TAG:-17}
+    profiles: [backup]
+    user: postgres
+    entrypoint: ["walg-backup-loop"]
+    environment:
+      <<: *walg-env
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-showdesk}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-showdesk}
+      PGDATABASE: ${POSTGRES_DB:-showdesk}
+      PGDATA: /var/lib/postgresql/data
+      WALG_BACKUP_INTERVAL: ${WALG_BACKUP_INTERVAL:-86400}
+      WALG_RETAIN_FULL: ${WALG_RETAIN_FULL:-7}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
   # ---------------------------------------------------------------------------
   # MinIO S3 (profile: local)
