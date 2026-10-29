@@ -267,3 +267,20 @@ describe("SignupPage — email domain is opt-in", () => {
     expect(screen.queryByLabelText(/email domain/i)).not.toBeInTheDocument();
   });
 });
+
+
+describe("SignupPage — slug auto-derivation", () => {
+  it("derives the slug from the org name until the slug is edited by hand", async () => {
+    const user = await reachCreateOrgStep("jane@acme.com", "acme.com");
+    const slugInput = screen.getByLabelText(/url slug/i);
+    expect(slugInput).toHaveValue("acme");
+
+    await user.type(screen.getByLabelText(/organization name/i), " Café");
+    expect(slugInput).toHaveValue("acme-cafe");
+
+    await user.clear(slugInput);
+    await user.type(slugInput, "my-team");
+    await user.type(screen.getByLabelText(/organization name/i), " Ltd");
+    expect(slugInput).toHaveValue("my-team");
+  });
+});
