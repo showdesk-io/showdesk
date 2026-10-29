@@ -150,3 +150,6 @@ deploy/pyinfra/inventory.py
 
 # Production env dumps -- never commit
 ENV_FILE*
+
+# Claude Code worktrees
+.claude/worktrees/
