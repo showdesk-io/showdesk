@@ -4,7 +4,7 @@ from datetime import timedelta
 from unittest import mock
 
 import pytest
-from django.db import IntegrityError, connection
+from django.db import IntegrityError, OperationalError, connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
@@ -1060,7 +1060,9 @@ class TestSignedCompany:
             **kwargs,
         )
 
-    def test_full_upsert_of_an_existing_company(self, org):
+    def test_name_and_domain_of_an_existing_company_are_updated_but_not_traits(
+        self, org
+    ):
         CompanyAttributeDef.objects.create(
             organization=org, key="tier", label="Tier", type="string"
         )
@@ -1083,7 +1085,30 @@ class TestSignedCompany:
         existing.refresh_from_db()
         assert contact.company == existing
         assert (existing.name, existing.domain) == ("New", "new.io")
-        assert existing.attributes == {"tier": "silver", "keep": 1}
+        # The hash covers the id, name and domain: traits aren't signed.
+        assert existing.attributes == {"tier": "gold", "keep": 1}
+
+    def test_traits_apply_to_a_new_company(self, org):
+        CompanyAttributeDef.objects.create(
+            organization=org, key="tier", label="Tier", type="string"
+        )
+        contact = self._resolve(
+            org,
+            {"id": "c1", "name": "New", "traits": {"tier": "silver", "junk": 1}},
+        )
+        contact.company.refresh_from_db()
+        assert contact.company.attributes == {"tier": "silver"}
+
+    def test_traits_alone_write_nothing_on_an_existing_company(self, org):
+        CompanyAttributeDef.objects.create(
+            organization=org, key="tier", label="Tier", type="string"
+        )
+        existing = CompanyFactory(organization=org, external_id="c1", name="S")
+        updated_at = existing.updated_at
+        self._resolve(org, {"id": "c1", "name": "S", "traits": {"tier": "a"}})
+        existing.refresh_from_db()
+        assert existing.updated_at == updated_at
+        assert existing.attributes == {}
 
     def test_the_contact_is_moved(self, org):
         current = CompanyFactory(organization=org, external_id="current")
@@ -1092,14 +1117,14 @@ class TestSignedCompany:
         contact.refresh_from_db()
         assert contact.company.external_id == "new"
 
-    def test_stored_attributes_of_the_wrong_shape_are_replaced(self, org):
+    def test_stored_attributes_of_the_wrong_shape_are_left_alone(self, org):
         CompanyAttributeDef.objects.create(
             organization=org, key="tier", label="Tier", type="string"
         )
         existing = CompanyFactory(organization=org, external_id="c1", attributes=[1])
         self._resolve(org, {"id": "c1", "name": "S", "traits": {"tier": "a"}})
         existing.refresh_from_db()
-        assert existing.attributes == {"tier": "a"}
+        assert existing.attributes == [1]
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
@@ -1363,3 +1388,61 @@ class TestRaces:
         ):
             resolve_contact_for_widget_session(session)
         assert resolve.call_count == 2
+
+    @staticmethod
+    def _failing_session_writes(error=IntegrityError, times=1):
+        """Fail the session's first writes, as a commit-time conflict would."""
+        real = services._save_changes
+        failures = [error] * times
+
+        def save_changes(instance, changed):
+            if isinstance(instance, WidgetSession) and failures:
+                raise failures.pop()
+            real(instance, changed)
+
+        return mock.patch.object(services, "_save_changes", save_changes)
+
+    def test_retry_writes_the_link_of_the_failed_pass(self, org):
+        session = _session(org, external_user_id="u1", email="a@x.io")
+        with self._failing_session_writes():
+            contact = resolve_contact_for_widget_session(session, email_verified=True)
+        stored = WidgetSession.objects.get(pk=session.pk)
+        assert stored.contact == contact
+        assert stored.email_verified_at is not None
+        assert session.email_verified_at == stored.email_verified_at
+
+    def test_retry_writes_the_unlink_of_the_failed_pass(self, org):
+        anonymized = ContactFactory(
+            organization=org, external_id="u1", is_anonymized=True
+        )
+        session = _session(org, external_user_id="u1", contact=anonymized)
+        real_save = session.save
+        failures = [IntegrityError]
+
+        def save(*args, **kwargs):
+            if failures:
+                raise failures.pop()
+            real_save(*args, **kwargs)
+
+        with mock.patch.object(session, "save", save):
+            assert resolve_contact_for_widget_session(session) is None
+        assert WidgetSession.objects.get(pk=session.pk).contact is None
+
+    def test_a_retry_that_fails_too_leaves_the_session_as_stored(self, org):
+        session = _session(org, external_user_id="u1", email="a@x.io")
+        with self._failing_session_writes(times=2), pytest.raises(IntegrityError):
+            resolve_contact_for_widget_session(session, email_verified=True)
+        assert session.contact_id is None
+        assert session.contact is None
+        assert session.email_verified_at is None
+
+    def test_other_database_errors_arent_retried_but_leave_the_session_as_stored(
+        self, org
+    ):
+        session = _session(org, external_user_id="u1")
+        with (
+            self._failing_session_writes(OperationalError),
+            pytest.raises(OperationalError),
+        ):
+            resolve_contact_for_widget_session(session)
+        assert session.contact_id is None

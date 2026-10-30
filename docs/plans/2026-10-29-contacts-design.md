@@ -98,7 +98,12 @@ a hash for one kind of value can't be replayed as another:
 |---|---|
 | `user_hash` | `external_user_id` |
 | `email_hash` | `"email:" + lowercase(email)` |
-| `company_hash` | `"company:" + company.id` |
+| `company_hash` | `"company:" + company.id + ":" + company.name + ":" + lowercase(company.domain)`, with `domain` empty if absent |
+
+`company_hash` covers the name and domain so a member can't replay it with a forged
+name or domain. It doesn't cover `company.traits`. External user ids starting with
+`email:` or `company:` are refused (400), so a `user_hash` can never double as another
+hash.
 
 An invalid or missing `email_hash` / `company_hash` is ignored, not rejected: the
 value is simply treated as unsigned, and existing integrations are unaffected.
@@ -138,9 +143,10 @@ value is simply treated as unsigned, and existing integrations are unaffected.
      `domain` only if the session's email is proven, its domain equals `domain`, it
      isn't a public webmail domain (`PUBLIC_EMAIL_DOMAINS`) and no other Company owns
      it.
-   - **Signed** (valid `company_hash`): full upsert of `name`, `domain` and `traits`
-     on `(organization, external_id)`, and the Contact may be moved. `domain` still
-     never takes another Company's domain.
+   - **Signed** (valid `company_hash`): upsert of `name` and `domain` on
+     `(organization, external_id)`, and the Contact may be moved. `domain` still never
+     takes another Company's domain. `traits` aren't signed, so they apply to a Company
+     this payload creates and never to an existing one.
    - **Auto-link on `Company.domain`**, for a Contact without a Company when the
      email domain is not a public webmail: on an identified Contact only from a
      proven email (`email_verified_at` set); on an anonymous session only when it
@@ -149,8 +155,8 @@ value is simply treated as unsigned, and existing integrations are unaffected.
      on an identified Contact whose email is unproven.
 5. **Traits**: `user.traits` / `company.traits` are upserted into `attributes`
    for keys defined in the matching `*AttributeDef`; unknown keys are dropped
-   and logged. `user.traits` apply to an identified or proven session; `company.traits`
-   follow rule 4.
+   and logged. `user.traits` apply to an HMAC-identified session or a proven anonymous
+   one; `company.traits` follow rule 4.
 6. **Concurrency**: the Contact's row is locked (`SELECT … FOR NO KEY UPDATE`)
    before anything is changed, and `is_anonymized` is checked under that lock, so a
    concurrent anonymization is never undone. Saves write only the fields that really

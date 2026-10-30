@@ -2,7 +2,8 @@
 
 Threat model: a widget session's email, name, traits and company come from page
 JavaScript, so a legitimately identified user can forge them. Only ``user_hash``
-(the external id), ``email_hash`` and ``company_hash`` are signed by the host app.
+(the external id), ``email_hash`` and ``company_hash`` (a company's id, name and
+domain, not its traits) are signed by the host app.
 
 Email rules:
 
@@ -24,8 +25,9 @@ Email rules:
 Company rules, without a valid ``company_hash``: an existing company is never
 modified, only linked, and a contact that already has a company is never moved.
 A new company takes the name and traits, and the domain only if it's the domain
-of the email proven by this session. With ``company_verified=True``, the payload
-is a full upsert and may move the contact. Nobody takes another company's domain.
+of the email proven by this session. With ``company_verified=True``, the name and
+domain are upserted and the contact may be moved, but traits only apply to a company
+this payload creates. Nobody takes another company's domain.
 Auto-linking on the email domain happens on an identified contact only from a
 proven email, and on an anonymous session only when it creates the contact.
 
@@ -46,7 +48,7 @@ from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
-from django.db import IntegrityError, models, transaction
+from django.db import DatabaseError, IntegrityError, models, transaction
 from django.utils import timezone
 
 from apps.organizations.models import extract_email_domain, is_public_email_domain
@@ -220,9 +222,15 @@ def resolve_contact_for_email(
 def _upsert_signed_company(
     organization, external_id: str, name: str, domain: str, traits: dict[str, Any]
 ) -> Company | None:
-    """Apply a payload signed by the host app, except for another company's domain."""
+    """Apply a payload signed by the host app, except for another company's domain.
+
+    The hash doesn't cover ``traits``, so they only apply to a company created here.
+    """
     company, _ = _get_or_create_locked(
-        Company, {"name": name}, organization=organization, external_id=external_id
+        Company,
+        {"name": name, "attributes": traits},
+        organization=organization,
+        external_id=external_id,
     )
     if company is None:
         return None
@@ -230,7 +238,6 @@ def _upsert_signed_company(
     _set(company, changed, name=name)
     if domain and domain != company.domain and not _domain_taken(organization, domain):
         _set(company, changed, domain=domain)
-    _set(company, changed, attributes=_merged_attributes(company.attributes, traits))
     _save_changes(company, changed)
     return company
 
@@ -407,6 +414,27 @@ def _resolve_session_once(
     return contact
 
 
+def _resolve_session_atomically(
+    session, email_verified: bool, traits: Any, company: Any, company_verified: bool
+) -> Contact | None:
+    """Run one pass. If it fails, forget in memory the writes it rolled back.
+
+    The session object outlives the pass, and the next one only writes what
+    differs from it, so it has to see those writes as still to be made.
+    """
+    contact_id = session.contact_id
+    email_verified_at = session.email_verified_at
+    try:
+        with transaction.atomic():
+            return _resolve_session_once(
+                session, email_verified, traits, company, company_verified
+            )
+    except DatabaseError:
+        session.contact_id = contact_id
+        session.email_verified_at = email_verified_at
+        raise
+
+
 def resolve_contact_for_widget_session(
     session,
     *,
@@ -420,8 +448,9 @@ def resolve_contact_for_widget_session(
     ``session.external_user_id`` must only be set by callers after a
     successful HMAC check. ``email_verified`` must only be True when the
     host app signed the email (``email_hash``) or the user proved ownership.
-    ``company_verified`` must only be True when the host app signed the company
-    (``company_hash``); it has no effect on a session that isn't identified.
+    ``company_verified`` must only be True when the host app signed the company's
+    id, name and domain (``company_hash``); it has no effect on a session that
+    isn't identified.
 
     Return None when the session has no usable identity or points at an
     anonymized contact, in which case nothing is written on any contact and a
@@ -432,13 +461,8 @@ def resolve_contact_for_widget_session(
     has to see that commit to leave the value alone. A snapshot taken at the
     start of an enclosing REPEATABLE READ transaction would hide it.
     """
+    args = (session, email_verified, traits, company, company_verified)
     try:
-        with transaction.atomic():
-            return _resolve_session_once(
-                session, email_verified, traits, company, company_verified
-            )
+        return _resolve_session_atomically(*args)
     except IntegrityError:
-        with transaction.atomic():
-            return _resolve_session_once(
-                session, email_verified, traits, company, company_verified
-            )
+        return _resolve_session_atomically(*args)
