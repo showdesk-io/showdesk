@@ -16,8 +16,16 @@ from rest_framework.test import APIClient
 from apps.contacts.backfill import _analyze, backfill, clean_email
 from apps.contacts.models import Contact
 from apps.contacts.services import resolve_contact_for_widget_session
+from apps.organizations.models import User
 from apps.tickets.models import Ticket, WidgetSession
-from tests.factories import ContactFactory, OrganizationFactory, TicketFactory
+from tests.factories import (
+    AdminFactory,
+    ContactFactory,
+    EndUserFactory,
+    OrganizationFactory,
+    TicketFactory,
+    UserFactory,
+)
 
 BEFORE_BACKFILL = ("contacts", "0003_contact_declared_email")
 BACKFILL = ("contacts", "0004_backfill_contacts")
@@ -33,7 +41,8 @@ def _session(org, **kwargs) -> WidgetSession:
 
 def _ticket(org, **kwargs) -> Ticket:
     kwargs.setdefault("requester_email", "")
-    return TicketFactory(organization=org, requester=None, **kwargs)
+    kwargs.setdefault("requester", None)
+    return TicketFactory(organization=org, **kwargs)
 
 
 def _reload(*rows):
@@ -783,6 +792,230 @@ def _nameless_rows(count, prefix):
 
 
 @pytest.mark.django_db
+class TestRequesterAccount:
+    """Tickets saying nothing of their sender, but for an end-user account."""
+
+    def _customer(self, org, **kwargs):
+        kwargs.setdefault("email", "Jane@Customer.example")
+        kwargs.setdefault("first_name", "Jane")
+        kwargs.setdefault("last_name", "Doe")
+        return EndUserFactory(organization=org, **kwargs)
+
+    def test_links_to_a_declared_contact_with_the_account_name(self):
+        org = OrganizationFactory()
+        ticket = _ticket(org, requester=self._customer(org))
+
+        _run()
+
+        _reload(ticket)
+        contact = ticket.contact
+        assert contact.organization == org
+        assert (contact.email, contact.name) == ("jane@customer.example", "Jane Doe")
+        assert contact.declared_email == ""
+        assert contact.external_id == ""
+        assert contact.email_verified_at is None
+        assert contact.first_seen_at == ticket.created_at
+        assert contact.last_seen_at == ticket.created_at
+
+    def test_tickets_of_one_account_share_a_contact(self):
+        org = OrganizationFactory()
+        customer = self._customer(org)
+        tickets = [_ticket(org, requester=customer) for _ in range(3)]
+
+        _run()
+
+        _reload(*tickets)
+        assert len({ticket.contact_id for ticket in tickets}) == 1
+        assert Contact.objects.filter(organization=org).count() == 1
+
+    def test_links_to_an_existing_contact_without_writing_on_it(self):
+        org = OrganizationFactory()
+        existing = ContactFactory(
+            organization=org, email="jane@customer.example", name="J."
+        )
+        before = existing.updated_at
+        ticket = _ticket(org, requester=self._customer(org))
+
+        assert backfill(django_apps, None) == 0
+
+        _reload(ticket, existing)
+        assert ticket.contact == existing
+        assert existing.name == "J."
+        assert existing.updated_at == before
+
+    @pytest.mark.parametrize("factory", [UserFactory, AdminFactory])
+    def test_an_agent_or_admin_doesnt_become_a_contact(self, factory):
+        org = OrganizationFactory()
+        ticket = _ticket(org, requester=factory(organization=org))
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact is None
+        assert not Contact.objects.exists()
+
+    def test_an_account_of_another_organization_doesnt_become_a_contact(self):
+        org = OrganizationFactory()
+        ticket = _ticket(org, requester=self._customer(OrganizationFactory()))
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact is None
+        assert not Contact.objects.exists()
+
+    def test_an_account_with_no_organization_does(self):
+        org = OrganizationFactory()
+        ticket = _ticket(org, requester=self._customer(None))
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact.email == "jane@customer.example"
+
+    def test_the_tickets_own_email_wins(self):
+        org = OrganizationFactory()
+        ticket = _ticket(
+            org,
+            requester=self._customer(org),
+            requester_email="other@x.io",
+            requester_name="Other",
+        )
+
+        _run()
+
+        _reload(ticket)
+        assert (ticket.contact.email, ticket.contact.name) == ("other@x.io", "Other")
+
+    def test_an_unusable_email_falls_back_on_the_account(self):
+        org = OrganizationFactory()
+        ticket = _ticket(
+            org, requester=self._customer(org), requester_email="not an email"
+        )
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact.email == "jane@customer.example"
+
+    def test_the_account_doesnt_name_a_contact_of_another_address(self):
+        org = OrganizationFactory()
+        ticket = _ticket(
+            org, requester=self._customer(org), requester_email="other@x.io"
+        )
+
+        _run()
+
+        _reload(ticket)
+        assert (ticket.contact.email, ticket.contact.name) == ("other@x.io", "")
+
+    def test_a_vouched_external_id_wins(self):
+        org = OrganizationFactory()
+        session = _session(org, external_user_id="u1")
+        ticket = _ticket(org, requester=self._customer(org), external_user_id="u1")
+
+        _run()
+
+        _reload(ticket, session)
+        assert ticket.contact == session.contact
+        assert ticket.contact.email == ""
+        assert ticket.contact.name == ""
+
+    def test_an_unvouched_external_id_is_no_identity(self):
+        org = OrganizationFactory()
+        ticket = _ticket(org, requester=self._customer(org), external_user_id="forged")
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact.external_id == ""
+        assert ticket.contact.email == "jane@customer.example"
+        assert ticket.contact.name == "Jane Doe"
+
+    def test_a_widget_session_keeps_deciding(self):
+        org = OrganizationFactory()
+        ticket = _ticket(
+            org, requester=self._customer(org), widget_session=_session(org)
+        )
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact is None
+        assert not Contact.objects.exists()
+
+    def test_an_anonymized_contact_isnt_linked(self):
+        org = OrganizationFactory()
+        ContactFactory(
+            organization=org, email="jane@customer.example", is_anonymized=True
+        )
+        ticket = _ticket(org, requester=self._customer(org))
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact is None
+
+    def test_an_unusable_account_email_stays_unlinked(self):
+        org = OrganizationFactory()
+        ticket = _ticket(org, requester=self._customer(org, email="not an email"))
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact is None
+
+    def test_a_name_longer_than_a_contact_takes_is_cut(self):
+        org = OrganizationFactory()
+        customer = self._customer(org, first_name="a" * 150, last_name="b" * 150)
+        ticket = _ticket(org, requester=customer)
+
+        _run()
+
+        _reload(ticket)
+        assert len(ticket.contact.name) == 255
+
+    def test_is_idempotent(self):
+        org = OrganizationFactory()
+        ticket = _ticket(org, requester=self._customer(org))
+
+        _run()
+        _reload(ticket)
+        contact_id = ticket.contact_id
+
+        assert backfill(django_apps, None) == 0
+        _reload(ticket)
+        assert ticket.contact_id == contact_id
+
+    def test_links_the_tickets_of_the_seed(self):
+        call_command("seed", stdout=StringIO())
+        Ticket.objects.update(contact=None)
+        Contact.objects.all().delete()
+        assert User.objects.filter(role=User.Role.END_USER).count() == 3
+
+        _run()
+
+        assert Ticket.objects.count() == 7
+        assert not Ticket.objects.filter(contact__isnull=True).exists()
+        assert Contact.objects.count() == 3
+
+    def test_query_count_doesnt_grow_with_the_tickets(self):
+        org = OrganizationFactory()
+        _ticket(org, requester=self._customer(org))
+        with CaptureQueriesContext(connection) as few:
+            _run()
+        for n in range(30):
+            _ticket(
+                org,
+                requester=self._customer(org, email=f"c{n}@customer.example"),
+            )
+        with CaptureQueriesContext(connection) as many:
+            _run()
+        assert Contact.objects.count() == 31
+        assert len(many) == len(few)
+
+
+@pytest.mark.django_db
 class TestCost:
     def test_query_count_doesnt_grow_with_the_contacts(self):
         _nameless_rows(2, "few")
@@ -905,11 +1138,26 @@ def test_migration_on_the_historical_state_then_noop_reverse():
         anonymous = _session(org, email="B@x.io")
         standalone = _ticket(org, requester_email="b@X.io", requester_name="Bea")
         invalid = _session(org, email="not an email")
+        from_account = _ticket(
+            org,
+            requester=EndUserFactory(
+                organization=org,
+                email="Cid@x.io",
+                first_name="Cid",
+                last_name="Campeador",
+            ),
+        )
+        from_agent = _ticket(org, requester=UserFactory(organization=org))
 
         executor = MigrationExecutor(connection)
         executor.migrate([BACKFILL])
 
         _reload(session, followed, anonymous, standalone, invalid)
+        _reload(from_account, from_agent)
+        assert from_account.contact.email == "cid@x.io"
+        assert from_account.contact.name == "Cid Campeador"
+        assert from_account.contact.email_verified_at is None
+        assert from_agent.contact is None
         assert session.contact.external_id == "u1"
         assert session.contact.email == ""
         assert session.contact.declared_email == "a@x.io"

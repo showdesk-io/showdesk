@@ -18,6 +18,7 @@ from apps.contacts.permissions import IsNotEndUser
 from apps.contacts.services import (
     delete_contact_if_left_empty,
     resolve_contact_for_email,
+    resolve_contact_for_ticket,
     resolve_contact_for_widget_session,
 )
 from apps.core.permissions import get_active_org, has_feature
@@ -513,6 +514,16 @@ class TicketViewSet(viewsets.ModelViewSet):
             reference=org.next_ticket_reference(),
             source=serializer.validated_data.get("source", Ticket.Source.AGENT),
         )
+        # An explicit null is a choice, like an agent clearing it later.
+        if "contact" not in serializer.validated_data:
+            try:
+                contact = resolve_contact_for_ticket(ticket)
+                if contact is not None:
+                    ticket.contact = contact
+                    ticket.save(update_fields=["contact"])
+            except DatabaseError:
+                # The ticket exists: failing here would lose its notifications.
+                logger.exception("Could not link ticket %s to a contact", ticket.pk)
         # Notify via WebSocket + email
         try:
             notify_new_ticket(ticket)

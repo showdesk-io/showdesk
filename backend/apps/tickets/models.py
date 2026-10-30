@@ -382,7 +382,7 @@ class Ticket(TimestampedModel):
         """
         session = self.widget_session
         if self.source in (self.Source.AGENT, self.Source.API) or (
-            session is None and not self.requester_email
+            session is None and not self.requester_email and not self.requester_id
         ):
             return None
         metadata = self.context_metadata

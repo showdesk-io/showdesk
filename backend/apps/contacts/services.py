@@ -53,6 +53,7 @@ from django.utils import timezone
 
 from apps.organizations.models import (
     RESERVED_EXTERNAL_ID_PREFIXES,
+    User,
     extract_email_domain,
     is_public_email_domain,
 )
@@ -221,6 +222,36 @@ def resolve_contact_for_email(
             _autolink_company(contact, changed)
             _save_changes(contact, changed)
     return contact
+
+
+def resolve_contact_for_ticket(ticket) -> Contact | None:
+    """Find or create the contact of a ticket filed through the API.
+
+    It goes by the ticket's email, or else its requester's when that's an end-user
+    account not belonging to another organization. Either way it's only declared. An
+    agent or admin of the organization never becomes a contact, by account or address.
+    """
+    organization_id = ticket.organization_id
+    account = ticket.requester
+    if account is not None and (
+        account.role != User.Role.END_USER
+        or account.organization_id not in (None, organization_id)
+    ):
+        account = None
+    email = _clean_email(ticket.requester_email)
+    account_email = _clean_email(account.email) if account else ""
+    email = email or account_email
+    if (
+        not email
+        or User.objects.filter(organization_id=organization_id, email__iexact=email)
+        .exclude(role=User.Role.END_USER)
+        .exists()
+    ):
+        return None
+    name = _clean_text(ticket.requester_name)
+    if not name and email == account_email:
+        name = account.get_full_name()
+    return resolve_contact_for_email(ticket.organization, email, name=name)
 
 
 def _upsert_signed_company(

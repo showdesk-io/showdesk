@@ -7,12 +7,13 @@ from unittest import mock
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import connection
+from django.db import DatabaseError, connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.contacts.gdpr import anonymize_contact
+from apps.contacts.models import Contact
 from apps.notifications.signals import (
     notify_message_deleted,
     notify_new_message,
@@ -48,8 +49,7 @@ def _url(ticket) -> str:
 def _ticket(organization, **fields) -> Ticket:
     return TicketFactory(
         organization=organization,
-        requester=None,
-        **{"requester_email": "", **fields},
+        **{"requester": None, "requester_email": "", **fields},
     )
 
 
@@ -511,6 +511,150 @@ class TestWritingTheContact:
         assert res.status_code == 200
         ticket.refresh_from_db()
         assert ticket.organization_id == organization.id
+
+
+class TestCreateResolvesTheContact:
+    def _post(self, client, **data):
+        res = client.post(TICKETS, {"title": "x", **data}, format="json")
+        assert res.status_code == 201, res.data
+        return res, Ticket.objects.get(pk=res.data["id"])
+
+    def test_from_the_requester_email(self, authenticated_client, organization):
+        res, ticket = self._post(
+            authenticated_client,
+            requester_email="Jane@Customer.example",
+            requester_name="Jane",
+        )
+        assert ticket.contact.organization == organization
+        assert ticket.contact.email == "jane@customer.example"
+        assert ticket.contact.name == "Jane"
+        assert ticket.contact.email_verified_at is None
+        assert res.data["contact"] == ticket.contact_id
+        assert res.data["contact_detail"]["display_name"] == "Jane"
+        assert res.data["sender_verified"] is None
+
+    def test_from_an_end_user_requester(self, authenticated_client, organization):
+        account = EndUserFactory(
+            organization=organization,
+            email="jane@customer.example",
+            first_name="Jane",
+            last_name="Doe",
+        )
+        _, ticket = self._post(authenticated_client, requester=str(account.id))
+        assert ticket.contact.email == "jane@customer.example"
+        assert ticket.contact.name == "Jane Doe"
+        assert ticket.contact.email_verified_at is None
+
+    def test_the_existing_contact_of_that_address(
+        self, authenticated_client, organization
+    ):
+        contact = ContactFactory(organization=organization, email="a@x.io", name="A")
+        _, ticket = self._post(
+            authenticated_client, requester_email="a@x.io", requester_name="Other"
+        )
+        assert ticket.contact == contact
+        contact.refresh_from_db()
+        assert contact.name == "A"
+
+    def test_the_tickets_email_wins_over_the_requester(
+        self, authenticated_client, organization
+    ):
+        account = EndUserFactory(organization=organization, email="a@x.io")
+        _, ticket = self._post(
+            authenticated_client, requester=str(account.id), requester_email="b@x.io"
+        )
+        assert ticket.contact.email == "b@x.io"
+        assert ticket.contact.name == ""
+
+    def test_not_from_an_agent_or_admin_requester(
+        self, authenticated_client, agent, admin_user
+    ):
+        for user in (agent, admin_user):
+            _, ticket = self._post(authenticated_client, requester=str(user.id))
+            assert ticket.contact is None
+        assert not Contact.objects.exists()
+
+    def test_not_from_the_address_of_an_agent(self, authenticated_client, agent):
+        _, requested = self._post(
+            authenticated_client,
+            requester=str(agent.id),
+            requester_email=agent.email,
+        )
+        _, named = self._post(authenticated_client, requester_email=agent.email.upper())
+        assert requested.contact is None
+        assert named.contact is None
+        assert not Contact.objects.exists()
+
+    def test_an_agent_can_file_for_a_customer(self, authenticated_client, agent):
+        _, ticket = self._post(
+            authenticated_client, requester=str(agent.id), requester_email="c@x.io"
+        )
+        assert ticket.contact.email == "c@x.io"
+        assert ticket.contact.name == ""
+
+    def test_not_from_an_account_of_another_organization(self, authenticated_client):
+        account = EndUserFactory(organization=OrganizationFactory())
+        _, ticket = self._post(authenticated_client, requester=str(account.id))
+        assert ticket.contact is None
+        assert not Contact.objects.exists()
+
+    def test_nothing_to_go_by(self, authenticated_client):
+        _, ticket = self._post(authenticated_client, requester_email="")
+        assert ticket.contact is None
+
+    def test_a_contact_given_is_kept(self, authenticated_client, organization):
+        contact = ContactFactory(organization=organization, email="a@x.io")
+        _, ticket = self._post(
+            authenticated_client, contact=str(contact.id), requester_email="b@x.io"
+        )
+        assert ticket.contact == contact
+        assert not Contact.objects.filter(email="b@x.io").exists()
+
+    def test_an_explicit_null_is_kept(self, authenticated_client):
+        _, ticket = self._post(
+            authenticated_client, contact=None, requester_email="b@x.io"
+        )
+        assert ticket.contact is None
+        assert not Contact.objects.exists()
+
+    def test_an_anonymized_contact_isnt_linked(
+        self, authenticated_client, organization
+    ):
+        ContactFactory(organization=organization, email="a@x.io", is_anonymized=True)
+        _, ticket = self._post(authenticated_client, requester_email="a@x.io")
+        assert ticket.contact is None
+
+    def test_a_database_error_doesnt_lose_the_ticket(self, authenticated_client):
+        with mock.patch(
+            "apps.tickets.views.resolve_contact_for_ticket",
+            side_effect=DatabaseError,
+        ):
+            _, ticket = self._post(authenticated_client, requester_email="a@x.io")
+        assert ticket.contact is None
+
+
+class TestSenderOfAnAccount:
+    def test_a_requester_account_is_an_unverified_sender(
+        self, authenticated_client, organization
+    ):
+        ticket = _ticket(
+            organization,
+            source=Ticket.Source.WIDGET,
+            requester=EndUserFactory(organization=organization),
+            contact=ContactFactory(organization=organization),
+        )
+        assert _sender_verified(authenticated_client, ticket) is False
+
+    def test_an_api_ticket_has_no_outside_sender(
+        self, authenticated_client, organization
+    ):
+        ticket = _ticket(
+            organization,
+            source=Ticket.Source.API,
+            requester=EndUserFactory(organization=organization),
+            contact=ContactFactory(organization=organization),
+        )
+        assert _sender_verified(authenticated_client, ticket) is None
 
 
 class TestCreateSource:

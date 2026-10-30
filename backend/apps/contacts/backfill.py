@@ -16,6 +16,10 @@ The rules follow the identity service, for data nothing was proven about:
 - An external id gets a contact of its own, whose email goes to ``declared_email``.
   Nothing is marked verified, and ``email`` stays blank.
 - Otherwise a usable email gets an email-only contact, shared by everyone giving it.
+- A ticket with no session of its organization and no identity of its own goes by its
+  requester, when that's an end-user account not belonging to another organization.
+  Its email counts as declared, like any other here, and an agent or admin never
+  becomes a contact. The account names a new contact only if it holds the same email.
 - A session decides for its tickets, so they end on the same contact whatever their
   own values are. An anonymous session without a usable email takes the most recent
   usable email of its tickets, and stores it: the service identifies it by its own
@@ -63,6 +67,10 @@ from django.db.models import (
 BATCH_SIZE = 1000
 
 _EMAIL_MAX = 254
+_NAME_MAX = 255
+
+# ``organizations.models.User.Role.END_USER``, as of this migration.
+_END_USER = "end_user"
 
 # ``organizations.models.RESERVED_EXTERNAL_ID_PREFIXES``, as of this migration.
 _RESERVED_PREFIXES = ("email:", "company\n")
@@ -118,6 +126,10 @@ def _ticket_identity(
     if (org_id, external_id) in vouched:
         return ("external_id", external_id)
     return _identity("", email)
+
+
+def _is_customer(org_id, role: str | None, account_org_id) -> bool:
+    return role == _END_USER and account_org_id in (None, org_id)
 
 
 def _lookup(Contact, keys) -> dict[tuple, tuple]:
@@ -293,16 +305,37 @@ def _link_tickets_without_session(Contact, Ticket, created: set, vouched: set) -
             "requester_email",
             "widget_session__organization_id",
             "widget_session__email",
+            "requester__email",
+            "requester__role",
+            "requester__organization_id",
         )
     )
     unlinked = Ticket.objects.filter(contact__isnull=True)
     for batch in batched(rows.iterator(chunk_size=BATCH_SIZE), BATCH_SIZE):
-        identities = {
-            pk: _ticket_identity(org_id, external_id, email, vouched)
-            for pk, org_id, external_id, email, session_org_id, session_email in batch
+        identities = {}
+        for (
+            pk,
+            org_id,
+            external_id,
+            email,
+            session_org_id,
+            session_email,
+            account_email,
+            role,
+            account_org_id,
+        ) in batch:
+            has_session = session_org_id == org_id
             # Its session has a usable email and no contact: that one is anonymized.
-            if session_org_id != org_id or not clean_email(session_email)
-        }
+            if has_session and clean_email(session_email):
+                continue
+            identity = _ticket_identity(org_id, external_id, email, vouched)
+            if (
+                identity is None
+                and not has_session
+                and _is_customer(org_id, role, account_org_id)
+            ):
+                identity = _identity("", account_email)
+            identities[pk] = identity
         _set_contacts(
             unlinked,
             _contacts_of_batch(Contact, batch, identities, created, declares=False),
@@ -316,9 +349,13 @@ def _fill_new_contacts(
 
     Rows come latest first: the first usable value of a contact is the one it keeps.
     A session's name wins over a ticket's, and a session's email was declared already.
+    A ticket without a name gives its requester's, if that account holds the contact's
+    email: an account says nothing of another address, or of an identified contact.
     """
     fields = ("name", "declared_email", "first_seen_at", "last_seen_at")
-    contacts = Contact.objects.filter(pk__in=contact_ids).only("external_id", *fields)
+    contacts = Contact.objects.filter(pk__in=contact_ids).only(
+        "email", "external_id", *fields
+    )
     contacts = {contact.pk: contact for contact in contacts}
 
     def seen(contact, first, last):
@@ -347,18 +384,39 @@ def _fill_new_contacts(
             "external_user_id",
             "requester_name",
             "requester_email",
+            "requester__email",
+            "requester__role",
+            "requester__organization_id",
+            "requester__first_name",
+            "requester__last_name",
         )
     )
-    for contact_id, created_at, org_id, external_id, name, email in tickets.iterator(
-        chunk_size=BATCH_SIZE
-    ):
+    for (
+        contact_id,
+        created_at,
+        org_id,
+        external_id,
+        name,
+        email,
+        account_email,
+        role,
+        account_org_id,
+        first_name,
+        last_name,
+    ) in tickets.iterator(chunk_size=BATCH_SIZE):
         contact = contacts[contact_id]
         seen(contact, created_at, created_at)
-        if external_id and (org_id, external_id) not in vouched:
-            continue
-        contact.name = contact.name or name.strip()
-        if contact.external_id and not contact.declared_email:
-            contact.declared_email = clean_email(email)
+        if not (external_id and (org_id, external_id) not in vouched):
+            contact.name = contact.name or name.strip()
+            if contact.external_id and not contact.declared_email:
+                contact.declared_email = clean_email(email)
+        if (
+            not contact.name
+            and contact.email
+            and _is_customer(org_id, role, account_org_id)
+            and clean_email(account_email) == contact.email
+        ):
+            contact.name = f"{first_name} {last_name}".strip()[:_NAME_MAX]
 
     Contact.objects.bulk_update(contacts.values(), fields)
 
