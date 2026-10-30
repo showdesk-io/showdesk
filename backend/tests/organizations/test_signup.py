@@ -10,7 +10,6 @@ Steps:
 
 import pytest
 from django.core import mail
-from django.core.cache import cache
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -525,7 +524,6 @@ class TestSignupSuccessQuota:
         assert r.status_code == status.HTTP_201_CREATED
 
     def test_sixth_successful_create_is_blocked(self, api_client) -> None:
-        cache.clear()
         for i in range(5):
             data = _request_and_verify(api_client, f"founder{i}@unique-{i}.io")
             client = _auth_client(data)

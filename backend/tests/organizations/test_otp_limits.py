@@ -3,11 +3,14 @@
 import threading
 
 import pytest
+from django.core.cache import caches
+from django.core.cache.backends.locmem import LocMemCache
 from django.db import connection
 from django.test import Client
 from rest_framework.test import APIClient
 
 from apps.organizations.models import OTPCode
+from config.settings import base as base_settings
 from tests.factories import AdminFactory, EndUserFactory, UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -269,8 +272,13 @@ class TestAdminLogin:
         assert _submit(ADMIN_LOGIN, otp.code) is False
 
 
-def test_throttle_counters_are_shared_between_worker_processes(settings) -> None:
+def test_throttle_counters_are_shared_between_worker_processes() -> None:
+    # The configured value: tests themselves run on the in-memory cache below.
     assert (
-        settings.CACHES["default"]["BACKEND"]
+        base_settings.CACHES["default"]["BACKEND"]
         == "django.core.cache.backends.redis.RedisCache"
     )
+
+
+def test_tests_never_reach_a_real_cache_server() -> None:
+    assert isinstance(caches["default"], LocMemCache)
