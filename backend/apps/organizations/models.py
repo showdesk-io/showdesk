@@ -307,17 +307,23 @@ class Organization(TimestampedModel):
     def verify_company_hash(
         self, company_id: Any, name: Any, domain: Any, company_hash: Any
     ) -> bool:
-        """Verify HMAC-SHA256(widget_secret, "company:id:name:lowercase domain")."""
+        """Verify HMAC-SHA256(widget_secret, "company\\nid\\nname\\nlowercase domain").
+
+        Newlines separate the fields, so a value holding one could spill into the
+        next field: it's refused, even correctly signed.
+        """
         domain = "" if domain is None else domain
+        fields = (company_id, name, domain)
         if (
-            not all(isinstance(value, str) for value in (company_id, name, domain))
+            not all(isinstance(value, str) for value in fields)
+            or any("\n" in value for value in fields)
             or not company_id
             or not name
             or not company_hash
         ):
             return False
         return self._verify_signature(
-            f"company:{company_id}:{name}:{domain.lower()}", company_hash
+            f"company\n{company_id}\n{name}\n{domain.lower()}", company_hash
         )
 
     def next_ticket_reference(self) -> str:

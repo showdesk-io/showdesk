@@ -965,7 +965,7 @@ def resolve_contact_for_widget_session(
 - Modify: `backend/apps/organizations/models.py` (next to `verify_user_hash`, ~line 278)
 - Test: `backend/tests/organizations/test_models.py` (append)
 
-Each hash signs a prefixed message, so hashes aren't interchangeable with `user_hash` or with each other: `HMAC(secret, "email:" + lowercase(email))` and `HMAC(secret, "company:" + id + ":" + name + ":" + lowercase(domain))`, with `domain` empty if absent. The company hash covers the name and domain so a member can't replay it with a forged name or domain. `traits` aren't signed (see Task 7 and design rule 4).
+Each hash signs a prefixed message, so hashes aren't interchangeable with `user_hash` or with each other: `HMAC(secret, "email:" + lowercase(email))` and `HMAC(secret, "company\n" + id + "\n" + name + "\n" + lowercase(domain))`, with `domain` empty if absent. The company hash covers the name and domain so a member can't replay it with a forged name or domain. `traits` aren't signed (see Task 7 and design rule 4). A colon separator would be ambiguous (`c1:x` + `Acme` and `c1` + `x:Acme` would sign the same message), so fields are separated by newlines and an id, name or domain containing a newline never verifies.
 
 Malformed input is never an error: a non-string value, a non-ASCII hash (`hmac.compare_digest` raises `TypeError` on one) or a lone surrogate (`str.encode` raises `UnicodeEncodeError`) returns False. A non-ASCII email or company name is legitimate and is signed as UTF-8.
 
@@ -998,7 +998,7 @@ def test_verify_email_hash_without_secret():
 @pytest.mark.django_db
 def test_verify_company_hash():
     org = OrganizationFactory(widget_secret="s3cret")
-    good = _sign(b"company:c1:Acme:acme.io")
+    good = _sign(b"company\nc1\nAcme\nacme.io")
     assert org.verify_company_hash("c1", "Acme", "acme.io", good)
     assert org.verify_company_hash("c1", "Acme", "ACME.io", good)
     assert not org.verify_company_hash("c2", "Acme", "acme.io", good)
@@ -1015,13 +1015,13 @@ def test_verify_company_hash():
 @pytest.mark.parametrize("domain", ["", None])
 def test_verify_company_hash_without_domain(domain):
     org = OrganizationFactory(widget_secret="s3cret")
-    assert org.verify_company_hash("c1", "Acme", domain, _sign(b"company:c1:Acme:"))
+    assert org.verify_company_hash("c1", "Acme", domain, _sign(b"company\nc1\nAcme\n"))
 
 
 @pytest.mark.django_db
 def test_non_ascii_names_are_signed_as_utf8():
     org = OrganizationFactory(widget_secret="s3cret")
-    good = _sign("company:c1:Société:".encode())
+    good = _sign("company\nc1\nSociété\n".encode())
     assert org.verify_company_hash("c1", "Société", "", good)
 
 
@@ -1042,17 +1042,52 @@ def test_malformed_hash_input_returns_false_without_raising():
     assert not org.verify_company_hash("c1", 1, "", good)
     assert not org.verify_company_hash("c1", "A", 1, good)
     assert not org.verify_company_hash("\ud800", "A", "", good)
-    assert not org.verify_company_hash("c1", "", "", _sign(b"company:c1::"))
+    assert not org.verify_company_hash("c1", "", "", _sign(b"company\nc1\n\n"))
 
 
 @pytest.mark.django_db
 def test_hashes_are_not_interchangeable():
     org = OrganizationFactory(widget_secret="s3cret")
     assert not org.verify_email_hash("a@b.io", _sign(b"a@b.io"))
-    assert not org.verify_company_hash("c1", "A", "", _sign(b"c1:A:"))
-    assert not org.verify_company_hash("c1", "A", "", _sign(b"email:c1:A:"))
-    assert not org.verify_email_hash("c1:A:", _sign(b"company:c1:A:"))
+    assert not org.verify_company_hash("c1", "A", "", _sign(b"c1\nA\n"))
+    assert not org.verify_company_hash("c1", "A", "", _sign(b"email:c1\nA\n"))
+    assert not org.verify_email_hash("c1\nA\n", _sign(b"company\nc1\nA\n"))
     assert not org.verify_user_hash("a@b.io", _sign(b"email:a@b.io"))
+
+
+@pytest.mark.django_db
+def test_company_hash_old_colon_format_no_longer_verifies():
+    org = OrganizationFactory(widget_secret="s3cret")
+    assert not org.verify_company_hash(
+        "c1", "Acme", "acme.io", _sign(b"company:c1:Acme:acme.io")
+    )
+
+
+@pytest.mark.django_db
+def test_company_hash_fields_cant_be_shifted_across_colons():
+    """Under the old format these three signed the very same message."""
+    org = OrganizationFactory(widget_secret="s3cret")
+    good = _sign(b"company\nc1\nx:Acme\n")
+    assert org.verify_company_hash("c1", "x:Acme", "", good)
+    assert not org.verify_company_hash("c1:x", "Acme", "", good)
+    assert not org.verify_company_hash("c1", "x", "Acme", good)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("company_id", "name", "domain"),
+    [
+        ("c1\nAcme", "x", ""),
+        ("c1", "Acme\nacme.io", ""),
+        ("c1", "Acme", "acme.io\n"),
+        ("c1", "Acme\n", "acme.io"),
+    ],
+)
+def test_company_hash_refuses_a_newline_in_any_field(company_id, name, domain):
+    """Even correctly signed: a newline could shift a value into the next field."""
+    org = OrganizationFactory(widget_secret="s3cret")
+    message = f"company\n{company_id}\n{name}\n{domain}".encode()
+    assert not org.verify_company_hash(company_id, name, domain, _sign(message))
 ```
 
 **Step 2:** FAIL (`AttributeError`).
@@ -1092,17 +1127,23 @@ def test_hashes_are_not_interchangeable():
     def verify_company_hash(
         self, company_id: Any, name: Any, domain: Any, company_hash: Any
     ) -> bool:
-        """Verify HMAC-SHA256(widget_secret, "company:id:name:lowercase domain")."""
+        """Verify HMAC-SHA256(widget_secret, "company\\nid\\nname\\nlowercase domain").
+
+        Newlines separate the fields, so a value holding one could spill into the
+        next field: it's refused, even correctly signed.
+        """
         domain = "" if domain is None else domain
+        fields = (company_id, name, domain)
         if (
-            not all(isinstance(value, str) for value in (company_id, name, domain))
+            not all(isinstance(value, str) for value in fields)
+            or any("\n" in value for value in fields)
             or not company_id
             or not name
             or not company_hash
         ):
             return False
         return self._verify_signature(
-            f"company:{company_id}:{name}:{domain.lower()}", company_hash
+            f"company\n{company_id}\n{name}\n{domain.lower()}", company_hash
         )
 ```
 
@@ -1213,7 +1254,7 @@ def test_signed_company_is_upserted_and_forged_hash_is_not(api_client, org):
     assert company.name == "Old"
     _post(
         api_client, org, **identity,
-        company=payload, company_hash=_sign("s3cret", "company:c1:New:"),
+        company=payload, company_hash=_sign("s3cret", "company\nc1\nNew\n"),
     )
     company.refresh_from_db()
     assert company.name == "New"
@@ -1234,7 +1275,7 @@ def test_company_hash_cant_be_replayed_with_another_name_or_domain(api_client, o
     res = _post(
         api_client, org,
         external_user_id="u2", user_hash=_sign("s3cret", "u2"),
-        company=forged, company_hash=_sign("s3cret", "company:c1:Real:real.io"),
+        company=forged, company_hash=_sign("s3cret", "company\nc1\nReal\nreal.io"),
     )
     assert res.status_code == 201
     company.refresh_from_db()
@@ -1254,14 +1295,14 @@ def test_signed_traits_only_apply_to_a_new_company(api_client, org):
     _post(
         api_client, org, **identity,
         company={"id": "c1", "name": "N", "traits": {"tier": "free"}},
-        company_hash=_sign("s3cret", "company:c1:N:"),
+        company_hash=_sign("s3cret", "company\nc1\nN\n"),
     )
     company.refresh_from_db()
     assert company.attributes == {"tier": "gold"}
     _post(
         api_client, org, **identity,
         company={"id": "c2", "name": "N", "traits": {"tier": "free"}},
-        company_hash=_sign("s3cret", "company:c2:N:"),
+        company_hash=_sign("s3cret", "company\nc2\nN\n"),
     )
     assert Company.objects.get(organization=org, external_id="c2").attributes == {"tier": "free"}
 
@@ -1327,7 +1368,7 @@ def test_lone_surrogate_in_a_signed_company_is_ignored_not_raised(api_client, or
     assert not Company.objects.filter(organization=org).exclude(name="C").exists()
 
 
-@pytest.mark.parametrize("prefix", ["email:", "company:"])
+@pytest.mark.parametrize("prefix", ["email:", "company\n"])
 def test_external_id_that_could_double_as_another_hash_is_refused(api_client, org, prefix):
     external_id = f"{prefix}alice@startup.com"
     res = _post(
@@ -1481,7 +1522,7 @@ from apps.contacts.services import (
 )
 ```
 
-Identity fields are validated before the session is touched: a non-string (DRF's `CharField` would coerce numbers), a value too long for its column, an invalid email format or a non-ASCII hash (`hmac.compare_digest` raises `TypeError` on one) is a 400 and nothing is written. `external_user_id` isn't trimmed, since the HMAC covers its exact value. An id starting with `email:` or `company:` is refused (400), so a `user_hash` can never double as an `email_hash` or `company_hash`: otherwise a page holding a valid `email_hash` could present it as the `user_hash` of the user `email:<address>`, and a host app whose users choose their id could be made to sign an `email_hash` by accident. Put this serializer in `apps/tickets/serializers.py`:
+Identity fields are validated before the session is touched: a non-string (DRF's `CharField` would coerce numbers), a value too long for its column, an invalid email format or a non-ASCII hash (`hmac.compare_digest` raises `TypeError` on one) is a 400 and nothing is written. `external_user_id` isn't trimmed, since the HMAC covers its exact value. An id starting with `email:` or `company\n` is refused (400), so a `user_hash` can never double as an `email_hash` or `company_hash`: otherwise a page holding a valid `email_hash` could present it as the `user_hash` of the user `email:<address>`, and a host app whose users choose their id could be made to sign an `email_hash` by accident. Put this serializer in `apps/tickets/serializers.py`:
 
 ```python
 class StrictCharField(serializers.CharField):
@@ -1507,7 +1548,7 @@ class WidgetHashField(StrictCharField):
 
 
 # ``Organization.verify_email_hash`` and ``verify_company_hash`` sign these.
-RESERVED_EXTERNAL_ID_PREFIXES = ("email:", "company:")
+RESERVED_EXTERNAL_ID_PREFIXES = ("email:", "company\n")
 
 
 class WidgetIdentitySerializer(serializers.Serializer):
@@ -2473,6 +2514,7 @@ with `ContactAttributeDefViewSet` / `CompanyAttributeDefViewSet` setting `model`
 
 ```python
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.contacts.gdpr import REMOVED_BODY, anonymize_contact
 from apps.contacts.services import resolve_contact_for_widget_session
@@ -2493,7 +2535,7 @@ def test_anonymize_scrubs_contact_and_user_messages(organization, agent):
         name="Alice", external_user_id="u1",
     )
     ticket = TicketFactory(
-        organization=organization, contact=contact, requester=None,
+        organization=organization, contact=contact, requester=None, widget_session=session,
         requester_email="alice@x.io", requester_name="Alice", external_user_id="u1",
         context_url="https://app/x?token=1",
         context_metadata={"browser": "Chrome", "url_params": {"t": 1}},
@@ -2514,6 +2556,7 @@ def test_anonymize_scrubs_contact_and_user_messages(organization, agent):
     assert contact.attributes == {}
     assert (session.email, session.name, session.external_user_id) == ("", "", "")
     assert session.contact is None
+    assert ticket.widget_session is None
     assert ticket.requester_email == contact.email
     assert ticket.external_user_id == ""
     assert ticket.context_url == ""
@@ -2538,6 +2581,32 @@ def test_open_tab_cant_attach_new_data_to_the_anonymized_contact(api_client, org
     assert session.tickets.count() == 1
     assert session.tickets.get().contact is None
     assert not contact.tickets.exists()
+
+
+def test_open_tab_cant_add_messages_to_a_ticket_of_the_anonymized_contact(api_client, organization):
+    # Both endpoints look the ticket up with ``widget_session=session``.
+    contact = ContactFactory(organization=organization, external_id="u1")
+    session = WidgetSession.objects.create(
+        organization=organization, contact=contact, external_user_id="u1"
+    )
+    ticket = TicketFactory(organization=organization, contact=contact, widget_session=session)
+    anonymize_contact(contact)
+    headers = {
+        "HTTP_X_WIDGET_TOKEN": str(organization.api_token),
+        "HTTP_X_WIDGET_SESSION": str(session.id),
+    }
+    res = api_client.post(
+        "/api/v1/tickets/widget_message/",
+        {"body": "Still here", "ticket_id": str(ticket.id)}, format="json", **headers,
+    )
+    assert res.status_code == 404
+    res = api_client.post(
+        "/api/v1/tickets/widget_message_attachment/",
+        {"ticket_id": str(ticket.id), "file": SimpleUploadedFile("a.txt", b"x")},
+        format="multipart", **headers,
+    )
+    assert res.status_code == 404
+    assert not ticket.messages.exists()
 
 
 def test_anonymize_endpoint_admin_only(authenticated_client, admin_client, organization):
@@ -2595,6 +2664,9 @@ def anonymize_contact(contact) -> None:
         ticket__contact=contact, sender_type=TicketMessage.SenderType.USER
     ).update(body=REMOVED_BODY)
     for ticket in contact.tickets.all():
+        # Widget endpoints look a ticket up by session: this stops an open tab,
+        # including one on a session since moved to another contact, adding to it.
+        ticket.widget_session = None
         ticket.requester_email = contact.email
         ticket.requester_name = contact.name
         ticket.external_user_id = ""
@@ -2604,7 +2676,7 @@ def anonymize_contact(contact) -> None:
             k: v for k, v in (ticket.context_metadata or {}).items() if k in KEPT_CONTEXT_KEYS
         }
         ticket.save(update_fields=[
-            "requester_email", "requester_name", "external_user_id",
+            "widget_session", "requester_email", "requester_name", "external_user_id",
             "context_url", "context_user_agent", "context_metadata",
         ])
 ```
@@ -2728,7 +2800,7 @@ export interface ShowdeskCompany {
   domain?: string;
   traits?: Record<string, unknown>;
   /**
-   * HMAC-SHA256(widget_secret, "company:" + id + ":" + name + ":" + lowercase(domain)), with domain
+   * HMAC-SHA256(widget_secret, "company\n" + id + "\n" + name + "\n" + lowercase(domain)), with domain
    * empty if absent — optional, lets the payload update the company's name and domain. Doesn't cover traits.
    */
   hash?: string;
@@ -2747,11 +2819,11 @@ Add `company?: ShowdeskCompany;` to `ShowdeskConfig`; read `el.dataset["userEmai
   }
 ```
 
-Docs: `data-user-email-hash`, `init({ user: { emailHash, traits }, company: { …, hash } })`, a server-side snippet computing the three HMACs with their prefixes (`user_hash` over the id, `email_hash` over `"email:" + lowercase(email)`, `company.hash` over `"company:" + id + ":" + name + ":" + lowercase(domain)`, with `domain` empty if absent, over the exact id and name sent to the widget, as UTF-8). Docs also state:
+Docs: `data-user-email-hash`, `init({ user: { emailHash, traits }, company: { …, hash } })`, a server-side snippet computing the three HMACs with their prefixes (`user_hash` over the id, `email_hash` over `"email:" + lowercase(email)`, `company.hash` over `"company\n" + id + "\n" + name + "\n" + lowercase(domain)`, with `domain` empty if absent, over the exact id and name sent to the widget, as UTF-8; an id, name or domain containing a newline never verifies). Docs also state:
 - `user.traits` apply to HMAC-identified users and to proven anonymous sessions (design rule 5); `company` is honoured only for HMAC-identified users.
 - `company.traits` aren't signed. They apply when the payload creates a company, signed or not, and never to an existing company: update those from the Companies API or the UI.
 - What each signature unlocks: without `emailHash` an email stays declared; without `company.hash` a company can be created or linked once, never updated, and a contact is never moved. With it, the name and domain of an existing company are updated and the contact may be moved.
-- External user ids starting with `email:` or `company:` are refused, since those prefixes are reserved for the other two hashes.
+- External user ids starting with `email:` or `company\n` are refused, since those prefixes are reserved for the other two hashes.
 
 **Commit** — `feat(widget): send signed email, signed company and traits`
 

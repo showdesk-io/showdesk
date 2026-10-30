@@ -92,18 +92,19 @@ the optional `email_hash` and `company_hash`. The rules below make sure forged
 data never grants access to anything and never alters somebody else's record.
 
 Signatures use `HMAC-SHA256(widget_secret, …)` over a prefixed message, so that
-a hash for one kind of value can't be replayed as another:
+a hash for one kind of value can't be replayed as another (`\n` is a line feed):
 
 | Hash | Signed message |
 |---|---|
 | `user_hash` | `external_user_id` |
 | `email_hash` | `"email:" + lowercase(email)` |
-| `company_hash` | `"company:" + company.id + ":" + company.name + ":" + lowercase(company.domain)`, with `domain` empty if absent |
+| `company_hash` | `"company\n" + company.id + "\n" + company.name + "\n" + lowercase(company.domain)`, with `domain` empty if absent |
 
 `company_hash` covers the name and domain so a member can't replay it with a forged
-name or domain. It doesn't cover `company.traits`. External user ids starting with
-`email:` or `company:` are refused (400), so a `user_hash` can never double as another
-hash.
+name or domain. It doesn't cover `company.traits`. Its fields are separated by newlines,
+which can't be confused with their content: an id, name or domain containing one never
+verifies. External user ids starting with `email:` or `company\n` are refused (400), so
+a `user_hash` can never double as another hash.
 
 An invalid or missing `email_hash` / `company_hash` is ignored, not rejected: the
 value is simply treated as unsigned, and existing integrations are unaffected.

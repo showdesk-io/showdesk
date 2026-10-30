@@ -108,7 +108,7 @@ def test_verify_email_hash_without_secret():
 @pytest.mark.django_db
 def test_verify_company_hash():
     org = OrganizationFactory(widget_secret="s3cret")
-    good = _sign(b"company:c1:Acme:acme.io")
+    good = _sign(b"company\nc1\nAcme\nacme.io")
     assert org.verify_company_hash("c1", "Acme", "acme.io", good)
     assert org.verify_company_hash("c1", "Acme", "ACME.io", good)
     assert not org.verify_company_hash("c2", "Acme", "acme.io", good)
@@ -125,13 +125,13 @@ def test_verify_company_hash():
 @pytest.mark.parametrize("domain", ["", None])
 def test_verify_company_hash_without_domain(domain):
     org = OrganizationFactory(widget_secret="s3cret")
-    assert org.verify_company_hash("c1", "Acme", domain, _sign(b"company:c1:Acme:"))
+    assert org.verify_company_hash("c1", "Acme", domain, _sign(b"company\nc1\nAcme\n"))
 
 
 @pytest.mark.django_db
 def test_non_ascii_names_are_signed_as_utf8():
     org = OrganizationFactory(widget_secret="s3cret")
-    good = _sign("company:c1:Société:".encode())
+    good = _sign("company\nc1\nSociété\n".encode())
     assert org.verify_company_hash("c1", "Société", "", good)
 
 
@@ -152,14 +152,49 @@ def test_malformed_hash_input_returns_false_without_raising():
     assert not org.verify_company_hash("c1", 1, "", good)
     assert not org.verify_company_hash("c1", "A", 1, good)
     assert not org.verify_company_hash("\ud800", "A", "", good)
-    assert not org.verify_company_hash("c1", "", "", _sign(b"company:c1::"))
+    assert not org.verify_company_hash("c1", "", "", _sign(b"company\nc1\n\n"))
 
 
 @pytest.mark.django_db
 def test_hashes_are_not_interchangeable():
     org = OrganizationFactory(widget_secret="s3cret")
     assert not org.verify_email_hash("a@b.io", _sign(b"a@b.io"))
-    assert not org.verify_company_hash("c1", "A", "", _sign(b"c1:A:"))
-    assert not org.verify_company_hash("c1", "A", "", _sign(b"email:c1:A:"))
-    assert not org.verify_email_hash("c1:A:", _sign(b"company:c1:A:"))
+    assert not org.verify_company_hash("c1", "A", "", _sign(b"c1\nA\n"))
+    assert not org.verify_company_hash("c1", "A", "", _sign(b"email:c1\nA\n"))
+    assert not org.verify_email_hash("c1\nA\n", _sign(b"company\nc1\nA\n"))
     assert not org.verify_user_hash("a@b.io", _sign(b"email:a@b.io"))
+
+
+@pytest.mark.django_db
+def test_company_hash_old_colon_format_no_longer_verifies():
+    org = OrganizationFactory(widget_secret="s3cret")
+    assert not org.verify_company_hash(
+        "c1", "Acme", "acme.io", _sign(b"company:c1:Acme:acme.io")
+    )
+
+
+@pytest.mark.django_db
+def test_company_hash_fields_cant_be_shifted_across_colons():
+    """Under the old format these three signed the very same message."""
+    org = OrganizationFactory(widget_secret="s3cret")
+    good = _sign(b"company\nc1\nx:Acme\n")
+    assert org.verify_company_hash("c1", "x:Acme", "", good)
+    assert not org.verify_company_hash("c1:x", "Acme", "", good)
+    assert not org.verify_company_hash("c1", "x", "Acme", good)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("company_id", "name", "domain"),
+    [
+        ("c1\nAcme", "x", ""),
+        ("c1", "Acme\nacme.io", ""),
+        ("c1", "Acme", "acme.io\n"),
+        ("c1", "Acme\n", "acme.io"),
+    ],
+)
+def test_company_hash_refuses_a_newline_in_any_field(company_id, name, domain):
+    """Even correctly signed: a newline could shift a value into the next field."""
+    org = OrganizationFactory(widget_secret="s3cret")
+    message = f"company\n{company_id}\n{name}\n{domain}".encode()
+    assert not org.verify_company_hash(company_id, name, domain, _sign(message))
