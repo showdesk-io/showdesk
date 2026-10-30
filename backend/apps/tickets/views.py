@@ -354,6 +354,9 @@ def _create_or_resume_session(request, org, identity) -> Response:
     the widget stored then decides what happens:
 
     - Anonymous, no valid hash: it goes on, whatever the id sent.
+    - Anonymous with a proven email, no valid hash and no valid ``email_hash``: a
+      logout, as on an identified session below. What it proved stays true of what
+      it wrote, and the next tickets aren't written under that proof.
     - Anonymous, valid hash: a login. The identified session replaces it, and takes
       its conversations.
     - Identified, valid hash: the user's own session, or the session of whoever
@@ -376,7 +379,10 @@ def _create_or_resume_session(request, org, identity) -> Response:
             and user_hash
             and org.verify_user_hash(external_user_id, user_hash)
         )
-        if not is_login:
+        lost_proof = bool(stored.email_verified_at) and not org.verify_email_hash(
+            email or stored.email, claims["email_hash"]
+        )
+        if not is_login and not lost_proof:
             _record_session_resume(org, stored, name, email, claims["email_hash"])
             _link_session_contact(org, stored, **claims)
             return Response(WidgetSessionSerializer(stored).data)

@@ -786,6 +786,16 @@ class TestWidgetResponses:
             format="json",
             **headers,
         )
+        self._assert_clean(res, 201)  # Unsigned, so a logout from its proven email.
+
+    def test_session_post_resuming(self, api_client, headers, organization):
+        session = WidgetSession.objects.create(organization=organization)
+        res = api_client.post(
+            f"{TICKETS}widget_session/",
+            {"session_id": str(session.id)},
+            format="json",
+            **headers,
+        )
         self._assert_clean(res)
 
     def test_session_patch(self, api_client, headers):

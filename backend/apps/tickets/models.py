@@ -377,7 +377,8 @@ class Ticket(TimestampedModel):
 
         A signed external id is proof whatever the email. A proven email only is
         while the contact still holds it, since an agent can change it: the
-        session's date is about the address it had then.
+        session's date is about the address it had then. And only for what was written
+        since: a proof says nothing of who wrote the session's earlier tickets.
         """
         session = self.widget_session
         if self.source in (self.Source.AGENT, self.Source.API) or (
@@ -396,6 +397,7 @@ class Ticket(TimestampedModel):
         email = session.email.strip().lower()
         return bool(
             session.email_verified_at
+            and self.created_at >= session.email_verified_at
             and email
             and email == self.contact.email.strip().lower()
         )

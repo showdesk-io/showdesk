@@ -183,6 +183,12 @@ a malformed `external_user_id` is a 400.
    session id alone (`X-Widget-Session`), so an id stays a bearer token (see §8). The
    session id the widget stored decides what an init does:
    - **Anonymous, no valid hash**: resumed. An id sent without a valid hash is ignored.
+   - **Anonymous with a proven email, no valid hash and no valid `email_hash`
+     (logout)**: handled as an identified session's logout below: a new anonymous
+     session, the stored one left as it is. The proof stays true of what that session
+     wrote, and nothing new is written under it. An integrator signing the email on every
+     init keeps its session. A wrong `user_hash` here is refused (403) as on an identified
+     session, since nothing else in the request proves anything.
    - **Anonymous, valid hash (login)**: the identified session is found or created,
      and returned for the widget to store instead. In one transaction, within the
      organization, the anonymous session's tickets move to it and to its Contact
@@ -314,9 +320,10 @@ is a 400. A number as `name` becomes text and a long one is cut; any other unusa
 that gets a field wrong doesn't stop the widget.
 
 Tickets expose a read-only `sender_verified`: whether this ticket's sender proved
-being its Contact (session email verified or HMAC-identified on that Contact, or the
-conversation link once the email channel adds it, and never on a ticket written before
-a login, rule 8). It's null when there's no outside
+being its Contact (HMAC-identified on that Contact, session email verified before the
+ticket was written, or the conversation link once the email channel adds it, and never
+on a ticket written before a login, rule 8). It relates to the Contact, not to the
+ticket's `requester_email`. It's null when there's no outside
 sender to verify: an agent-created ticket (source `agent` or `api`, or no session and no
 inbound sender).
 
@@ -386,7 +393,9 @@ inbound sender).
   bearer token through `X-Widget-Session`, on its conversations and its history, for
   whoever kept it: only `POST` resume is gated by the hash (rule 8).
 - Pages with and without identity on one origin share the stored id, so each switch from
-  a signed page to an unsigned one creates a new anonymous session.
+  a signed page to an unsigned one creates a new anonymous session. The same goes for a
+  session proven by `email_hash`, and for the email channel's later proof of ownership
+  when it adds one, unless that channel gives the widget something to sign with.
 - A wrong `user_hash` returns 403 and the widget doesn't start. A host app signing with
   an old secret loses the widget on its identified pages, not only their history.
 - Anonymization leaves personal data in places it can't judge: agent replies and internal

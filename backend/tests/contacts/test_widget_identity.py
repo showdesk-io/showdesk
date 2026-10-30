@@ -1046,11 +1046,10 @@ class TestEmailOnResume:
     def test_anonymous_session_keeps_its_first_email_unless_signed(
         self, api_client, org, email_hash
     ):
-        session = self._proven(org)
-        before = session.email_verified_at
+        session = WidgetSession.objects.create(organization=org, email="old@x.io")
         self._resume(api_client, org, session, email="new@x.io", email_hash=email_hash)
         assert session.email == "old@x.io"
-        assert session.email_verified_at == before
+        assert session.email_verified_at is None
 
     @pytest.mark.parametrize(
         ("external_user_id", "email"), [("", "OLD@x.io"), ("u1", " old@x.io ")]
@@ -1058,8 +1057,9 @@ class TestEmailOnResume:
     def test_same_email_changes_nothing(self, api_client, org, external_user_id, email):
         session = self._proven(org, external_user_id=external_user_id)
         before = session.email_verified_at
+        signed = {"email_hash": _sign("s3cret", "email:old@x.io")}
         with CaptureQueriesContext(connection) as queries:
-            self._resume(api_client, org, session, email=email)
+            self._resume(api_client, org, session, email=email, **signed)
         assert session.email == "old@x.io"
         assert session.email_verified_at == before
         assert not any('"email"' in sql for sql in _session_updates(queries))
@@ -1068,15 +1068,18 @@ class TestEmailOnResume:
     def test_absent_email_changes_nothing(self, api_client, org, external_user_id):
         session = self._proven(org, external_user_id=external_user_id)
         before = session.email_verified_at
-        self._resume(api_client, org, session, email=None)
+        signed = {"email_hash": _sign("s3cret", "email:old@x.io")}
+        self._resume(api_client, org, session, email=None, **signed)
         assert session.email == "old@x.io"
         assert session.email_verified_at == before
 
-    def test_filling_a_blank_email_clears_a_stale_proof(self, api_client, org):
-        session = WidgetSession.objects.create(
+    def test_a_stale_proof_never_vouches_for_a_new_email(self, api_client, org):
+        stale = WidgetSession.objects.create(
             organization=org, email_verified_at=timezone.now()
         )
-        self._resume(api_client, org, session, email="new@x.io")
+        res = _post(api_client, org, session_id=str(stale.id), email="new@x.io")
+        session = WidgetSession.objects.get(id=res.data["session_id"])
+        assert session != stale
         assert session.email == "new@x.io"
         assert session.email_verified_at is None
 
