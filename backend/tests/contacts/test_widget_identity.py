@@ -880,3 +880,73 @@ def test_database_error_never_loses_a_submitted_ticket(api_client, org):
         res = _submit(api_client, org)
     assert res.status_code == 201
     assert Ticket.objects.get(id=res.data["id"]).contact is None
+
+
+def test_agent_clearing_a_ticket_contact_stays_cleared(api_client, org):
+    session_id = _post(api_client, org, email="bob@x.io").data["session_id"]
+    ticket = TicketFactory(
+        organization=org, widget_session_id=session_id, contact=None, requester=None
+    )
+    _post(api_client, org, session_id=session_id)
+    _patch(api_client, org, session_id, name="Bob")
+    ticket.refresh_from_db()
+    assert ticket.contact is None
+
+
+def test_a_new_contact_links_the_tickets_without_one(api_client, org):
+    session_id = _post(api_client, org, email="a@x.io").data["session_id"]
+    contactless = TicketFactory(
+        organization=org, widget_session_id=session_id, contact=None, requester=None
+    )
+    other = ContactFactory(organization=org)
+    linked = TicketFactory(
+        organization=org, widget_session_id=session_id, contact=other, requester=None
+    )
+    _patch(api_client, org, session_id, email="b@x.io")
+    contactless.refresh_from_db()
+    linked.refresh_from_db()
+    assert contactless.contact.email == "b@x.io"
+    assert linked.contact == other
+
+
+def test_ticket_link_stays_in_the_organization(api_client, org):
+    session = WidgetSession.objects.create(organization=org)
+    foreign = TicketFactory(
+        organization=OrganizationFactory(),
+        widget_session=session,
+        contact=None,
+        requester=None,
+    )
+    _patch(api_client, org, session.id, email="b@x.io")
+    foreign.refresh_from_db()
+    assert foreign.contact is None
+
+
+def test_failing_to_link_tickets_leaves_it_to_the_next_init(api_client, org):
+    session = WidgetSession.objects.create(organization=org, email="bob@x.io")
+    ticket = TicketFactory(
+        organization=org, widget_session=session, contact=None, requester=None
+    )
+    with mock.patch(
+        "apps.tickets.views.Ticket.objects.filter", side_effect=OperationalError
+    ):
+        assert _post(api_client, org, session_id=str(session.id)).status_code == 200
+    session.refresh_from_db()
+    assert session.contact is None
+    _post(api_client, org, session_id=str(session.id))
+    ticket.refresh_from_db()
+    assert ticket.contact.email == "bob@x.io"
+
+
+@pytest.mark.parametrize("field", ["traits", "company"])
+@pytest.mark.parametrize("raw", ['"text"', "1", "[1]", "true", _nested()])
+def test_traits_or_company_that_isnt_an_object_is_ignored(api_client, org, field, raw):
+    body = (
+        f'{{"external_user_id": "u1", "user_hash": "{_sign("s3cret", "u1")}", '
+        f'"{field}": {raw}}}'
+    )
+    res = _send(api_client, "post", org, body)
+    assert res.status_code == 201
+    contact = WidgetSession.objects.get(id=res.data["session_id"]).contact
+    assert contact.attributes == {}
+    assert contact.company is None

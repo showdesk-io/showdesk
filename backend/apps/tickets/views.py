@@ -3,7 +3,7 @@
 import logging
 
 from django.core.exceptions import ValidationError
-from django.db import DatabaseError, models
+from django.db import DatabaseError, models, transaction
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
@@ -148,41 +148,163 @@ def _company_hash_is_valid(org, company, company_hash) -> bool:
     )
 
 
-def _link_session_contact(request, org, session, identity) -> None:
+def _contact_claims(identity) -> dict:
+    """Pick from the validated payload what ``_link_session_contact`` takes."""
+    keys = ("email_hash", "company_hash", "traits", "company")
+    return {key: identity.get(key) for key in keys}
+
+
+def _link_session_contact(
+    org, session, *, email_hash=None, company_hash=None, traits=None, company=None
+) -> None:
     """Resolve the session's contact from the widget init payload.
 
-    ``identity`` is the validated ``WidgetIdentitySerializer`` data. ``email_hash``
-    and ``company_hash`` are optional: an invalid one is ignored (the value stays
+    All of it is validated ``WidgetIdentitySerializer`` data. ``email_hash`` and
+    ``company_hash`` are optional: an invalid one is ignored (the value stays
     unsigned) so a misconfigured host app never breaks the widget. For the same
     reason a database error (a conflict the service's retry couldn't settle, a
     deadlock, a lock timeout) is logged, and the session goes on without a contact
     until the next init.
     """
-    email_hash = identity.get("email_hash")
     email_verified = bool(
         session.email
         and email_hash
         and org.verify_email_hash(session.email, email_hash)
     )
-    company = request.data.get("company")
+    previous_contact_id = session.contact_id
     try:
-        resolve_contact_for_widget_session(
-            session,
-            email_verified=email_verified,
-            traits=request.data.get("traits"),
-            company=company,
-            company_verified=_company_hash_is_valid(
-                org, company, identity.get("company_hash")
-            ),
-        )
-        # The normal flow is first message, then contact nudge: tickets opened
-        # before the session had a contact would otherwise never get one.
-        if session.contact_id:
-            Ticket.objects.filter(widget_session=session, contact__isnull=True).update(
-                contact_id=session.contact_id
+        # Together: the tickets only get linked when the contact changes, so a
+        # contact committed without them would leave them unlinked for good.
+        with transaction.atomic():
+            resolve_contact_for_widget_session(
+                session,
+                email_verified=email_verified,
+                traits=traits,
+                company=company,
+                company_verified=_company_hash_is_valid(org, company, company_hash),
             )
+            # The normal flow is first message, then contact nudge: tickets opened
+            # before the session had a contact would otherwise never get one. Only
+            # then: on any other visit, a ticket without a contact is one an agent
+            # cleared.
+            if session.contact_id and session.contact_id != previous_contact_id:
+                Ticket.objects.filter(
+                    organization=org, widget_session=session, contact__isnull=True
+                ).update(contact_id=session.contact_id)
     except DatabaseError:
+        session.contact_id = previous_contact_id
         logger.exception("Could not link widget session %s to a contact", session.pk)
+
+
+def _update_session(request, org, identity) -> Response:
+    """PATCH: update the contact info (name/email) of an existing session."""
+    session, err = _get_widget_session(request, org)
+    if err:
+        return err
+    name = identity.get("name")
+    email = identity.get("email")
+    fields = ["last_seen_at", "updated_at"]
+    if name is not None:
+        session.name = name
+        fields.append("name")
+    if email is not None:
+        # The proof was about the previous email.
+        if email.lower() != session.email.strip().lower():
+            session.email_verified_at = None
+            fields.append("email_verified_at")
+        session.email = email
+        fields.append("email")
+    session.save(update_fields=fields)
+    # Backfill on linked tickets with blank requester info
+    if session.name or session.email:
+        update_fields = {}
+        if session.name:
+            update_fields["requester_name"] = session.name
+        if session.email:
+            update_fields["requester_email"] = session.email
+        Ticket.objects.filter(
+            widget_session=session,
+            requester_name="",
+        ).update(**update_fields)
+    _link_session_contact(org, session, **_contact_claims(identity))
+    return Response(WidgetSessionSerializer(session).data)
+
+
+def _create_or_resume_session(request, org, identity) -> Response:
+    """POST: create a new session or resume an existing one."""
+    session_id = request.data.get("session_id")
+    if not isinstance(session_id, str):
+        session_id = None  # str() on a deeply nested list overflows the stack.
+    external_user_id = identity.get("external_user_id") or ""
+    user_hash = identity.get("user_hash") or ""
+    name = identity.get("name") or ""
+    email = identity.get("email") or ""
+    claims = _contact_claims(identity)
+
+    # Try to resume existing session
+    if session_id:
+        try:
+            session = WidgetSession.objects.get(id=session_id, organization=org)
+        except (WidgetSession.DoesNotExist, ValidationError):
+            session = None
+
+        # Identity mismatch (e.g. a different user logged into the same
+        # browser): drop the stored session_id and fall through so the
+        # HMAC branch finds-or-creates the legitimate session for this
+        # user. Anonymous sessions (no external_user_id) can still be
+        # claimed by an identified user on the next branch.
+        if (
+            session is not None
+            and session.external_user_id
+            and external_user_id
+            and session.external_user_id != external_user_id
+        ):
+            session = None
+
+        if session is not None:
+            _record_session_resume(session, name, email)
+            _link_session_contact(org, session, **claims)
+            return Response(WidgetSessionSerializer(session).data)
+
+    # HMAC-identified user: find-or-create by external_user_id
+    if external_user_id and user_hash:
+        if not org.widget_secret:
+            return Response(
+                {"error": "Identity verification not configured."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not org.verify_user_hash(external_user_id, user_hash):
+            return Response(
+                {"error": "Invalid user_hash."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        session, created = WidgetSession.objects.get_or_create(
+            organization=org,
+            external_user_id=external_user_id,
+            defaults={
+                "name": name,
+                "email": email,
+                "user_agent": request.META.get("HTTP_USER_AGENT", ""),
+            },
+        )
+        if not created:
+            _record_session_resume(session, name, email)
+        _link_session_contact(org, session, **claims)
+        resp_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(WidgetSessionSerializer(session).data, status=resp_status)
+
+    # Anonymous session
+    session = WidgetSession.objects.create(
+        organization=org,
+        name=name,
+        email=email,
+        user_agent=request.META.get("HTTP_USER_AGENT", ""),
+    )
+    _link_session_contact(org, session, **claims)
+    return Response(
+        WidgetSessionSerializer(session).data,
+        status=status.HTTP_201_CREATED,
+    )
 
 
 class TicketViewSet(viewsets.ModelViewSet):
@@ -713,110 +835,8 @@ class TicketViewSet(viewsets.ModelViewSet):
         identity = serializer.validated_data
 
         if request.method == "PATCH":
-            session, err = _get_widget_session(request, org)
-            if err:
-                return err
-            name = identity.get("name")
-            email = identity.get("email")
-            fields = ["last_seen_at", "updated_at"]
-            if name is not None:
-                session.name = name
-                fields.append("name")
-            if email is not None:
-                # The proof was about the previous email.
-                if email.lower() != session.email.strip().lower():
-                    session.email_verified_at = None
-                    fields.append("email_verified_at")
-                session.email = email
-                fields.append("email")
-            session.save(update_fields=fields)
-            # Backfill on linked tickets with blank requester info
-            if session.name or session.email:
-                update_fields = {}
-                if session.name:
-                    update_fields["requester_name"] = session.name
-                if session.email:
-                    update_fields["requester_email"] = session.email
-                Ticket.objects.filter(
-                    widget_session=session,
-                    requester_name="",
-                ).update(**update_fields)
-            _link_session_contact(request, org, session, identity)
-            return Response(WidgetSessionSerializer(session).data)
-
-        # POST — create or resume
-        session_id = request.data.get("session_id")
-        if not isinstance(session_id, str):
-            session_id = None  # str() on a deeply nested list overflows the stack.
-        external_user_id = identity.get("external_user_id") or ""
-        user_hash = identity.get("user_hash") or ""
-        name = identity.get("name") or ""
-        email = identity.get("email") or ""
-
-        # Try to resume existing session
-        if session_id:
-            try:
-                session = WidgetSession.objects.get(id=session_id, organization=org)
-            except (WidgetSession.DoesNotExist, ValidationError):
-                session = None
-
-            # Identity mismatch (e.g. a different user logged into the same
-            # browser): drop the stored session_id and fall through so the
-            # HMAC branch finds-or-creates the legitimate session for this
-            # user. Anonymous sessions (no external_user_id) can still be
-            # claimed by an identified user on the next branch.
-            if (
-                session is not None
-                and session.external_user_id
-                and external_user_id
-                and session.external_user_id != external_user_id
-            ):
-                session = None
-
-            if session is not None:
-                _record_session_resume(session, name, email)
-                _link_session_contact(request, org, session, identity)
-                return Response(WidgetSessionSerializer(session).data)
-
-        # HMAC-identified user: find-or-create by external_user_id
-        if external_user_id and user_hash:
-            if not org.widget_secret:
-                return Response(
-                    {"error": "Identity verification not configured."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-            if not org.verify_user_hash(external_user_id, user_hash):
-                return Response(
-                    {"error": "Invalid user_hash."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-            session, created = WidgetSession.objects.get_or_create(
-                organization=org,
-                external_user_id=external_user_id,
-                defaults={
-                    "name": name,
-                    "email": email,
-                    "user_agent": request.META.get("HTTP_USER_AGENT", ""),
-                },
-            )
-            if not created:
-                _record_session_resume(session, name, email)
-            _link_session_contact(request, org, session, identity)
-            resp_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
-            return Response(WidgetSessionSerializer(session).data, status=resp_status)
-
-        # Anonymous session
-        session = WidgetSession.objects.create(
-            organization=org,
-            name=name,
-            email=email,
-            user_agent=request.META.get("HTTP_USER_AGENT", ""),
-        )
-        _link_session_contact(request, org, session, identity)
-        return Response(
-            WidgetSessionSerializer(session).data,
-            status=status.HTTP_201_CREATED,
-        )
+            return _update_session(request, org, identity)
+        return _create_or_resume_session(request, org, identity)
 
     @action(
         detail=False,

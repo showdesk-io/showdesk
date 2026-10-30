@@ -491,6 +491,16 @@ class WidgetEmailField(serializers.Field):
         return email
 
 
+class WidgetObjectField(serializers.Field):
+    """A JSON object, for the service to look into. Anything else reads as absent."""
+
+    def __init__(self, **kwargs):
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        return data if isinstance(data, dict) else None
+
+
 class WidgetExternalIdField(StrictCharField):
     """A user id, as a string. A plain JavaScript host may pass an integer."""
 
@@ -531,6 +541,8 @@ class WidgetIdentitySerializer(serializers.Serializer):
     user_hash = WidgetHashField(bad_shape=BAD_SHAPE_USER_HASH)
     email_hash = WidgetHashField()
     company_hash = WidgetHashField()
+    traits = WidgetObjectField()
+    company = WidgetObjectField()
 
     def validate_external_user_id(self, value: str | None) -> str | None:
         if value and value.startswith(RESERVED_EXTERNAL_ID_PREFIXES):
