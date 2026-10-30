@@ -21,11 +21,18 @@ class _Invalid(Exception):
     pass
 
 
+def _text(value: Any) -> str:
+    try:
+        return str(value)
+    except ValueError as exc:  # An integer beyond Python's int-to-str digit limit.
+        raise _Invalid from exc
+
+
 def _coerce(type_: str, value: Any, options: Any) -> Any:
     if type_ == "string":
         if isinstance(value, (dict, list)):
             raise _Invalid
-        return str(value)[:_STRING_MAX]
+        return _text(value)[:_STRING_MAX]
     if type_ == "number":
         if isinstance(value, bool):
             raise _Invalid
@@ -45,7 +52,7 @@ def _coerce(type_: str, value: Any, options: Any) -> Any:
             raise _Invalid
         if isinstance(value, date):
             return value.isoformat()[:10]
-        text = str(value)
+        text = _text(value)
         try:
             parsed = parse_datetime(text) or parse_date(text)
         except ValueError as exc:
@@ -65,11 +72,12 @@ def _coerce(type_: str, value: Any, options: Any) -> Any:
     if type_ == "url":
         if isinstance(value, (dict, list)):
             raise _Invalid
+        text = _text(value)
         try:
-            _url_validator(str(value))
+            _url_validator(text)
         except ValidationError as exc:
             raise _Invalid from exc
-        return str(value)
+        return text
     raise _Invalid
 
 

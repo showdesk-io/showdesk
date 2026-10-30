@@ -1,15 +1,38 @@
 """Contact identity resolution shared by the widget and inbound channels.
 
-Security rules:
+Threat model: a widget session's email, name, traits and company come from page
+JavaScript, so a legitimately identified user can forge them. Only ``user_hash``
+(the external id), ``email_hash`` and ``company_hash`` are signed by the host app.
 
-- A *declared* email (typed by the user, set in page JavaScript, or the sender
-  of an inbound mail) grants nothing: it never moves an email between contacts,
-  never merges two contacts, never marks anything verified, and never writes
-  on a contact that already exists.
-- Only a proven email (``email_verified=True``) may attach an identified
-  session to an existing email-only contact, and it only counts when it is the
-  email the contact ends up with.
-- An anonymized contact is never written to again.
+Email rules:
+
+- ``Contact.email`` never receives an unproven email on an identified contact.
+  An identified session's unproven email goes to ``declared_email`` on its own
+  contact, where the latest value wins.
+- A proven email (``email_verified=True``) fills the blank ``email`` of the
+  session's contact unless another contact owns it, or attaches the session to
+  an email-only contact when the external id is new. It is never moved between
+  contacts, and it only counts when it is the email the contact ends up with.
+- Anonymous sessions and inbound mail still use email-only contacts, first come,
+  unverified: that grants no access, and a proof later attaches to the contact.
+- An anonymous session's unproven email writes nothing on a contact that already
+  exists: no seen dates, no ``updated_at``, no company. It only links the session.
+  An inbound mail writes one thing at most: a missing company, from the domain of
+  the email the contact already holds (see ``resolve_contact_for_email``).
+- Two contacts are never merged.
+
+Company rules, without a valid ``company_hash``: an existing company is never
+modified, only linked, and a contact that already has a company is never moved.
+A new company takes the name and traits, and the domain only if it's the domain
+of the email proven by this session. With ``company_verified=True``, the payload
+is a full upsert and may move the contact. Nobody takes another company's domain.
+Auto-linking on the email domain happens on an identified contact only from a
+proven email, and on an anonymous session only when it creates the contact.
+
+An anonymized contact is never written to again. Every write happens under a row
+lock taken by the lookup that found the contact, so its state is current: an
+anonymization committed before the lock is seen, and one that comes after has to
+wait for this transaction. ``anonymize_contact`` must lock the same row.
 
 Every value here comes from the browser or a mail header. Names are display
 data and get truncated to fit their column. Identifiers (email, external id,
@@ -23,7 +46,7 @@ from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.core.validators import DomainNameValidator, validate_email
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 
 from apps.organizations.models import extract_email_domain, is_public_email_domain
@@ -36,9 +59,11 @@ _NAME_MAX = Contact._meta.get_field("name").max_length
 _EXTERNAL_ID_MAX = Contact._meta.get_field("external_id").max_length
 _COMPANY_NAME_MAX = Company._meta.get_field("name").max_length
 _COMPANY_EXTERNAL_ID_MAX = Company._meta.get_field("external_id").max_length
-_DOMAIN_MAX = Company._meta.get_field("domain").max_length
 
 _domain_validator = DomainNameValidator()
+
+# A visit isn't an edit of the record: these alone don't bump ``updated_at``.
+_SEEN_FIELDS = {"first_seen_at", "last_seen_at"}
 
 
 def _clean_text(value: Any) -> str:
@@ -58,8 +83,6 @@ def _clean_text(value: Any) -> str:
 
 def _clean_email(value: Any) -> str:
     """Return the canonical form of an email address, or "" if it isn't valid."""
-    if not isinstance(value, str):
-        return ""
     email = _clean_text(value).lower()
     if not email or len(email) > _EMAIL_MAX:
         return ""
@@ -72,10 +95,8 @@ def _clean_email(value: Any) -> str:
 
 def _clean_domain(value: Any) -> str:
     """Return the canonical form of a domain name, or "" if it isn't valid."""
-    if not isinstance(value, str):
-        return ""
     domain = _clean_text(value).lower().rstrip(".")
-    if not domain or len(domain) > _DOMAIN_MAX:
+    if not domain:
         return ""
     try:
         _domain_validator(domain)
@@ -89,31 +110,80 @@ def _clean_external_id(value: Any, max_length: int) -> str:
     return text if len(text) <= max_length else ""
 
 
-def _email_taken(organization, email: str, *, contact: Contact) -> bool:
-    return (
-        Contact.objects.filter(organization=organization, email=email)
-        .exclude(pk=contact.pk)
-        .exists()
-    )
+def _locked(model: type[models.Model], **lookup) -> Any:
+    """Return the matching row, locked for this transaction, or None.
+
+    Under READ COMMITTED a lookup that had to wait for the lock checks its
+    filters again on the committed row, so what it returns is current. NO KEY
+    lets inserts referencing the row (a new ticket's contact) go through.
+    """
+    return model.objects.select_for_update(no_key=True).filter(**lookup).first()
 
 
-def _autolink_company(contact: Contact) -> None:
+def _get_or_create_locked(
+    model: type[models.Model], defaults: dict[str, Any], **lookup
+) -> tuple[Any, bool]:
+    """``get_or_create`` returning a row that's locked unless we just created it.
+
+    The row is None if a concurrent transaction deleted it in the meantime.
+    """
+    row = _locked(model, **lookup)
+    if row is not None:
+        return row, False
+    row, created = model.objects.get_or_create(**lookup, defaults=defaults)
+    return (row, True) if created else (_locked(model, pk=row.pk), False)
+
+
+def _set(instance: models.Model, changed: set[str], **values: Any) -> None:
+    """Assign ``values``, recording in ``changed`` the fields that really differ."""
+    for field, value in values.items():
+        if getattr(instance, field) != value:
+            setattr(instance, field, value)
+            changed.add(field)
+
+
+def _save_changes(instance: models.Model, changed: set[str]) -> None:
+    """Write only the fields in ``changed``, and nothing at all if it's empty."""
+    if not changed:
+        return
+    fields = set(changed)
+    if fields - _SEEN_FIELDS:
+        fields.add("updated_at")
+    instance.save(update_fields=fields)
+
+
+def _merged_attributes(stored: Any, cleaned: dict[str, Any]) -> Any:
+    """Return ``stored`` updated with ``cleaned``. Nothing cleaned changes nothing."""
+    if not cleaned:
+        return stored
+    return {**(stored if isinstance(stored, dict) else {}), **cleaned}
+
+
+def _email_taken(organization, email: str) -> bool:
+    return Contact.objects.filter(organization=organization, email=email).exists()
+
+
+def _domain_taken(organization, domain: str) -> bool:
+    return Company.objects.filter(organization=organization, domain=domain).exists()
+
+
+def _autolink_company(contact: Contact, changed: set[str]) -> None:
     if contact.company_id or not contact.email:
         return
     domain = extract_email_domain(contact.email)
     if not domain or is_public_email_domain(domain):
         return
     company = Company.objects.filter(
-        organization=contact.organization, domain=domain
+        organization_id=contact.organization_id, domain=domain
     ).first()
     if company:
         contact.company = company
+        changed.add("company")
 
 
-def _touch(contact: Contact) -> None:
+def _touch(contact: Contact, changed: set[str]) -> None:
     now = timezone.now()
-    contact.first_seen_at = contact.first_seen_at or now
-    contact.last_seen_at = now
+    _set(contact, changed, first_seen_at=contact.first_seen_at or now, last_seen_at=now)
 
 
 def resolve_contact_for_email(
@@ -122,90 +192,142 @@ def resolve_contact_for_email(
     """Find or create the contact owning a *declared* email address.
 
     Return None when the address is unusable or belongs to an anonymized
-    contact. The name only applies to a contact created here.
+    contact. The name only applies to a contact created here. The only write on
+    an existing contact is a missing company, from the domain of the email it
+    already holds, and not on an identified contact until that email is proven.
+    An address merely declared by an identified session sits in
+    ``declared_email``, so it never leads here to that session's contact.
     """
     email = _clean_email(email)
     if not email:
         return None
-    contact, _ = Contact.objects.get_or_create(
-        organization=organization,
-        email=email,
-        defaults={"name": _clean_text(name)[:_NAME_MAX]},
-    )
-    if contact.is_anonymized:
-        return None
-    _autolink_company(contact)
-    contact.save()
+    with transaction.atomic():
+        contact, _ = _get_or_create_locked(
+            Contact,
+            {"name": _clean_text(name)[:_NAME_MAX]},
+            organization=organization,
+            email=email,
+        )
+        if contact is None or contact.is_anonymized:
+            return None
+        if not contact.external_id or contact.email_verified_at:
+            changed: set[str] = set()
+            _autolink_company(contact, changed)
+            _save_changes(contact, changed)
     return contact
 
 
-def _upsert_company(organization, payload: Any) -> Company | None:
+def _upsert_signed_company(
+    organization, external_id: str, name: str, domain: str, traits: dict[str, Any]
+) -> Company | None:
+    """Apply a payload signed by the host app, except for another company's domain."""
+    company, _ = _get_or_create_locked(
+        Company, {"name": name}, organization=organization, external_id=external_id
+    )
+    if company is None:
+        return None
+    changed: set[str] = set()
+    _set(company, changed, name=name)
+    if domain and domain != company.domain and not _domain_taken(organization, domain):
+        _set(company, changed, domain=domain)
+    _set(company, changed, attributes=_merged_attributes(company.attributes, traits))
+    _save_changes(company, changed)
+    return company
+
+
+def _get_or_create_unsigned_company(
+    organization,
+    external_id: str,
+    name: str,
+    domain: str,
+    traits: dict[str, Any],
+    proven_email: str,
+) -> Company:
+    """Link to an existing company untouched, or create one from the payload."""
+    company = Company.objects.filter(
+        organization=organization, external_id=external_id
+    ).first()
+    if company is not None:
+        return company
+    # The proven mailbox is the only evidence that this user is at that domain,
+    # and a shared webmail domain is no evidence of being at any company.
+    if (
+        not domain
+        or domain != extract_email_domain(proven_email)
+        or is_public_email_domain(domain)
+        or _domain_taken(organization, domain)
+    ):
+        domain = ""
+    company, _ = Company.objects.get_or_create(
+        organization=organization,
+        external_id=external_id,
+        defaults={"name": name, "domain": domain, "attributes": traits},
+    )
+    return company
+
+
+def _resolve_company(
+    organization, payload: Any, *, verified: bool, proven_email: str
+) -> Company | None:
     if not isinstance(payload, dict):
         return None
     external_id = _clean_external_id(payload.get("id"), _COMPANY_EXTERNAL_ID_MAX)
     name = _clean_text(payload.get("name"))[:_COMPANY_NAME_MAX]
     if not external_id or not name:
         return None
-    company, _ = Company.objects.get_or_create(
-        organization=organization, external_id=external_id, defaults={"name": name}
-    )
-    company.name = name
     domain = _clean_domain(payload.get("domain"))
-    if (
-        domain
-        and not Company.objects.filter(organization=organization, domain=domain)
-        .exclude(pk=company.pk)
-        .exists()
-    ):
-        company.domain = domain
     defs = CompanyAttributeDef.objects.filter(organization=organization)
-    company.attributes = {
-        **company.attributes,
-        **clean_attributes(defs, payload.get("traits")),
-    }
-    company.save()
-    return company
+    traits = clean_attributes(defs, payload.get("traits"))
+    if verified:
+        return _upsert_signed_company(organization, external_id, name, domain, traits)
+    return _get_or_create_unsigned_company(
+        organization, external_id, name, domain, traits, proven_email
+    )
 
 
-def _resolve_identified(
-    session, external_id: str, email: str, email_verified: bool
-) -> Contact:
-    org = session.organization
-    contact = Contact.objects.filter(organization=org, external_id=external_id).first()
-    if contact is None and email and email_verified:
-        contact = Contact.objects.filter(
-            organization=org, email=email, external_id="", is_anonymized=False
-        ).first()
-        if contact is not None:
-            contact.external_id = external_id
-    if contact is None:
-        contact, _ = Contact.objects.get_or_create(
-            organization=org, external_id=external_id
+def _find_identified(
+    org, external_id: str, proven_email: str, changed: set[str]
+) -> Contact | None:
+    """Return the locked contact of an external id, attaching or creating it."""
+    contact = _locked(Contact, organization=org, external_id=external_id)
+    if contact is None and proven_email:
+        contact = _locked(
+            Contact,
+            organization=org,
+            email=proven_email,
+            external_id="",
+            is_anonymized=False,
         )
-    # Fill a blank email only: a contact's email is never replaced from here,
-    # even by a proven one, and never taken from the contact that owns it.
-    if (
-        email
-        and not contact.is_anonymized
-        and not contact.email
-        and not _email_taken(org, email, contact=contact)
-    ):
-        contact.email = email
+        if contact is not None:
+            _set(contact, changed, external_id=external_id)
+    if contact is None:
+        contact, _ = _get_or_create_locked(
+            Contact, {}, organization=org, external_id=external_id
+        )
     return contact
 
 
-def _detach_from_anonymized(session) -> None:
-    """Stop a session from feeding new tickets to an anonymized contact."""
-    if session.contact_id and session.contact.is_anonymized:
-        session.contact = None
-        session.save(update_fields=["contact"])
+def _record_identified_email(
+    org, contact: Contact, email: str, email_verified: bool, changed: set[str]
+) -> None:
+    """Store what an identified session says its email is, on its own contact."""
+    if not email_verified:
+        # The email it already holds is no separate claim for agents to review.
+        _set(contact, changed, declared_email="" if email == contact.email else email)
+    elif not contact.email and not _email_taken(org, email):
+        # A verification date left by a previous email is about that email.
+        _set(contact, changed, email=email, email_verified_at=None)
 
 
-def _resolve_session_once(session, email_verified, traits, company) -> Contact | None:
+def _resolve_session_once(
+    session, email_verified: bool, traits: Any, company: Any, company_verified: bool
+) -> Contact | None:
     org = session.organization
     email = _clean_email(session.email)
     name = _clean_text(session.name)[:_NAME_MAX]
     identified = bool(session.external_user_id)
+    created = False
+    changed: set[str] = set()
 
     if identified:
         external_id = _clean_external_id(session.external_user_id, _EXTERNAL_ID_MAX)
@@ -214,43 +336,74 @@ def _resolve_session_once(session, email_verified, traits, company) -> Contact |
             # Don't fall back on the email: this session claimed an identity.
             contact = None
         else:
-            contact = _resolve_identified(session, external_id, email, email_verified)
+            proven_email = email if email_verified else ""
+            contact = _find_identified(org, external_id, proven_email, changed)
     elif email:
-        contact, _ = Contact.objects.get_or_create(
-            organization=org, email=email, defaults={"name": name}
+        contact, created = _get_or_create_locked(
+            Contact, {"name": name}, organization=org, email=email
         )
     else:
         contact = None
 
     if contact is None or contact.is_anonymized:
-        _detach_from_anonymized(session)
+        if session.contact_id:
+            session.contact = None
+            session.save(update_fields=["contact", "updated_at"])
         return None
+
+    if identified and email:
+        _record_identified_email(org, contact, email, email_verified, changed)
 
     # The email is proven only if it's the one this contact holds: a contact
     # that kept another email, or lost this one to its owner, proves nothing.
     email_proven = bool(email_verified and email and contact.email == email)
+    if email_proven:
+        _set(
+            contact,
+            changed,
+            email_verified_at=contact.email_verified_at or timezone.now(),
+        )
+        if contact.declared_email == email:
+            _set(contact, changed, declared_email="")
 
     # What the browser says about a contact only counts once it proved who it
     # is. A declared email must not let anyone edit the contact owning it.
-    if identified or email_proven:
+    trusted = identified or email_proven
+    if trusted:
         if name and not contact.name:
-            contact.name = name
+            _set(contact, changed, name=name)
         defs = ContactAttributeDef.objects.filter(organization=org)
-        contact.attributes = {**contact.attributes, **clean_attributes(defs, traits)}
-    if identified:
-        contact.company = _upsert_company(org, company) or contact.company
-    if email_proven:
-        contact.email_verified_at = contact.email_verified_at or timezone.now()
-    _autolink_company(contact)
-    _touch(contact)
-    contact.save()
+        _set(
+            contact,
+            changed,
+            attributes=_merged_attributes(
+                contact.attributes, clean_attributes(defs, traits)
+            ),
+        )
+    if identified and (company_verified or not contact.company_id):
+        linked = _resolve_company(
+            org,
+            company,
+            verified=company_verified,
+            proven_email=email if email_proven else "",
+        )
+        if linked is not None and linked.pk != contact.company_id:
+            contact.company = linked
+            changed.add("company")
+    if created or (identified and contact.email_verified_at):
+        _autolink_company(contact, changed)
+    if trusted or created:
+        _touch(contact, changed)
+    _save_changes(contact, changed)
 
-    session.contact = contact
-    update_fields = ["contact"]
+    session_changed: set[str] = set()
+    if session.contact_id != contact.pk:
+        session.contact = contact
+        session_changed.add("contact")
     if email_proven and session.email_verified_at is None:
         session.email_verified_at = timezone.now()
-        update_fields.append("email_verified_at")
-    session.save(update_fields=update_fields)
+        session_changed.add("email_verified_at")
+    _save_changes(session, session_changed)
     return contact
 
 
@@ -260,21 +413,32 @@ def resolve_contact_for_widget_session(
     email_verified: bool = False,
     traits: Any = None,
     company: Any = None,
+    company_verified: bool = False,
 ) -> Contact | None:
     """Find or create the contact behind a widget session and link them.
 
     ``session.external_user_id`` must only be set by callers after a
     successful HMAC check. ``email_verified`` must only be True when the
     host app signed the email (``email_hash``) or the user proved ownership.
+    ``company_verified`` must only be True when the host app signed the company
+    (``company_hash``); it has no effect on a session that isn't identified.
 
     Return None when the session has no usable identity or points at an
-    anonymized contact, in which case nothing is written on any contact.
+    anonymized contact, in which case nothing is written on any contact and a
+    contact previously linked to the session is unlinked.
+
+    The retry assumes READ COMMITTED: a concurrent request claimed the email,
+    external id or domain between our check and our save, and the second pass
+    has to see that commit to leave the value alone. A snapshot taken at the
+    start of an enclosing REPEATABLE READ transaction would hide it.
     """
     try:
         with transaction.atomic():
-            return _resolve_session_once(session, email_verified, traits, company)
+            return _resolve_session_once(
+                session, email_verified, traits, company, company_verified
+            )
     except IntegrityError:
-        # A concurrent request claimed the email, external id or domain between
-        # our check and our save. The second pass sees it and leaves it alone.
         with transaction.atomic():
-            return _resolve_session_once(session, email_verified, traits, company)
+            return _resolve_session_once(
+                session, email_verified, traits, company, company_verified
+            )

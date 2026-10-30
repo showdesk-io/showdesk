@@ -56,6 +56,22 @@ def test_contact_email_is_normalized_on_save():
     assert contact.email == "alice@startup.com"
 
 
+def test_contact_declared_email_is_normalized_on_save_and_clean():
+    contact = ContactFactory(declared_email="  Alice@Startup.COM ")
+    contact.refresh_from_db()
+    assert contact.declared_email == "alice@startup.com"
+    unsaved = Contact(declared_email=" Bob@X.io ")
+    unsaved.clean()
+    assert unsaved.declared_email == "bob@x.io"
+
+
+def test_contact_declared_email_is_not_unique():
+    first = ContactFactory(declared_email="same@x.io", email="")
+    ContactFactory(
+        organization=first.organization, declared_email="same@x.io", email=""
+    )
+
+
 def test_contact_display_name_falls_back_to_email():
     assert ContactFactory(name="", email="bob@x.io").display_name == "bob@x.io"
     assert ContactFactory(name="Bob", email="bob2@x.io").display_name == "Bob"

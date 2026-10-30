@@ -135,6 +135,11 @@ def test_containers_are_dropped(defs, key, value):
     assert clean_attributes(defs, {key: value}) == {}
 
 
+@pytest.mark.parametrize("key", ["role", "signup", "site", "plan", "seats"])
+def test_integer_beyond_the_digit_limit_is_dropped(defs, key):
+    assert clean_attributes(defs, {key: 10**5000}) == {}
+
+
 @pytest.mark.parametrize("key", ["signup", "site", "plan", "role", "seats"])
 def test_deeply_nested_value_does_not_overflow_the_stack(defs, key):
     assert clean_attributes(defs, {key: _deeply_nested()}) == {}

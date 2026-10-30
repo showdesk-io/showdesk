@@ -84,6 +84,11 @@ class Contact(TimestampedModel):
         blank=True,
         help_text="Set once the contact proved they own this email address.",
     )
+    declared_email = models.EmailField(
+        blank=True,
+        default="",
+        help_text="Unproven email given by an identified session. Grants nothing.",
+    )
     external_id = models.CharField(
         max_length=255,
         blank=True,
@@ -129,6 +134,7 @@ class Contact(TimestampedModel):
     def clean(self) -> None:
         super().clean()
         self.email = _normalize(self.email)
+        self.declared_email = _normalize(self.declared_email)
         if (
             self.company_id
             and self.organization_id
@@ -142,6 +148,7 @@ class Contact(TimestampedModel):
 
     def save(self, *args, **kwargs) -> None:
         self.email = _normalize(self.email)
+        self.declared_email = _normalize(self.declared_email)
         super().save(*args, **kwargs)
 
 
