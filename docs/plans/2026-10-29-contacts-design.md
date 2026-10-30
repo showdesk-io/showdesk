@@ -218,7 +218,9 @@ of the identity fields before touching the session.
 
 Tickets expose a read-only `sender_verified`: whether this ticket's sender proved
 being its Contact (session email verified or HMAC-identified on that Contact, or the
-conversation link once the email channel adds it).
+conversation link once the email channel adds it). It's null when there's no outside
+sender to verify: an agent-created ticket (source `agent` or `api`, or no session and no
+inbound sender).
 
 `Contact.is_unsubscribed` blocks every non-essential email to the contact
 (enforced by the email channel).
