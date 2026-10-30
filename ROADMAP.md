@@ -1,6 +1,6 @@
 # Showdesk Roadmap
 
-> Last updated: 2026-10-29
+> Last updated: 2026-10-30
 
 ---
 
@@ -720,10 +720,30 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 
 ## Phase 3.5 -- Channels & Integrations (next up)
 
-Nothing implemented yet -- only research notes in `docs/brainstorm/`.
+Contacts & Companies, the prerequisite of the email channel, are done on the
+`feat/contacts` branch. The rest is still research notes in `docs/brainstorm/`.
 Today Showdesk sends transactional email (Mailjet via `django-anymail`)
 but cannot **receive** email: `Ticket.source = "email"` exists in the
 model, no inbound pipeline feeds it.
+
+### Contacts & Companies (P0) -- see `docs/plans/2026-10-29-contacts-design.md`
+
+- [x] `Contact`, `Company`, attribute definitions and notes, scoped per organization
+- [x] One contact per person: widget identity (signed external id, proven or declared email), company upsert, company auto-link by email domain
+- [x] Back-fill of existing sessions and tickets, including tickets known only by an end-user requester account (migration + `manage.py backfill_contacts`)
+- [x] Tickets created through the API resolve their contact from their email or end-user requester
+- [x] REST API: contacts, companies, custom attributes, notes, timeline
+- [x] GDPR: contact export and anonymization
+- [x] Frontend: Contacts and Companies pages, contact card and `sender_verified` hint on tickets, custom attributes in Settings
+- [x] Widget: `setUser()` keeps continuity on login and starts over on logout, `email_hash`, company payload
+- [x] Seed: demo contacts, a company and attribute definitions
+- [ ] P1: CSV import of contacts and companies
+- [ ] P1: CSV export
+- [ ] P1: Manual merge of duplicate contacts
+- [ ] P1: Company logo auto-fetch
+- [ ] P1: Audit log of actions on contacts
+- [ ] P1: Saved views for the contact list
+- [ ] P1: Server-side `identify` API
 
 ### Email channel (send + receive) -- see `docs/brainstorm/multi-channel-communication.md`
 
@@ -732,7 +752,8 @@ model, no inbound pipeline feeds it.
 - [ ] Threading: stable `Message-ID` on every outbound reply, `Reply-To: reply+{token}@inbound…` token, `In-Reply-To`/`References` + `[SD-123]` subject fallback
 - [ ] Inbound parsing: quote/signature stripping, attachments to S3, auto-responder / bounce / loop detection, `Fwd:` → new ticket
 - [ ] Agent replies on email tickets go out as email from the org's address (sender domain / DKIM per org)
-- [ ] Requester identity unification (email requester ↔ widget `external_user_id`)
+- [x] Requester identity unification: email requesters and widget `external_user_id` share one `Contact` per person (Contacts & Companies above)
+- [ ] History reunion once an email is proven: reassign an email-only contact's tickets to the identified contact holding the proof
 - [x] Model refactor decision: keep `Ticket → TicketMessage` + `channel`/`external_id` on messages (decided 2026-10-29, see `docs/plans/2026-10-29-email-channel-design.md`); revisit when designing a third channel
 
 ### MCP server -- see `docs/brainstorm/mcp-server.md`
@@ -781,7 +802,7 @@ model, no inbound pipeline feeds it.
 
 ## Summary
 
-*Status as of 2026-10-29.*
+*Status as of 2026-10-30.*
 
 | Area | Progress | What's done | What's left |
 |------|----------|-------------|-------------|
@@ -789,7 +810,7 @@ model, no inbound pipeline feeds it.
 | Backend API | **~99%** | Everything in Phases 0-3 (signup, verified domains, branded emails, SLA CRUD, bulk update, usage dashboard, plans + feature gates) on Django 6.1 | Video duration validation |
 | Frontend | **~99%** | Full agent app on React 19 / Vite 8 / Tailwind 4 / React Router 8 | Agent video reply |
 | Widget | **~99%** | Messaging, recording, identity, MPA, `Showdesk.reset()` | Retry, i18n, accessibility |
-| Tests | **~92%** | 278 pytest + 39 Vitest + Playwright e2e | Widget messaging tests, video API tests |
+| Tests | **~93%** | 1379 pytest + 355 Vitest + 76 widget Vitest + Playwright e2e | Video API tests |
 | Widget UX (Phase 2) | **~92%** | P0/P1 done, P2 mostly done | Screenshot annotation, multi-attach, session replay, video markers |
 | Signup & Onboarding (2.5) | **100%** | Incl. opt-in domain claim (2026-10-29) | -- |
 | Verified Domains (2.6) | **100%** | -- | -- |
@@ -797,12 +818,12 @@ model, no inbound pipeline feeds it.
 | Admin (org) | **~75%** | Agents, teams, widget, tags, priorities, canned responses, domains, branding, SLA | Agent groups, notification prefs, audit log, custom domain, widget code examples |
 | Admin (platform) | **~70%** | Orgs, impersonation, usage dashboard, plans + feature flags + gates | **Billing**, monitoring, announcements |
 | Notifications | **~10%** | Basic emails + in-app WebSocket | SLA breach detection, preferences, webhooks, Slack |
-| Channels & Integrations (3.5) | **0%** | Research notes | Email channel (send + receive), MCP server |
+| Channels & Integrations (3.5) | **~20%** | Contacts & Companies P0 (`feat/contacts`), research notes | Contacts P1, email channel (send + receive), MCP server |
 | Post-MVP / AI | **0%** | Models/flags ready | Everything |
 
 ### Next priorities
 
-1. **Email channel (send + receive)** -- inbound provider + per-org address, threading, agent replies by email (Phase 3.5). *Next up.*
+1. **Email channel (send + receive)** -- inbound provider + per-org address, threading, agent replies by email (Phase 3.5). *Next up, on top of Contacts & Companies once `feat/contacts` is merged.*
 2. **Billing on top of plans** (Stripe Checkout + Customer Portal → `Organization.plan`).
 3. **MCP server MVP** (read-only + draft tools, plan-gated).
 4. SLA breach detection + notifications.

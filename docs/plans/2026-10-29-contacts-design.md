@@ -1,7 +1,7 @@
 # Contacts & Companies — Design Document
 
 > Date: 2026-10-29
-> Status: Validated
+> Status: Validated. P0 implemented on `feat/contacts` (2026-10-30).
 > Phase: 3.5 (Channels & Integrations) — prerequisite of the email channel
 > Research input: `docs/brainstorm/contacts-companies-management.md`
 > Follow-up: `docs/plans/2026-10-29-email-channel-design.md`
@@ -258,13 +258,17 @@ Per organization, in one transaction, by `apps/contacts/backfill.py`:
    a session one.
 4. **Tickets.** A ticket follows its session, whatever its own values. A ticket with no
    session of its organization, or whose session has no identity at all, goes by its
-   vouched external id or else its usable email, or stays unlinked. A ticket whose
+   vouched external id or else its usable email. With no session of its organization, it
+   then goes by its `requester`, when that's an end-user account that doesn't belong to
+   another organization (as in `manage.py seed` and legacy API tickets). Otherwise it
+   stays unlinked: an agent or admin requester never becomes a Contact. A ticket whose
    session ended without a Contact (anonymized, or an id it can't have) stays without
    one.
 5. **New Contacts** take their seen dates from every row linked to them, and their name
    from the most recent session, or else the most recent ticket. Their `declared_email`
    comes from their session, or else their most recent ticket. A ticket whose external
-   id isn't vouched for gives neither a name nor a `declared_email`.
+   id isn't vouched for gives neither a name nor a `declared_email`. A ticket without a
+   name gives its requester account's, if that account holds the Contact's email.
 
 Emails are not marked verified. Existing Contacts are only linked to, never written.
 It's idempotent, and `manage.py backfill_contacts` can run it again after a deploy.
@@ -340,8 +344,14 @@ being its Contact (HMAC-identified on that Contact, session email verified befor
 ticket was written, or the conversation link once the email channel adds it, and never
 on a ticket written before a login, rule 8). It relates to the Contact, not to the
 ticket's `requester_email`. It's null when there's no outside
-sender to verify: an agent-created ticket (source `agent` or `api`, or no session and no
-inbound sender).
+sender to verify: an agent-created ticket (source `agent` or `api`, or no session, no
+inbound sender and no requester account).
+
+Tickets created through `POST /api/v1/tickets/` take the Contact the request names, or
+none on an explicit null. Otherwise they resolve one from `requester_email`, or else an
+end-user `requester` that doesn't belong to another organization. It stays a declared
+email. An agent or admin of the organization never becomes a Contact, by account or
+address.
 
 `widget_submit` answers with `{id, reference}` only, the token being public.
 
@@ -402,10 +412,11 @@ inbound sender).
 - A tab still holding the anonymous session after a login, in another window or as a
   recording popup, gets a 404 on the tickets that moved, misses their replies, and a
   new conversation it starts stays with the anonymous session.
-- The widget only sends its stored id on `init()`. `Showdesk.reset()` clears it, so a
-  login following a reset can't move anything, and `setUser()` doesn't start a new
-  session: identity only reaches the backend on the next `init()`. A single-page app that
-  logs in without a reload gets no continuity until then. Plan Task 15 closes this one.
+- `Showdesk.reset()` clears the stored id, so a login following a reset can't move
+  anything. `setUser()` with a hash sends the stored id with that hash (the login of rule
+  8), so a single-page app keeps its conversation without a reload. `setUser()` without a
+  hash starts a new anonymous session on an identified one, and only changes the local
+  config on an anonymous one: that identity reaches the backend on the next `init()`.
 - A vouched external id on a ticket only proves that the id exists in the organization,
   not that this ticket's sender holds it: `widget_submit` can still name a real user. The
   back-fill can link such a ticket, and take a name or a `declared_email` from it, on a
@@ -429,7 +440,8 @@ inbound sender).
 - Anonymization leaves personal data in places it can't judge: agent replies and internal
   notes on the tickets (free text that may quote the contact), agents' own attachments and
   recordings (a screenshot of the contact's account, say), and the `requester` user of a
-  ticket, an account the Contact doesn't own. It also keeps, on the tickets, the OS, browser
+  ticket, an account the Contact doesn't own, even when the Contact was created from that
+  account's email: its name and email stay readable on the ticket. It also keeps, on the tickets, the OS, browser
   and screen resolution, and the `language`, `timezone` and other whitelisted values of
   `context_metadata`, the names of their tags, the Contact's seen dates, and whatever text
   an agent searched for in a `SavedView`, which can be the contact's name or address.
