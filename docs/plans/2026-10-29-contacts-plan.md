@@ -1309,30 +1309,15 @@ def test_signed_traits_only_apply_to_a_new_company(api_client, org):
 
 
 @pytest.mark.parametrize(
-    "body",
-    [
-        {"email": ["a@x.io"]},
-        {"email": 42},
-        {"email": "x" * 250 + "@x.io"},
-        {"name": {"a": 1}},
-        {"name": "n" * 256},
-        {"external_user_id": True, "user_hash": "x"},
-        {"external_user_id": 1.5, "user_hash": "x"},
-        {"external_user_id": "x" * 256, "user_hash": "x"},
-        {"external_user_id": "\ud800", "user_hash": "x"},
-        {"name": "\ud800"},
-        {"user_hash": ["x"]},
-        {"email_hash": 1},
-        {"email_hash": "é"},
-        {"email_hash": "\ud800"},
-        {"company_hash": {"a": 1}},
-        {"company_hash": "x" * 129},
-    ],
+    "external_user_id", [True, 1.5, 2**63, "x" * 256, "\ud800", ["x"], {"a": 1}]
 )
-def test_malformed_identity_is_refused_before_touching_the_session(api_client, org, body):
+def test_malformed_external_id_is_refused_before_touching_the_session(api_client, org, external_user_id):
     # Raw JSON: DRF's test renderer can't encode the lone surrogates a real
     # request can carry as "\ud800" escapes.
-    raw = {"data": json.dumps(body), "content_type": "application/json"}
+    raw = {
+        "data": json.dumps({"external_user_id": external_user_id, "user_hash": "x"}),
+        "content_type": "application/json",
+    }
     session = WidgetSession.objects.create(organization=org, email="a@x.io", name="A")
     res = api_client.patch(
         URL, **raw,
@@ -1343,6 +1328,20 @@ def test_malformed_identity_is_refused_before_touching_the_session(api_client, o
     assert (session.email, session.name) == ("a@x.io", "A")
     assert api_client.post(URL, **raw, HTTP_X_WIDGET_TOKEN=str(org.api_token)).status_code == 400
     assert WidgetSession.objects.filter(organization=org).count() == 1
+
+
+# Invalid means ignored, never a 400. See test_widget_identity.py for the rest:
+# bad-shape hashes, non-text names and emails, deep nesting.
+BAD_HASHES = [1, 1.5, True, ["x"], {"a": 1}, "é", "\ud800", "x" * 129]
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+def test_bad_shape_user_hash_is_a_wrong_hash_on_find_or_create(api_client, org, bad):
+    raw = json.dumps({"external_user_id": "u1", "user_hash": bad})
+    res = api_client.post(
+        URL, raw, content_type="application/json", HTTP_X_WIDGET_TOKEN=str(org.api_token)
+    )
+    assert res.status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -1525,13 +1524,18 @@ from apps.contacts.services import (
 )
 ```
 
-Identity fields are validated before the session is touched: a wrong type, a value too long for its column or a non-ASCII hash (`hmac.compare_digest` raises `TypeError` on one) is a 400 and nothing is written. Real clients set the limits of that strictness:
+Only `external_user_id` is refused (400) before the session is touched. Everything else follows the design: invalid means ignored, so a host page that gets a field wrong doesn't stop the widget. Real clients set the limits:
 
 - Null means absent, on every field. Direct integrations can send it, and PATCH already treated it that way.
-- `email` is checked as text, not as an email. The contact nudge only checks for an `@` and ignores the response, so a 400 would silently lose the name sent with `a@b`, and `init()` would fail on whatever a host page passes. It's stored as before, and the identity service ignores what isn't a valid email.
+- A badly shaped `email_hash` or `company_hash` (wrong type, over 128 characters, non-ASCII, on which `hmac.compare_digest` raises `TypeError`) reads as `""`: the value stays unsigned.
+- A badly shaped `user_hash` behaves like a wrong hash: ignored when resuming an anonymous session, 403 on find-or-create. It reads as a value no signature can equal rather than `""`, which would pass for an id sent without a hash.
+- `name`: a number becomes text, and a long value is cut to the column. Anything else that isn't text (a boolean, which would stick since a resume only fills a blank name, a list, a value Postgres can't store) reads as absent.
+- `email` is checked as text, not as an email. The contact nudge only checks for an `@` and ignores the response, so a 400 would silently lose the name sent with `a@b`, and `init()` would fail on whatever a host page passes. It's stored as before, and the identity service ignores what isn't a valid email. A non-string, a value Postgres can't store or one over 254 characters reads as absent: a cut email would be somebody else's.
+- `session_id`: a non-string counts as absent, before any `str()` overflows the stack on a deeply nested list.
+- `traits` and `company`: anything but an object reads as absent. The service looks inside the object.
 - `external_user_id` also accepts an integer, as plain JavaScript can pass `init({ user: { id: 42 } })`. It's read as its decimal string, which the HMAC covers. The same goes for `company.id`.
 
-`external_user_id` isn't trimmed, since the HMAC covers its exact value. An id starting with `email:` or `company\n` is refused (400), so a `user_hash` can never double as an `email_hash` or `company_hash`: otherwise a page holding a valid `email_hash` could present it as the `user_hash` of the user `email:<address>`, and a host app whose users choose their id could be made to sign an `email_hash` by accident. Put this serializer in `apps/tickets/serializers.py`:
+`external_user_id` isn't trimmed, since the HMAC covers its exact value. An id starting with `email:` or `company\n` is refused (400), so a `user_hash` can never double as an `email_hash` or `company_hash`: otherwise a page holding a valid `email_hash` could present it as the `user_hash` of the user `email:<address>`, and a host app whose users choose their id could be made to sign an `email_hash` by accident. `Organization.verify_user_hash` refuses those prefixes itself (`RESERVED_EXTERNAL_ID_PREFIXES` lives in `apps/organizations/models.py`), so that holds for every caller, and the serializer and `widget_tickets` keep their 400. Put this serializer in `apps/tickets/serializers.py`:
 
 ```python
 class StrictCharField(serializers.CharField):
@@ -1544,18 +1548,48 @@ class StrictCharField(serializers.CharField):
         return super().run_validation(data)
 
 
-class WidgetHashField(StrictCharField):
-    def __init__(self, **kwargs):
-        super().__init__(
-            required=False, allow_null=True, allow_blank=True, max_length=128,
-            trim_whitespace=False, **kwargs,
-        )
+class WidgetHashField(serializers.Field):
+    def __init__(self, *, bad_shape: str = "", **kwargs):
+        self.bad_shape = bad_shape
+        super().__init__(required=False, allow_null=True, **kwargs)
 
     def to_internal_value(self, data):
-        value = super().to_internal_value(data)
-        if not value.isascii():
-            self.fail("invalid")
-        return value
+        if isinstance(data, str) and len(data) <= 128 and data.isascii():
+            return data
+        return self.bad_shape
+
+
+class WidgetNameField(serializers.Field):
+    def __init__(self, **kwargs):
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        if isinstance(data, (int, float)) and not isinstance(data, bool):
+            data = str(data)
+        if not isinstance(data, str) or not is_storable(data):
+            return None
+        return data.strip()[: WidgetSession._meta.get_field("name").max_length]
+
+
+class WidgetEmailField(serializers.Field):
+    def __init__(self, **kwargs):
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        if not isinstance(data, str) or not is_storable(data):
+            return None
+        email = data.strip()
+        if len(email) > WidgetSession._meta.get_field("email").max_length:
+            return None
+        return email
+
+
+class WidgetObjectField(serializers.Field):
+    def __init__(self, **kwargs):
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        return data if isinstance(data, dict) else None
 
 
 class WidgetExternalIdField(StrictCharField):
@@ -1571,17 +1605,19 @@ class WidgetExternalIdField(StrictCharField):
         return super().run_validation(data)
 
 
-# ``Organization.verify_email_hash`` and ``verify_company_hash`` sign these.
-RESERVED_EXTERNAL_ID_PREFIXES = ("email:", "company\n")
+# A value no signature can equal: a digest is hexadecimal.
+BAD_SHAPE_USER_HASH = "invalid"
 
 
 class WidgetIdentitySerializer(serializers.Serializer):
-    name = StrictCharField(required=False, allow_null=True, allow_blank=True, max_length=255)
-    email = StrictCharField(required=False, allow_null=True, allow_blank=True, max_length=254)
+    name = WidgetNameField()
+    email = WidgetEmailField()
     external_user_id = WidgetExternalIdField()
-    user_hash = WidgetHashField()
+    user_hash = WidgetHashField(bad_shape=BAD_SHAPE_USER_HASH)
     email_hash = WidgetHashField()
     company_hash = WidgetHashField()
+    traits = WidgetObjectField()
+    company = WidgetObjectField()
 
     def validate_external_user_id(self, value: str | None) -> str | None:
         # DRF calls this with None too.
@@ -1592,7 +1628,7 @@ class WidgetIdentitySerializer(serializers.Serializer):
 
 In `widget_session` (POST and PATCH), right after the token check, run the serializer and read `name`, `email`, `external_user_id` and the hashes from its `validated_data` (null becomes `""` on POST, and leaves the field alone on PATCH): `request.data` would give the untrimmed values and null. A `session_id` that isn't a UUID raises Django's `ValidationError` rather than `ValueError`: catch it at both lookups, so it starts a new session on POST and is a 401 in the `X-Widget-Session` header. The ticket history endpoint (`verify_user_hash` at ~391 in `views.py`) refuses the same prefixes with a 400.
 
-Both resume paths of `widget_session` (the `session.save()` calls at ~680 and ~710) go through one helper, which writes `last_seen_at`, `updated_at` and only the fields it actually fills. A full save writes the whole row as it was read, which restores the personal data a concurrent anonymization just wiped, and so would listing `name` and `email` unconditionally. PATCH likewise writes only the fields it was given.
+Both resume paths of `widget_session` (the `session.save()` calls at ~680 and ~710) go through one helper, `_record_session_resume(org, session, name, email, email_hash)`, which writes `last_seen_at`, `updated_at` and only the fields it actually fills. A different email (compared lowercased and stripped) fills a blank one, and replaces it on an identified session, or on any session if `email_hash` signs it: an anonymous session otherwise keeps its first email. Whenever the email changes `email_verified_at` is cleared, and the service sets it again if it can. A full save writes the whole row as it was read, which restores the personal data a concurrent anonymization just wiped, and so would listing `name` and `email` unconditionally. PATCH likewise writes only the fields it was given.
 
 In the PATCH branch, when the email actually changes (compare lowercased, stripped values), also set `session.email_verified_at = None` and add it to the session's `update_fields`: the proof was about the previous email.
 
@@ -1611,48 +1647,71 @@ def _company_hash_is_valid(org, company, company_hash) -> bool:
     )
 
 
-def _link_session_contact(request, org, session, identity) -> None:
+def _contact_claims(identity) -> dict:
+    """Pick from the validated payload what ``_link_session_contact`` takes."""
+    keys = ("email_hash", "company_hash", "traits", "company")
+    return {key: identity.get(key) for key in keys}
+
+
+def _link_session_contact(
+    org, session, *, email_hash=None, company_hash=None, traits=None, company=None
+) -> None:
     """Resolve the session's contact from the widget init payload.
 
-    ``identity`` is the validated ``WidgetIdentitySerializer`` data. ``email_hash``
-    and ``company_hash`` are optional: an invalid one is ignored (the value stays
+    All of it is validated ``WidgetIdentitySerializer`` data. ``email_hash`` and
+    ``company_hash`` are optional: an invalid one is ignored (the value stays
     unsigned) so a misconfigured host app never breaks the widget. For the same
     reason a database error (a conflict the service's retry couldn't settle, a
     deadlock, a lock timeout) is logged, and the session goes on without a contact
     until the next init.
     """
-    email_hash = identity.get("email_hash")
     email_verified = bool(
         session.email and email_hash and org.verify_email_hash(session.email, email_hash)
     )
-    company = request.data.get("company")
+    previous_contact_id = session.contact_id
     try:
-        resolve_contact_for_widget_session(
-            session,
-            email_verified=email_verified,
-            traits=request.data.get("traits"),
-            company=company,
-            company_verified=_company_hash_is_valid(
-                org, company, identity.get("company_hash")
-            ),
-        )
-        # The normal flow is first message, then contact nudge: tickets opened
-        # before the session had a contact would otherwise never get one.
-        if session.contact_id:
-            Ticket.objects.filter(widget_session=session, contact__isnull=True).update(
-                contact_id=session.contact_id
+        # Together: the tickets only get linked when the contact changes, so a
+        # contact committed without them would leave them unlinked for good.
+        with transaction.atomic():
+            resolve_contact_for_widget_session(
+                session,
+                email_verified=email_verified,
+                traits=traits,
+                company=company,
+                company_verified=_company_hash_is_valid(org, company, company_hash),
             )
+            # The normal flow is first message, then contact nudge: tickets opened
+            # before the session had a contact would otherwise never get one. Only
+            # then: on any other visit, a ticket without a contact is one an agent
+            # cleared.
+            if session.contact_id and session.contact_id != previous_contact_id:
+                Ticket.objects.filter(
+                    organization=org, widget_session=session, contact__isnull=True
+                ).update(contact_id=session.contact_id)
     except DatabaseError:
+        session.contact_id = previous_contact_id
         logger.exception("Could not link widget session %s to a contact", session.pk)
 ```
 
-Import `DatabaseError` from `django.db` in `views.py`. Catching it is safe because `ATOMIC_REQUESTS` is off: there's no request transaction for the error to break.
+Import `DatabaseError` and `transaction` from `django.db` in `views.py`. Catching it is safe because `ATOMIC_REQUESTS` is off: there's no request transaction for the error to break.
 
 A valid `company_hash` proves the `id`, `name` and `domain` of the payload (`company_verified=True`), not its `traits`: the service updates the name and domain of an existing company and may move the contact, and applies `traits` to a company it creates only (design rule 4).
 
-In `widget_session`:
-- PATCH: after `session.save(...)` call `_link_session_contact(request, org, session, identity)`.
-- POST: call `_link_session_contact(request, org, session, identity)` immediately before each of the three `return Response(WidgetSessionSerializer(session).data …)` (resume, HMAC, anonymous).
+`widget_session` splits into `_update_session` (PATCH) and `_create_or_resume_session` (POST). Both call `_link_session_contact(org, session, **_contact_claims(identity))` before each `return Response(WidgetSessionSerializer(session).data …)`.
+
+On POST, only a valid `user_hash` gives access to an identified session. The session the widget stored decides what happens (design rule 8):
+
+| Stored session | Payload | Result |
+|---|---|---|
+| Anonymous | no valid hash (wrong, badly shaped, absent, or no widget secret) | Resumed. The id sent is ignored. |
+| Anonymous | valid hash | Login: the identified session is found or created and returned, and takes the conversations. |
+| Identified | valid hash | Find-or-create on the id sent: the user's own session, or the session of another user who logged in since. |
+| Identified | no hash, with or without an id | Logout: a new anonymous session. The stored session and its contact aren't touched. |
+| Identified | wrong or badly shaped hash | 403, as without a stored session. |
+
+The login runs `_move_conversation_to_identified_session(org, anonymous, identified)` after the contact is linked, in a transaction that locks the anonymous session then its tickets, all filtered on `organization=org`. Each ticket gets `widget_session`, `external_user_id`, `contact` (the identified contact, or its own if the session has none: anonymized, or a database error while linking) and `context_metadata["pre_login_anonymous"] = True`; `bulk_update` leaves `updated_at` alone. The session's `TicketMessage`s get `widget_session`. A retry finds nothing left to move. A database error isn't caught there, unlike in `_link_session_contact`: the widget only stores the id of a successful response, so it keeps the anonymous id and its next init retries.
+
+`get_or_create` settles the race between two first requests since Task 8's migration `tickets/0011` added the unique constraint: the loser's insert fails, and it reads the winner's row.
 
 Every `Ticket.objects.create(...)` with `widget_session=session` (in `widget_message` and `widget_message_attachment`; `widget_upload_attachment` never creates a ticket) gets `contact_id=session.contact_id,`.
 
@@ -1683,6 +1742,8 @@ In `widget_submit`, after `serializer.save(...)`:
 - Test: `backend/tests/contacts/test_backfill.py`
 
 The function takes `(apps, schema_editor)` so it can be unit-tested with the real registry.
+
+The back-fill follows `tickets/0011_one_widget_session_per_external_user`, which merges duplicate sessions (`apps/tickets/session_merge.py`: the oldest stays, the others' tickets and messages move to it) and then adds the partial unique constraint on `(organization, external_user_id)`. It must depend on that migration, so it only sees merged sessions. That migration runs `SET CONSTRAINTS ALL IMMEDIATE` between the merge and the constraint: otherwise Postgres refuses to build the index on a table with pending deferred foreign key checks.
 
 An email that normalizes to nothing is no email: `for_email` would otherwise match an arbitrary blank-email contact (typically an identified one), so such a row is skipped and stays without a contact.
 
@@ -1878,7 +1939,7 @@ from apps.contacts.backfill import backfill
 class Migration(migrations.Migration):
     dependencies = [
         ("contacts", "0003_contact_declared_email"),
-        ("tickets", "0010_<generated>"),
+        ("tickets", "0011_one_widget_session_per_external_user"),
     ]
     operations = [migrations.RunPython(backfill, migrations.RunPython.noop)]
 ```
@@ -2785,14 +2846,14 @@ Action: `require_org_admin`, `export_contact_data.delay(str(contact.id), str(req
 **Step 1: Failing tests** — `GET /api/v1/tickets/{id}/` returns `contact`, `contact_detail` (`id, display_name, email, email_verified, declared_email, company_detail`) and `sender_verified`; list rows include `contact_detail` and `sender_verified`; `PATCH {"contact": <other org contact id>}` → 400; `sender_verified`:
 - is read-only;
 - is true for a ticket of a session with `email_verified_at` set, and of a HMAC-identified session (`external_user_id` set), when the session's contact is the ticket's contact;
-- is false for a ticket of an unverified anonymous session, for a session linked to another contact, for no contact, and for a `widget_submit` ticket whose `requester_email` is a verified contact's address;
+- is false for a ticket of an unverified anonymous session, for a session linked to another contact, for no contact, for a `widget_submit` ticket whose `requester_email` is a verified contact's address, and for a ticket with `context_metadata["pre_login_anonymous"]`: moved to an identified session at login, it was written before anyone proved who they are, and stays false for good, including on a session with a verified email;
 - is null when there is no outside sender to verify: a ticket with source `agent` or `api`, even with a `requester_email`, and a ticket with no session and no `requester_email`.
 
 `POST /api/v1/tickets/` by an agent stores source `agent` when the request names none (test it), and keeps a source it names.
 
 `contact_detail.email_verified` only says the *contact* proved its email. A forged ticket can link to a verified contact (`widget_submit` and inbound email resolve from a declared address), so agents need `sender_verified` to know whether *this ticket's sender* proved anything.
 
-**Step 3: Implement** — import `ContactSummarySerializer` from `apps.contacts.summary`; add `contact_detail = ContactSummarySerializer(source="contact", read_only=True)`, `sender_verified = serializers.SerializerMethodField()` and `"contact", "contact_detail", "sender_verified"` to both `fields`; `get_sender_verified` returns None if `ticket.source` is `agent` or `api` or the ticket has neither a session nor a `requester_email`, and otherwise `bool(session and ticket.contact_id and session.contact_id == ticket.contact_id and (session.email_verified_at or session.external_user_id))` with `session = ticket.widget_session` (the email channel adds the conversation link as a third way); `sender_verified` is only meaningful for a ticket from a widget or email sender, so an agent's ticket is neither verified nor unverified. `Ticket.source` defaults to `widget` and `TicketViewSet.perform_create` doesn't set it, so agent-created tickets are currently stored as widget tickets: `perform_create` passes `source=serializer.validated_data.get("source", Ticket.Source.AGENT)`. Agent tickets created before this PR keep source `widget`, so one with a `requester_email` reads as an outside sender; `validate_contact` rejects contacts of another organization (compare with `self.instance.organization_id`, or the active org passed in context on create); add `"contact__company"` and `"widget_session"` to the queryset's `select_related`.
+**Step 3: Implement** — import `ContactSummarySerializer` from `apps.contacts.summary`; add `contact_detail = ContactSummarySerializer(source="contact", read_only=True)`, `sender_verified = serializers.SerializerMethodField()` and `"contact", "contact_detail", "sender_verified"` to both `fields`; `get_sender_verified` returns None if `ticket.source` is `agent` or `api` or the ticket has neither a session nor a `requester_email`, and otherwise `bool(session and ticket.contact_id and session.contact_id == ticket.contact_id and (session.email_verified_at or session.external_user_id) and not pre_login)` with `session = ticket.widget_session` and `metadata = ticket.context_metadata`, `pre_login = isinstance(metadata, dict) and metadata.get("pre_login_anonymous") is True` (the email channel adds the conversation link as a third way, and it doesn't override `pre_login`); the flag can also come from a widget's own `context`, which only marks that sender's own ticket as unverified; `KEPT_CONTEXT_KEYS` doesn't need it, since anonymizing clears the ticket's session and that alone reads as false; `sender_verified` is only meaningful for a ticket from a widget or email sender, so an agent's ticket is neither verified nor unverified. `Ticket.source` defaults to `widget` and `TicketViewSet.perform_create` doesn't set it, so agent-created tickets are currently stored as widget tickets: `perform_create` passes `source=serializer.validated_data.get("source", Ticket.Source.AGENT)`. Agent tickets created before this PR keep source `widget`, so one with a `requester_email` reads as an outside sender; `validate_contact` rejects contacts of another organization (compare with `self.instance.organization_id`, or the active org passed in context on create); add `"contact__company"` and `"widget_session"` to the queryset's `select_related`.
 
 **Step 4:** full suite PASS. **Step 5: Commit** — `feat(backend): expose contact on tickets`
 

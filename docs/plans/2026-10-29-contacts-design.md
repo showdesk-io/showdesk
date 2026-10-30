@@ -76,6 +76,8 @@ ContactNote
 
 Ticket.contact          FK Contact, null, related_name="tickets"
 WidgetSession.contact   FK Contact, null, related_name="sessions"
+WidgetSession           partial unique (organization, external_user_id)
+                        where external_user_id != ""
 ```
 
 `Ticket.requester_email` / `requester_name` / `external_user_id` stay for
@@ -103,19 +105,24 @@ a hash for one kind of value can't be replayed as another (`\n` is a line feed):
 `company_hash` covers the name and domain so a member can't replay it with a forged
 name or domain. It doesn't cover `company.traits`. Its fields are separated by newlines,
 which can't be confused with their content: an id, name or domain containing one never
-verifies. External user ids starting with `email:` or `company\n` are refused (400), so
-a `user_hash` can never double as another hash.
+verifies. External user ids starting with `email:` or `company\n` are refused (400), and
+`verify_user_hash` itself never accepts them, so a `user_hash` can never double as
+another hash.
 
-An invalid or missing `email_hash` / `company_hash` is ignored, not rejected: the
-value is simply treated as unsigned, and existing integrations are unaffected.
+An invalid or missing `email_hash` / `company_hash` is ignored, not rejected, whatever
+its shape: the value is simply treated as unsigned, and existing integrations are
+unaffected. A wrong or badly shaped `user_hash` is ignored when resuming an anonymous
+session and refused (403) when it's the only way to the session asked for (rule 8). Only
+a malformed `external_user_id` is a 400.
 
 1. **Identified widget session** (valid `user_hash`): the Contact is found or
    created on `(organization, external_id)`. No automatic merge, ever.
    - **Unproven email**: `Contact.email` never receives it. It is stored in
      `declared_email`, only on that session's own Contact, and the latest value
-     wins. An email equal to the one the Contact already holds is no separate
-     claim and clears `declared_email`. Agents see it with an "unverified" badge,
-     and it is included in API search.
+     wins, so a different email on a resume also replaces `WidgetSession.email`. An
+     email equal to the one the Contact already holds is no separate claim and clears
+     `declared_email`. Agents see it with an "unverified" badge, and it is included in
+     API search.
    - **Proven email**: a Contact with a blank `email` takes it if no other Contact
      owns it. A new external id attaches to the email-only Contact owning it
      (`external_id` blank). A Contact holding another email keeps it, and a proven
@@ -128,13 +135,17 @@ value is simply treated as unsigned, and existing integrations are unaffected.
    When the Contact ends up holding that email, the session and the Contact are
    marked verified (`WidgetSession.email_verified_at`, `Contact.email_verified_at`).
    Filling `email` always sets a fresh `email_verified_at`, so a stale date never
-   survives; a Contact that already held the email keeps its first date.
+   survives; a Contact that already held the email keeps its first date. On a resume,
+   a different signed email replaces `WidgetSession.email` on any session. Whenever
+   that email changes `WidgetSession.email_verified_at` is cleared, the proof being
+   about the previous one, and set again if the Contact ends up holding the new one.
 3. **Anonymous widget session, inbound email**: attach to the Contact owning that
    address in `Contact.email`, or create an email-only Contact (first come,
    unverified). The agent UI shows an "unverified" badge. This grants no access,
    and a proof later attaches to that Contact. `declared_email` is never looked
    up, so an address merely declared by an identified user never leads to their
-   Contact. On a Contact that already exists, an unproven anonymous session writes
+   Contact. An anonymous session keeps its first email unless a different one is
+   signed. On a Contact that already exists, an unproven anonymous session writes
    nothing at all: no seen dates, no `updated_at`, no company; it only links the
    session. A proven one updates the name (if blank), traits and seen dates.
 4. **Company**, only from an identified session:
@@ -166,6 +177,27 @@ value is simply treated as unsigned, and existing integrations are unaffected.
    conflict relies on the READ COMMITTED isolation level.
 7. **No Contact**: whenever the service resolves no Contact (no usable identity, or
    an anonymized one), a Contact previously linked to the session is unlinked.
+8. **Login and logout on a browser**: one session per `(organization,
+   external_user_id)`, and only a valid `user_hash` gives access to it. The session
+   id the widget stored decides what an init does:
+   - **Anonymous, no valid hash**: resumed. An id sent without a valid hash is ignored.
+   - **Anonymous, valid hash (login)**: the identified session is found or created,
+     and returned for the widget to store instead. In one transaction, within the
+     organization, the anonymous session's tickets move to it and to its Contact
+     (`widget_session`, `external_user_id`, `contact`), and their messages too, so the
+     conversation goes on. Those tickets were written before anyone proved who they
+     are: `context_metadata["pre_login_anonymous"]` records it, and `sender_verified`
+     stays false on them. It's idempotent: nothing is left to move on a retry.
+   - **Identified, valid hash**: find-or-create on the id sent, which is the user's own
+     session unless another user logged in since on that browser.
+   - **Identified, no hash (logout)**: a new anonymous session. Nothing is written to
+     the identified session or its Contact, and its history isn't exposed. This includes
+     an id sent without a hash: nothing proves it. A session can only become identified
+     through a valid hash, so an integration that never signs has none to lose.
+   - **Identified, wrong hash**: refused (403), as without a stored session.
+
+   A ticket without a Contact is only linked to the session's Contact when a request
+   sets or changes it, so a Contact cleared by an agent stays cleared.
 
 Widget history visibility is unchanged by this PR (session tickets +
 `external_user_id` tickets). Cross-channel history is defined in the email
@@ -220,12 +252,15 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   definitions (admin), archive instead of delete.
 
 Widget init (`POST` session endpoint) accepts the extended payload
-(`traits`, `company`, `email_hash`, `company_hash`), and checks the types and lengths
-of the identity fields before touching the session.
+(`traits`, `company`, `email_hash`, `company_hash`). Only a malformed `external_user_id`
+is a 400. A number as `name` becomes text and a long one is cut; any other unusable
+`name`, `email`, `traits`, `company` or `session_id` counts as absent, so a host page
+that gets a field wrong doesn't stop the widget.
 
 Tickets expose a read-only `sender_verified`: whether this ticket's sender proved
 being its Contact (session email verified or HMAC-identified on that Contact, or the
-conversation link once the email channel adds it). It's null when there's no outside
+conversation link once the email channel adds it, and never on a ticket written before
+a login, rule 8). It's null when there's no outside
 sender to verify: an agent-created ticket (source `agent` or `api`, or no session and no
 inbound sender).
 
@@ -273,3 +308,15 @@ inbound sender).
   unverified Contact's tickets on proof, or with the planned manual merge.
 - An unsigned payload can link a Contact without a Company to any existing Company by
   id. It's a claim shown to agents and grants no access.
+- A login moves the anonymous session's tickets to whoever logs in on that browser. On
+  a shared computer, that can be someone other than who wrote them. `sender_verified`
+  stays false on them, and agents see the requester details they were written with.
+- A login sets the Contact of every ticket it moves, since a ticket without one can't
+  tell an agent's clearing from never having had one. That overrides an agent's choice
+  on a ticket of an anonymous session. The email-only Contact they leave stays as it is.
+- A tab still holding the anonymous session after a login, in another window or as a
+  recording popup, gets a 404 on the tickets that moved, misses their replies, and a
+  new conversation it starts stays with the anonymous session.
+- The widget only sends its stored id on `init()`. `Showdesk.reset()` clears it, so a
+  login following a reset can't move anything, and `setUser()` doesn't start a new
+  session: identity only reaches the backend on the next `init()`.
