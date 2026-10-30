@@ -785,6 +785,18 @@ def test_database_error_never_breaks_widget_init(api_client, org, error):
         assert _post(api_client, org, email="a@x.io").status_code == 201
 
 
+def test_database_error_doesnt_log_the_session_id(api_client, org, caplog):
+    """A session id is a bearer token: only its digest may reach the logs."""
+    with mock.patch(
+        "apps.tickets.views.resolve_contact_for_widget_session",
+        side_effect=DatabaseError,
+    ):
+        res = _post(api_client, org, email="a@x.io")
+    session_id = str(res.data["session_id"])
+    assert session_id not in caplog.text
+    assert hashlib.sha256(session_id.encode()).hexdigest() in caplog.text
+
+
 def test_database_error_linking_tickets_never_breaks_widget_init(api_client, org):
     with mock.patch(
         "apps.tickets.views.Ticket.objects.filter", side_effect=OperationalError

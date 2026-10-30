@@ -363,6 +363,42 @@ def test_patch_out_of_the_filter_it_was_sent_with_is_no_error(
 # Create
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"name": "", "email": "", "phone": ""},
+        {"name": "   ", "phone": "  "},
+        {"job_title": "CTO", "attributes": {}},
+    ],
+)
+def test_create_without_name_email_or_phone_is_400(
+    authenticated_client, organization, body
+):
+    res = authenticated_client.post(URL, body, format="json")
+    assert res.status_code == 400
+    assert "non_field_errors" in res.data
+    assert not Contact.objects.filter(organization=organization).exists()
+
+
+@pytest.mark.parametrize(
+    "body", [{"name": "Alice"}, {"email": "a@x.io"}, {"phone": "+33"}]
+)
+def test_create_with_any_of_name_email_or_phone(authenticated_client, body):
+    assert authenticated_client.post(URL, body, format="json").status_code == 201
+
+
+def test_patch_doesnt_require_a_name_email_or_phone(authenticated_client, organization):
+    """A widget contact can have nothing but its external id, and stays editable."""
+    contact = ContactFactory(
+        organization=organization, name="", email="", external_id="u1"
+    )
+    res = authenticated_client.patch(
+        _detail(contact), {"job_title": "CTO"}, format="json"
+    )
+    assert res.status_code == 200
+
+
 def test_create_validates_attributes(authenticated_client, organization):
     ContactAttributeDefFactory(organization=organization, key="seats", type="number")
     res = authenticated_client.post(

@@ -223,7 +223,10 @@ def _link_session_contact(
                 ).update(contact_id=session.contact_id)
     except DatabaseError:
         session.contact_id = previous_contact_id
-        logger.exception("Could not link widget session %s to a contact", session.pk)
+        logger.exception(
+            "Could not link widget session %s to a contact",
+            _session_digest(session.pk),
+        )
 
 
 def _update_session(request, org, identity) -> Response:

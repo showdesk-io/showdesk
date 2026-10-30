@@ -2423,7 +2423,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from apps.contacts.gdpr import REMOVED_BODY, anonymize_contact
 from apps.contacts.services import resolve_contact_for_widget_session
 from apps.tickets.models import TicketMessage, WidgetSession
-from tests.factories import ContactFactory, TicketFactory, TicketMessageFactory
+from tests.factories import (
+    ContactFactory,
+    ContactNoteFactory,
+    TicketFactory,
+    TicketMessageFactory,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -2448,6 +2453,7 @@ def test_anonymize_scrubs_contact_and_user_messages(organization, agent):
         ticket=ticket, author=None, sender_type=TicketMessage.SenderType.USER, body="secret"
     )
     agent_msg = TicketMessageFactory(ticket=ticket, author=agent, body="reply")
+    ContactNoteFactory(contact=contact, author=agent, body="Her husband is ill")
 
     anonymize_contact(contact)
 
@@ -2467,6 +2473,7 @@ def test_anonymize_scrubs_contact_and_user_messages(organization, agent):
     assert ticket.context_metadata == {"browser": "Chrome"}
     assert user_msg.body == REMOVED_BODY
     assert agent_msg.body == "reply"
+    assert not contact.notes.exists()  # Free text: it can hold personal data.
 
 
 def test_open_tab_cant_attach_new_data_to_the_anonymized_contact(api_client, organization):
@@ -2560,6 +2567,8 @@ def anonymize_contact(contact) -> None:
     contact.is_anonymized = True
     contact.save()
 
+    # Free text written by agents, which can hold personal data about the contact.
+    contact.notes.all().delete()
     # Unlinked as well, so an open tab can't attach new data to this contact.
     contact.sessions.update(
         email="", name="", external_user_id="", email_verified_at=None, contact=None

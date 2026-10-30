@@ -280,8 +280,9 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   profile, attributes, tickets, messages, attachment metadata).
 - `POST /api/v1/contacts/{id}/anonymize/` — admin only, irreversible: email →
   `anonymized-{uuid}@example.invalid`, name → "Anonymized contact", phone and
-  external_id and declared_email cleared, attributes emptied, the contact's message bodies
-  replaced by a placeholder, ticket `context_metadata` reduced to a whitelist,
+  external_id and declared_email cleared, attributes emptied, the contact's notes deleted
+  (free text that can hold personal data), the contact's message bodies replaced by a
+  placeholder, ticket `context_metadata` reduced to a whitelist,
   `is_anonymized = True`.
 - `GET/POST /api/v1/companies/`, `GET/PATCH/DELETE /api/v1/companies/{id}/`,
   `GET /api/v1/companies/{id}/contacts/`, `GET /api/v1/companies/{id}/tickets/`.

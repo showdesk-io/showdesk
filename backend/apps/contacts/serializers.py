@@ -90,6 +90,14 @@ class ContactSerializer(serializers.ModelSerializer):
         return clean_attributes(defs, value)
 
     def validate(self, attrs):
+        # On creation only: a widget contact may have nothing but its external id,
+        # and that mustn't stop an agent editing it.
+        if self.instance is None and not any(
+            attrs.get(field) for field in ("name", "email", "phone")
+        ):
+            raise serializers.ValidationError(
+                "A contact needs a name, an email or a phone number."
+            )
         if email := attrs.get("email"):
             taken = Contact.objects.filter(
                 organization=self.context["organization"], email=email
