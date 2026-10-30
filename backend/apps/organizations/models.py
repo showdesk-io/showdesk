@@ -5,7 +5,7 @@ import hmac
 import secrets
 import uuid
 from datetime import timedelta
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
@@ -275,16 +275,50 @@ class Organization(TimestampedModel):
         """Generate a 64-char hex secret for HMAC identity verification."""
         return secrets.token_hex(32)
 
-    def verify_user_hash(self, external_user_id: str, user_hash: str) -> bool:
-        """Verify an HMAC-SHA256 user hash against the widget secret."""
-        if not self.widget_secret:
+    def _verify_signature(self, message: Any, signature: Any) -> bool:
+        """Verify HMAC-SHA256(widget_secret, message). Bad input is just invalid."""
+        if (
+            not self.widget_secret
+            or not isinstance(message, str)
+            or not isinstance(signature, str)
+            or not signature.isascii()  # compare_digest raises TypeError otherwise.
+        ):
+            return False
+        try:
+            encoded = message.encode()
+        except UnicodeEncodeError:  # A lone surrogate survives JSON parsing.
             return False
         expected = hmac.new(
-            self.widget_secret.encode(),
-            external_user_id.encode(),
-            hashlib.sha256,
+            self.widget_secret.encode(), encoded, hashlib.sha256
         ).hexdigest()
-        return hmac.compare_digest(expected, user_hash)
+        return hmac.compare_digest(expected, signature)
+
+    def verify_user_hash(self, external_user_id: Any, user_hash: Any) -> bool:
+        """Verify an HMAC-SHA256 user hash against the widget secret."""
+        return self._verify_signature(external_user_id, user_hash)
+
+    def verify_email_hash(self, email: Any, email_hash: Any) -> bool:
+        """Verify HMAC-SHA256(widget_secret, "email:" + lowercase email)."""
+        email = email.strip().lower() if isinstance(email, str) else ""
+        if not email or not email_hash:
+            return False
+        return self._verify_signature(f"email:{email}", email_hash)
+
+    def verify_company_hash(
+        self, company_id: Any, name: Any, domain: Any, company_hash: Any
+    ) -> bool:
+        """Verify HMAC-SHA256(widget_secret, "company:id:name:lowercase domain")."""
+        domain = "" if domain is None else domain
+        if (
+            not all(isinstance(value, str) for value in (company_id, name, domain))
+            or not company_id
+            or not name
+            or not company_hash
+        ):
+            return False
+        return self._verify_signature(
+            f"company:{company_id}:{name}:{domain.lower()}", company_hash
+        )
 
     def next_ticket_reference(self) -> str:
         """Generate the next ticket reference atomically.
