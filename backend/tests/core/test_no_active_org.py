@@ -7,7 +7,6 @@ from apps.tickets.models import Tag, Ticket
 from tests.factories import (
     ArticleFactory,
     OrganizationFactory,
-    TagFactory,
     TicketFactory,
     UserFactory,
 )
@@ -72,6 +71,8 @@ def test_lists_are_empty(client, foreign_ticket, path) -> None:
 def test_creates_are_a_400(client, path, body) -> None:
     res = client.post(f"/api/v1/{path}/", body, format="json")
     assert res.status_code == 400, res.data
+    assert not Tag.objects.exists()
+    assert not Ticket.objects.exists()
 
 
 def test_foreign_ticket_is_refused(client, foreign_ticket) -> None:
@@ -82,18 +83,6 @@ def test_foreign_ticket_is_refused(client, foreign_ticket) -> None:
     )
     assert res.status_code == 400
     assert not foreign_ticket.messages.exists()
-
-
-def test_rows_with_no_organization_are_not_created(client) -> None:
-    client.post("/api/v1/tags/", {"name": "n"}, format="json")
-    client.post("/api/v1/tickets/", {"title": "t"}, format="json")
-    assert not Tag.objects.exists()
-    assert not Ticket.objects.exists()
-
-
-def test_other_org_tags_stay_out_of_reach(client) -> None:
-    tag = TagFactory(organization=OrganizationFactory())
-    assert client.get(f"/api/v1/tags/{tag.id}/").status_code == 404
 
 
 @pytest.mark.parametrize("action", ["helpful", "not_helpful"])

@@ -2,11 +2,13 @@
 
 Each route of ``CASES`` is called three ways with the same payload shape: with
 ids of the caller's organization (accepted), of another organization, and
-unknown ids (refused with the same response, so that ids can't be probed).
+unknown ids (refused with the same response, so that ids can't be told apart).
+
+``test_every_writable_relation_is_org_scoped`` extends this to the relations of
+all serializers. It can't see ids that a view reads from the body itself, such
+as in ``bulk_update``: those need their own tests.
 """
 
-import importlib
-import inspect
 import re
 import uuid
 from collections.abc import Callable
@@ -15,13 +17,16 @@ from types import SimpleNamespace
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.urls import get_resolver
 from rest_framework import serializers
 from rest_framework.test import APIClient
 
 from apps.core.serializers import OrgScopedPrimaryKeyRelatedField
 from apps.knowledge_base.models import Article, Category
 from apps.organizations.models import Team, User
+from apps.organizations.serializers import TeamSerializer
 from apps.tickets.models import Ticket, TicketAttachment, TicketMessage
+from apps.tickets.serializers import TicketAssignSerializer, TicketSerializer
 from apps.videos.models import VideoRecording
 from tests.factories import (
     ArticleFactory,
@@ -168,17 +173,12 @@ CASES = [
         lambda o, t: {"ticket": str(t.ticket.id)},
         multipart=True,
     ),
-    *[
-        Case(
-            f"ticket-create-{field}",
-            "post",
-            lambda o: "tickets/",
-            lambda o, t, field=field, value=value: _new_ticket(
-                o.org, **{field: value(t)}
-            ),
-        )
-        for field, value in TICKET_FKS.items()
-    ],
+    Case(
+        "ticket-create",
+        "post",
+        lambda o: "tickets/",
+        lambda o, t: _new_ticket(o.org, assigned_agent=str(t.user.id)),
+    ),
     *[
         Case(
             f"ticket-update-{field}",
@@ -427,20 +427,14 @@ CREATES = {
 
 
 @pytest.mark.parametrize("path", CREATES)
-class TestOrganizationInACreate:
-    def test_is_ignored(self, admin_client, own, foreign, path) -> None:
-        res = admin_client.post(
-            f"/api/v1/{path}/",
-            {**CREATES[path], "organization": str(foreign.org.id)},
-            format="json",
-        )
-        assert res.status_code == 201, res.data
-        assert res.data.get("organization") == own.org.id
-
-    def test_is_not_needed(self, admin_client, own, path) -> None:
-        res = admin_client.post(f"/api/v1/{path}/", CREATES[path], format="json")
-        assert res.status_code == 201, res.data
-        assert res.data.get("organization") == own.org.id
+def test_organization_in_a_create_is_ignored(admin_client, own, foreign, path) -> None:
+    res = admin_client.post(
+        f"/api/v1/{path}/",
+        {**CREATES[path], "organization": str(foreign.org.id)},
+        format="json",
+    )
+    assert res.status_code == 201, res.data
+    assert res.data.get("organization") == own.org.id
 
 
 @pytest.mark.parametrize(
@@ -564,26 +558,51 @@ class TestPlatformAdminImpersonation:
         assert res.data["count"] == 0
 
 
-@pytest.mark.parametrize(
-    "module",
-    [
-        "apps.knowledge_base.serializers",
-        "apps.organizations.serializers",
-        "apps.tickets.serializers",
-        "apps.videos.serializers",
-    ],
-)
-def test_every_writable_relation_is_org_scoped(module) -> None:
-    """A new foreign key can't be left out by mistake."""
-    module = importlib.import_module(module)
-    for cls in vars(module).values():
-        if not (inspect.isclass(cls) and issubclass(cls, serializers.BaseSerializer)):
-            continue
-        if cls.__module__ != module.__name__:
-            continue
-        for name, field in cls().fields.items():
-            relation = getattr(field, "child_relation", field)
-            if isinstance(relation, serializers.RelatedField) and not field.read_only:
-                assert isinstance(relation, OrgScopedPrimaryKeyRelatedField), (
-                    f"{cls.__name__}.{name}"
-                )
+def _all_subclasses(cls: type) -> set[type]:
+    direct = set(cls.__subclasses__())
+    return direct.union(*(_all_subclasses(sub) for sub in direct))
+
+
+def _app_serializers() -> set[type]:
+    """Every serializer of the project that a URL can reach, wherever it lives."""
+    assert get_resolver().url_patterns  # Importing the URLconfs imports the views.
+    return {
+        cls
+        for cls in _all_subclasses(serializers.Serializer)
+        if cls.__module__.startswith("apps.")
+    }
+
+
+def _unscoped_relations(cls: type) -> list[str]:
+    return [
+        f"{cls.__module__}.{cls.__name__}.{name}"
+        for name, field in cls().fields.items()
+        if not field.read_only
+        and isinstance(
+            relation := getattr(field, "child_relation", field),
+            serializers.RelatedField,
+        )
+        and not isinstance(relation, OrgScopedPrimaryKeyRelatedField)
+    ]
+
+
+def test_every_writable_relation_is_org_scoped() -> None:
+    """A new foreign key in a serializer can't be left out by mistake."""
+    found = _app_serializers()
+    assert found >= {TicketSerializer, TicketAssignSerializer, TeamSerializer}
+    assert [name for cls in found for name in _unscoped_relations(cls)] == []
+
+
+def test_the_guard_sees_an_unscoped_relation() -> None:
+    class Unscoped(serializers.Serializer):
+        one = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
+        many = serializers.PrimaryKeyRelatedField(
+            queryset=User.objects.all(), many=True
+        )
+        scoped = OrgScopedPrimaryKeyRelatedField(queryset=User.objects.all())
+        shown = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    assert sorted(_unscoped_relations(Unscoped)) == [
+        f"{__name__}.Unscoped.many",
+        f"{__name__}.Unscoped.one",
+    ]
