@@ -19,6 +19,16 @@ class IsPlatformAdmin(BasePermission):
         )
 
 
+class IsOrgStaff(BasePermission):
+    """Refuse end users: they only talk to the widget routes, which set their own."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        return user.is_authenticated and (
+            user.is_agent or user.is_staff or user.is_superuser
+        )
+
+
 def has_feature(feature: str) -> type[BasePermission]:
     """Build a DRF permission class that gates on a per-org feature flag.
 

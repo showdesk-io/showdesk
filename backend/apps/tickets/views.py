@@ -13,6 +13,7 @@ from rest_framework.response import Response
 
 from apps.core.permissions import (
     LOOKUP_ERRORS,
+    IsOrgStaff,
     get_active_org,
     has_feature,
     require_active_org,
@@ -128,7 +129,7 @@ class TicketViewSet(viewsets.ModelViewSet):
     and a special widget submission endpoint.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,
@@ -512,7 +513,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         detail=False,
         methods=["post"],
         url_path="bulk_update",
-        permission_classes=[IsAuthenticated, has_feature("bulk_actions")],
+        permission_classes=[IsAuthenticated, IsOrgStaff, has_feature("bulk_actions")],
     )
     def bulk_update(self, request):
         """Apply a single update to many tickets at once.
@@ -1158,7 +1159,7 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ticket messages."""
 
     serializer_class = TicketMessageSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
 
     def get_queryset(self):
         """Filter messages by the active organization's tickets."""
@@ -1197,7 +1198,7 @@ class TicketAttachmentViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ticket attachments."""
 
     serializer_class = TicketAttachmentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
 
     def get_queryset(self):
         """Filter attachments by the active organization's tickets."""

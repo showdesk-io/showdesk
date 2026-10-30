@@ -7,7 +7,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import LOOKUP_ERRORS, get_active_org
+from apps.core.permissions import LOOKUP_ERRORS, IsOrgStaff, get_active_org
 from apps.core.throttling import WidgetUploadThrottle
 from apps.organizations.models import Organization
 
@@ -24,7 +24,7 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = VideoRecordingSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
     parser_classes = [MultiPartParser, FormParser]
 
     def get_queryset(self):

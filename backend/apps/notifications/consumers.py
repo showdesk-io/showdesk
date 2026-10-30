@@ -28,6 +28,12 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
             await self.close()
             return
 
+        # End users have no access to their organization's tickets.
+        if not (user.is_agent or user.is_staff or user.is_superuser):
+            logger.warning("TicketConsumer: rejecting end user %s", user.pk)
+            await self.close()
+            return
+
         # Superusers may impersonate an org via ?org=<uuid>, matching the
         # X-Showdesk-Org header used on HTTP requests. Otherwise fall back
         # to the user's own organization.
