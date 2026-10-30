@@ -3,12 +3,14 @@ import { Route, Routes } from "react-router";
 import { AuthGuard } from "./components/common/AuthGuard";
 import { AdminGuard } from "./components/common/AdminGuard";
 import { AppLayout } from "./components/layout/AppLayout";
+import { DetailPlaceholder } from "./components/contacts/DetailPlaceholder";
 import { DashboardPage } from "./pages/DashboardPage";
 import { TicketListPage } from "./pages/TicketListPage";
 import { TicketDetailPage } from "./pages/TicketDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AdminPage } from "./pages/AdminPage";
 import { TeamPage } from "./pages/TeamPage";
+import { ContactsPage } from "./pages/ContactsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SignupPage } from "./pages/SignupPage";
@@ -39,6 +41,16 @@ export function App() {
         <Route index element={<DashboardPage />} />
         <Route path="tickets" element={<TicketListPage />} />
         <Route path="tickets/:id" element={<TicketDetailPage />} />
+        <Route path="contacts" element={<ContactsPage />} />
+        <Route
+          path="contacts/:id"
+          element={<DetailPlaceholder backTo="/contacts" backLabel="contacts" />}
+        />
+        <Route path="companies" element={<ContactsPage />} />
+        <Route
+          path="companies/:id"
+          element={<DetailPlaceholder backTo="/companies" backLabel="companies" />}
+        />
         <Route path="team" element={<TeamPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route
