@@ -14,7 +14,7 @@ import {
 } from "../../api/chat-api";
 import { captureContext } from "../../api/context";
 import type { WidgetStore } from "../../state/widget-state";
-import type { ChatMessage, ShowdeskConfig } from "../../types";
+import type { ChatMessage, ShowdeskConfig, WidgetSession } from "../../types";
 import {
   showRecordingController,
   showPopupWaitingController,
@@ -25,7 +25,7 @@ import {
 } from "../button";
 import { renderContactNudge } from "./contact-nudge";
 import { renderMessageBubble } from "./message-bubble";
-import { renderMessageInput } from "./message-input";
+import { clearSendError, renderMessageInput, showSendError } from "./message-input";
 import { closeLightbox } from "../media-lightbox";
 import { ScreenRecorder } from "../../recorder/screen-recorder";
 import type { RecordingMessage } from "../../recorder/broadcast-protocol";
@@ -36,14 +36,17 @@ import {
 } from "../../recorder/popup-launcher";
 
 let messageListEl: HTMLElement | null = null;
+let requestSession: () => Promise<WidgetSession | null> = async () => null;
 
 export function renderChatView(
   container: HTMLElement,
   store: WidgetStore,
   config: ShowdeskConfig,
-  onOpenPanel?: () => void,
+  onOpenPanel: () => void,
+  ensureSession: () => Promise<WidgetSession | null>,
 ): void {
   container.innerHTML = "";
+  requestSession = ensureSession;
 
   // Message list (scrollable)
   messageListEl = document.createElement("div");
@@ -70,17 +73,16 @@ export function renderChatView(
     scrollToBottom();
   }
 
-  const openPanel = onOpenPanel ?? (() => {});
   // Message input
   const input = renderMessageInput({
     onSendText: (text) => handleSendText(text, store, config),
-    onSendAudio: () => handleAudioCapture(store, config, openPanel),
+    onSendAudio: () => handleAudioCapture(store, config, onOpenPanel),
     onScreenshot: () => handleScreenshotCapture(store, config),
     onFile: (file) => {
       const bodyType = file.type.startsWith("image/") ? "image" : "file";
       handleSendAttachment(file, bodyType, file.name, store, config);
     },
-    onVideo: () => handleVideoCapture(store, config, openPanel),
+    onVideo: () => handleVideoCapture(store, config, onOpenPanel),
   });
   container.appendChild(input);
 
@@ -290,14 +292,30 @@ function shouldShowNudge(store: WidgetStore, config: ShowdeskConfig): boolean {
   return store.state.messages.some((m) => m.senderType === "user");
 }
 
-async function handleSendText(
+/** On its way if there's a session, or else once there is one: false if there's none to be had. */
+function handleSendText(
   text: string,
   store: WidgetStore,
   config: ShowdeskConfig,
-): Promise<void> {
+): true | Promise<boolean> {
   const session = store.state.session;
-  if (!session) return;
+  if (session) {
+    void postText(text, session, store, config);
+    return true;
+  }
+  return requestSession().then((found) => {
+    if (!found) return false;
+    void postText(text, found, store, config);
+    return true;
+  });
+}
 
+async function postText(
+  text: string,
+  session: WidgetSession,
+  store: WidgetStore,
+  config: ShowdeskConfig,
+): Promise<void> {
   // Optimistic message
   const tempId = `temp-${Date.now()}`;
   const optimisticMsg: ChatMessage = {
@@ -374,8 +392,12 @@ async function handleSendAttachment(
   store: WidgetStore,
   config: ShowdeskConfig,
 ): Promise<void> {
-  const session = store.state.session;
-  if (!session) return;
+  const session = store.state.session ?? (await requestSession());
+  if (!session) {
+    showSendError();
+    return;
+  }
+  clearSendError();
 
   // Optimistic message with local blob URL for immediate preview
   const tempId = `temp-${Date.now()}`;
@@ -427,10 +449,59 @@ async function handleSendAttachment(
   }
 }
 
+/** Where a capture belongs: the user can change while it's being made. */
+interface CaptureOrigin {
+  session: WidgetSession | null;
+  ticketId: string | null;
+}
+
+function captureOrigin(store: WidgetStore): CaptureOrigin {
+  return { session: store.state.session, ticketId: store.state.activeTicketId };
+}
+
+/**
+ * Send a capture on the session it started on. If that isn't the current one anymore, it
+ * goes on its own, with nothing in a view that belongs to someone else now.
+ *
+ * Except for an anonymous visitor who logged in meanwhile: same person, whose conversation
+ * moved to the new session, and whose old session gets a 404 on it.
+ */
+async function sendCapture(
+  blob: Blob,
+  bodyType: string,
+  filename: string,
+  origin: CaptureOrigin,
+  store: WidgetStore,
+  config: ShowdeskConfig,
+): Promise<void> {
+  const started = origin.session;
+  const current = store.state.session;
+  if (
+    !started ||
+    started.sessionId === current?.sessionId ||
+    (!started.externalUserId && current?.externalUserId)
+  ) {
+    return handleSendAttachment(blob, bodyType, filename, store, config);
+  }
+  try {
+    await sendAttachmentMessage(
+      config,
+      started.sessionId,
+      origin.ticketId,
+      blob,
+      bodyType,
+      filename,
+    );
+  } catch (err) {
+    console.error("[Showdesk] Failed to upload a capture of the previous session:", err);
+  }
+}
+
 async function handleScreenshotCapture(
   store: WidgetStore,
   config: ShowdeskConfig,
 ): Promise<void> {
+  const origin = captureOrigin(store);
   try {
     // Hide the widget panel while capturing
     const panel = document.getElementById("sd-panel");
@@ -461,7 +532,7 @@ async function handleScreenshotCapture(
     // Show panel again
     if (panel) panel.style.display = "";
 
-    await handleSendAttachment(blob, "screenshot", "screenshot.png", store, config);
+    await sendCapture(blob, "screenshot", "screenshot.png", origin, store, config);
   } catch {
     // User cancelled or API not available
     const panel = document.getElementById("sd-panel");
@@ -477,6 +548,7 @@ async function handleAudioCapture(
   if (config.navigationMode === "mpa") {
     return handleAudioCaptureMPA(store, config, onOpenPanel);
   }
+  const origin = captureOrigin(store);
   try {
     // Hide panel so it doesn't block the page
     const panel = document.getElementById("sd-panel");
@@ -516,7 +588,7 @@ async function handleAudioCapture(
       if (panel) panel.style.display = "";
       if (chunks.length > 0) {
         const blob = new Blob(chunks, { type: mimeType });
-        handleSendAttachment(blob, "audio", "audio.webm", store, config);
+        void sendCapture(blob, "audio", "audio.webm", origin, store, config);
       }
     };
 
@@ -619,6 +691,7 @@ async function handleVideoCaptureSPA(
   config: ShowdeskConfig,
   onOpenPanel: () => void,
 ): Promise<void> {
+  const origin = captureOrigin(store);
   try {
     // Hide panel
     const panel = document.getElementById("sd-panel");
@@ -629,7 +702,7 @@ async function handleVideoCaptureSPA(
       // Restore FAB and re-open panel
       hideRecordingController(onOpenPanel);
       if (panel) panel.style.display = "";
-      handleSendAttachment(blob, "video", "recording.webm", store, config);
+      void sendCapture(blob, "video", "recording.webm", origin, store, config);
     };
 
     await recorder.start({

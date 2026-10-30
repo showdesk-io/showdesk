@@ -9,6 +9,7 @@
  */
 
 import {
+  ApiError,
   createOrResumeSession,
   fetchConversation,
   fetchHistory,
@@ -114,6 +115,22 @@ export function getWebSocket(): WidgetWebSocket {
 let sessionRun = 0;
 let runInFlight: Promise<void> | null = null;
 
+/** The identity of the latest session request, unless it failed. */
+let lastIdentitySent: string | null = null;
+
+function identitySignature(config: ShowdeskConfig): string {
+  const user = config.user;
+  return JSON.stringify([
+    String(user?.id ?? ""),
+    user?.hash,
+    user?.name,
+    user?.email,
+    user?.emailHash,
+    user?.traits,
+    config.company,
+  ]);
+}
+
 /**
  * Initialize the session and WebSocket connection.
  * Called eagerly on widget init so the FAB badge reflects unread replies
@@ -126,13 +143,32 @@ export function initSession(config: ShowdeskConfig): Promise<void> {
 }
 
 /**
+ * The session to send something on: the current one, or the one being created, or a new
+ * attempt at one. Null if there's no having it for now.
+ */
+async function ensureSession(config: ShowdeskConfig): Promise<WidgetSession | null> {
+  await initSession(config);
+  // A run overtaken by a newer one ends with nothing: that newer one is the answer.
+  while (!getStore().state.session && runInFlight) await runInFlight;
+  return getStore().state.session;
+}
+
+/**
  * Create the session again for the identity now in `config`, whatever is in flight.
  *
  * The session returned replaces the stored one. An anonymous session's conversation
  * moved to it on the server (a login), so it stays on screen until refreshed. Another
  * user's goes at once, even if the request then fails: that user is no longer here.
+ *
+ * An identity already sent is not sent again: a host app can call this on every render.
  */
 export function switchSession(config: ShowdeskConfig): Promise<void> {
+  if (
+    lastIdentitySent === identitySignature(config) &&
+    (getStore().state.session || runInFlight)
+  ) {
+    return runInFlight ?? Promise.resolve();
+  }
   const owner = getStore().state.session?.externalUserId;
   if (owner && owner !== String(config.user?.id ?? "")) {
     clearUserFromView(config);
@@ -162,6 +198,7 @@ function clearUserFromView(config: ShowdeskConfig): void {
 
 function startSessionRun(config: ShowdeskConfig): Promise<void> {
   const run = ++sessionRun;
+  lastIdentitySent = identitySignature(config);
   const promise = runSession(config, run).finally(() => {
     if (runInFlight === promise) runInFlight = null;
   });
@@ -205,11 +242,12 @@ async function runSession(config: ShowdeskConfig, run: number): Promise<void> {
     }
 
     // The history tab shows what it fetched when rendered, not the store.
-    if (changed && previous && s.state.activeTab === "history") {
+    if (changed && s.state.activeTab === "history") {
       renderActiveTab(config);
     }
   } catch (err) {
     if (run === sessionRun) {
+      lastIdentitySent = null;
       console.error("[Showdesk] Session initialization failed:", err);
     }
   }
@@ -270,7 +308,8 @@ function connectWebSocket(
 
 /**
  * Reload the open conversation under a new session, keeping what's still being sent.
- * If the session can't read it, it wasn't moved: back to a new conversation.
+ * If the session doesn't have it, it wasn't moved: back to a new conversation. Any other
+ * failure says nothing of where it is, so it stays on screen.
  */
 async function refreshActiveConversation(
   config: ShowdeskConfig,
@@ -288,8 +327,12 @@ async function refreshActiveConversation(
       activeTicketReference: data.reference,
       messages: [...data.messages, ...unsent],
     });
-  } catch {
+  } catch (err) {
     if (run !== sessionRun || s.state.activeTicketId !== ticketId) return;
+    if (!(err instanceof ApiError && err.status === 404)) {
+      console.warn("[Showdesk] Could not refresh the conversation:", err);
+      return;
+    }
     s.update(EMPTY_CONVERSATION);
     renderActiveTab(config);
   }
@@ -476,7 +519,13 @@ function renderTab(
 ): void {
   content.innerHTML = "";
   if (s.state.activeTab === "chat") {
-    renderChatView(content, s, config, () => createModal(config));
+    renderChatView(
+      content,
+      s,
+      config,
+      () => createModal(config),
+      () => ensureSession(config),
+    );
   } else {
     renderHistoryView(content, s, config);
   }
@@ -511,6 +560,7 @@ export function destroyModal(): void {
   // A session coming back now must not be stored over a reset, nor reconnect.
   sessionRun++;
   runInFlight = null;
+  lastIdentitySent = null;
   if (unsubscribe) {
     unsubscribe();
     unsubscribe = null;

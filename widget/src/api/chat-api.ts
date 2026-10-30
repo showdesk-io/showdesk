@@ -9,6 +9,16 @@ import type {
   WidgetSession,
 } from "../types";
 
+/** A refusal from the API, whose status says what it means. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 function headers(
   config: ShowdeskConfig,
   sessionId?: string,
@@ -167,7 +177,7 @@ export async function fetchConversation(
     { headers: headers(config, sessionId) },
   );
 
-  if (!res.ok) throw new Error(`Fetch conversation error: ${res.status}`);
+  if (!res.ok) throw new ApiError(`Fetch conversation error: ${res.status}`, res.status);
   const data = await res.json();
   return {
     ticketId: data.ticket_id,

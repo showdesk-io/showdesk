@@ -164,7 +164,7 @@ describe("logout", () => {
     ["null", null],
     ["empty", {}],
     ["name only", { name: "x" }],
-    ["id only", { id: "a" }],
+    ["another id, no hash", { id: "other" }],
   ])("restarts anonymously: %s", async (_label, arg) => {
     const b = await boot();
     b.widget.init(USER_A);
@@ -532,5 +532,266 @@ describe("setUser without an identity, on an anonymous visitor", () => {
     expect(b.posts()).toHaveLength(before);
     expect(storedId()).toBe("anon-1");
     expect(b.sockets.at(-1)?.closed).toBe(false);
+  });
+});
+
+describe("setUser called repeatedly", () => {
+  const LOGIN = { id: "u1", hash: "h1", name: "Ann", traits: { plan: "pro" } };
+  const COMPANY = { id: "c1", name: "Acme", hash: "ch" };
+
+  it("makes one POST for 12 identical calls in a row", async () => {
+    const b = await boot();
+    b.widget.init(CONFIG);
+    await tick();
+    const before = b.posts().length;
+    for (let i = 0; i < 12; i++) {
+      b.widget.setUser({ ...LOGIN, traits: { ...LOGIN.traits } }, { ...COMPANY });
+    }
+    await tick();
+    expect(b.posts()).toHaveLength(before + 1);
+  });
+
+  it("makes one POST for 12 identical calls spread over time", async () => {
+    const b = await boot();
+    b.widget.init(CONFIG);
+    await tick();
+    const before = b.posts().length;
+    for (let i = 0; i < 12; i++) {
+      b.widget.setUser({ ...LOGIN }, { ...COMPANY });
+      await tick();
+    }
+    expect(b.posts()).toHaveLength(before + 1);
+    expect(b.sockets.at(-1)?.closed).toBe(false);
+  });
+
+  it("makes none for the identity init already sent", async () => {
+    const b = await boot();
+    b.server.delay = 30;
+    b.widget.init({ ...CONFIG, user: LOGIN, company: COMPANY });
+    b.widget.setUser({ ...LOGIN }, { ...COMPANY });
+    await tick(60);
+    b.widget.setUser({ ...LOGIN }, { ...COMPANY });
+    await tick(60);
+    expect(b.posts()).toHaveLength(1);
+  });
+
+  it("treats a number and its decimal string as one id", async () => {
+    const b = await boot();
+    b.widget.init({ ...CONFIG, user: { id: 42, hash: "h" } });
+    await tick();
+    b.widget.setUser({ id: "42", hash: "h" });
+    await tick();
+    expect(b.posts()).toHaveLength(1);
+  });
+
+  it.each([
+    ["id", { ...LOGIN, id: "u2" }, COMPANY],
+    ["hash", { ...LOGIN, hash: "h2" }, COMPANY],
+    ["name", { ...LOGIN, name: "Bob" }, COMPANY],
+    ["email", { ...LOGIN, email: "a@b.c" }, COMPANY],
+    ["emailHash", { ...LOGIN, emailHash: "eh" }, COMPANY],
+    ["traits", { ...LOGIN, traits: { plan: "free" } }, COMPANY],
+    ["company", LOGIN, { ...COMPANY, name: "Other" }],
+    ["no company", LOGIN, undefined],
+  ])("sends a change of %s", async (_field, user, company) => {
+    const b = await boot();
+    b.widget.init({ ...CONFIG, user: LOGIN, company: COMPANY });
+    await tick();
+    b.widget.setUser(user, company);
+    await tick();
+    expect(b.posts()).toHaveLength(2);
+  });
+
+  it("sends the identity again once a change was sent", async () => {
+    const b = await boot();
+    b.widget.init({ ...CONFIG, user: LOGIN });
+    await tick();
+    b.widget.setUser({ ...LOGIN, name: "Bob" });
+    await tick();
+    b.widget.setUser(LOGIN);
+    await tick();
+    expect(b.posts()).toHaveLength(3);
+  });
+
+  it("retries after a failed run", async () => {
+    let fail = true;
+    const b = await boot({ session: () => (fail ? { status: 500, data: {} } : null) });
+    b.widget.init({ ...CONFIG, user: LOGIN });
+    await tick();
+    expect(b.posts()).toHaveLength(1);
+
+    fail = false;
+    b.widget.setUser(LOGIN);
+    await tick();
+    expect(b.posts()).toHaveLength(2);
+    expect(storedId()).toBe("sess-u1");
+
+    b.widget.setUser(LOGIN);
+    await tick();
+    expect(b.posts()).toHaveLength(2);
+  });
+
+  it("sends the same login again after a logout", async () => {
+    const b = await boot();
+    b.widget.init({ ...CONFIG, user: LOGIN });
+    await tick();
+    b.widget.setUser();
+    await tick();
+    b.widget.setUser(LOGIN);
+    await tick();
+    expect(b.posts()).toHaveLength(3);
+    expect(storedId()).toBe("sess-u1");
+  });
+
+  it("sends it again after a reset and a new init", async () => {
+    const b = await boot();
+    b.widget.init({ ...CONFIG, user: LOGIN });
+    await tick();
+    b.widget.reset();
+    b.widget.init(CONFIG);
+    await tick();
+    b.widget.setUser(LOGIN);
+    await tick();
+    expect(b.posts().at(-1)?.body.user_hash).toBe("h1");
+  });
+});
+
+describe("a profile update without a hash, for the same user", () => {
+  it.each([
+    ["a name", { id: "a", name: "New name" }],
+    ["an email", { id: "a", email: "new@b.c" }],
+    ["nothing else", { id: "a" }],
+  ])("keeps the session and the conversation: %s", async (_label, update) => {
+    const b = await boot();
+    b.widget.init(USER_A);
+    b.widget.open();
+    await tick();
+    await sendText("still mine");
+    const socket = b.sockets.at(-1);
+    const before = b.posts().length;
+
+    b.widget.setUser(update);
+    await tick();
+
+    expect(b.posts()).toHaveLength(before);
+    expect(storedId()).toBe("sess-a");
+    expect(bubbles()).toHaveLength(1);
+    expect(socket?.closed).toBe(false);
+    expect(b.sockets.at(-1)).toBe(socket);
+  });
+
+  it("recognizes a numeric id", async () => {
+    const b = await boot();
+    b.widget.init({ ...CONFIG, user: { id: 42, hash: "h" } });
+    await tick();
+    b.widget.setUser({ id: 42, name: "Ann" });
+    await tick();
+    expect(b.posts()).toHaveLength(1);
+    expect(storedId()).toBe("sess-42");
+  });
+
+  it("can still be followed by a logout", async () => {
+    const b = await boot();
+    b.widget.init(USER_A);
+    await tick();
+    b.widget.setUser({ id: "a", name: "New name" });
+    await tick();
+    b.widget.setUser();
+    await tick();
+    expect(storedId()).toBe("anon-1");
+  });
+
+  it("leaves a retry signed, with the update", async () => {
+    let fail = true;
+    const b = await boot({ session: () => (fail ? { status: 500, data: {} } : null) });
+    b.widget.init({
+      ...USER_A,
+      user: { id: "a", hash: "ha", email: "a@b.c", emailHash: "eh" },
+      company: { id: "c1", name: "Acme", hash: "ch" },
+    });
+    await tick();
+    b.widget.setUser({ id: "a", email: "a@b.c", name: "New name" });
+    await tick();
+    expect(b.posts()).toHaveLength(1);
+
+    fail = false;
+    b.widget.open();
+    await tick();
+
+    expect(b.posts().at(-1)?.body).toEqual({
+      external_user_id: "a",
+      user_hash: "ha",
+      name: "New name",
+      email: "a@b.c",
+      email_hash: "eh",
+      company: { id: "c1", name: "Acme" },
+      company_hash: "ch",
+    });
+  });
+
+  it("drops the email's hash when the email changed", async () => {
+    let fail = true;
+    const b = await boot({ session: () => (fail ? { status: 500, data: {} } : null) });
+    b.widget.init({ ...CONFIG, user: { id: "a", hash: "ha", email: "a@b.c", emailHash: "eh" } });
+    await tick();
+    b.widget.setUser({ id: "a", email: "new@b.c" });
+    fail = false;
+    b.widget.open();
+    await tick();
+    expect(b.posts().at(-1)?.body.email).toBe("new@b.c");
+    expect(b.posts().at(-1)?.body.email_hash).toBeUndefined();
+  });
+});
+
+describe("the history tab, when the user changes", () => {
+  it("shows the new user's conversations", async () => {
+    const b = await boot({
+      history: {
+        "sess-a": [historyItem("t9", "secret of a")],
+        "sess-b": [historyItem("t8", "list of b")],
+      },
+    });
+    b.widget.init(USER_A);
+    b.widget.open();
+    await tick();
+    openHistoryTab();
+    await tick();
+    expect(panelText()).toContain("secret of a");
+
+    b.widget.setUser({ id: "b", hash: "hb" });
+    await tick();
+
+    expect(panelText()).not.toContain("secret of a");
+    expect(panelText()).toContain("list of b");
+  });
+});
+
+describe("the open conversation, on a login", () => {
+  const loginAfterAMessage = async (conversationStatus: number) => {
+    const b = await boot({
+      conversation: () => ({ status: conversationStatus, data: {} }),
+    });
+    b.widget.init(CONFIG);
+    b.widget.open();
+    await tick();
+    await sendText("hello");
+    b.widget.setUser({ id: "u1", hash: "h1" });
+    await tick();
+    return b;
+  };
+
+  it("goes on a 404: it wasn't moved", async () => {
+    const b = await loginAfterAMessage(404);
+    expect(bubbles()).toHaveLength(0);
+    await sendText("next");
+    expect(b.sent().at(-1)?.body.ticket_id).toBeUndefined();
+  });
+
+  it.each([503, 500])("stays on a %i, which says nothing of where it is", async (status) => {
+    const b = await loginAfterAMessage(status);
+    expect(bubbles()).toHaveLength(1);
+    await sendText("next");
+    expect(b.sent().at(-1)?.session).toBe("sess-u1");
+    expect(b.sent().at(-1)?.body.ticket_id).toBe("t1");
   });
 });

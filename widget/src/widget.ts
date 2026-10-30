@@ -25,6 +25,9 @@
  * Or programmatically:
  *   Showdesk.init({ token: "org-api-token", navigationMode: "mpa" });
  *   Showdesk.open(); // Bind to your own button
+ *
+ * With a known user, pass `user` to init() rather than calling setUser() right after it:
+ * init() alone creates an anonymous session, which would be left behind empty.
  */
 
 import { installConsoleCollector } from "./collectors/console-collector";
@@ -184,11 +187,14 @@ function open(): void {
  *
  * - With an id and a hash (a login without a reload): the session is created again
  *   and replaces the stored one. An anonymous conversation carries on under the
- *   identified session; another user's is taken off the screen.
- * - Without a hash when a user was identified (a logout): starts over with a new
- *   anonymous session. The stored id is cleared and the previous conversation leaves the
- *   screen, while the widget stays usable. Whatever name or email was given goes with
- *   the new session.
+ *   identified session; another user's is taken off the screen. Calling it again with the
+ *   same values sends nothing, so it can run on every render.
+ * - With the current user's id and no hash (a profile update): the session stays. Only the
+ *   local config changes, sent to the server by the next init().
+ * - Without a hash when a user was identified, and with no id or another one (a logout):
+ *   starts over with a new anonymous session. The stored id is cleared and the previous
+ *   conversation leaves the screen, while the widget stays usable. Whatever name or email
+ *   was given goes with the new session.
  * - Without a hash on an anonymous visitor: their session and conversation stay as they
  *   are, so a logged-out page can call this on every render. Only the local config
  *   changes, sent to the server by the next init().
@@ -204,12 +210,25 @@ function setUser(
     console.warn("[Showdesk] Call init() before setUser()");
     return;
   }
-  const hasIdentity = Boolean(String(user?.id ?? "") && user?.hash);
-  const isEmpty = !String(user?.id ?? "") && !user?.name && !user?.email;
-  // The hash covers a session still being created, not known here yet.
-  const wasIdentified = Boolean(
-    config.user?.hash || getStore().state.session?.externalUserId,
-  );
+  const id = String(user?.id ?? "");
+  const hasIdentity = Boolean(id && user?.hash);
+  const isEmpty = !id && !user?.name && !user?.email;
+  const previous = config.user;
+  const session = getStore().state.session;
+  // Whom the session belongs to, or will: the hash covers one still being created.
+  const owner = previous?.hash ? String(previous.id ?? "") : session?.externalUserId;
+  if (user && !hasIdentity && id && id === owner) {
+    // Still signed, should the session have to be created again.
+    config.user = {
+      ...user,
+      hash: previous?.hash,
+      emailHash:
+        user.emailHash ?? (user.email === previous?.email ? previous?.emailHash : undefined),
+    };
+    config.company = company ?? config.company;
+    return;
+  }
+  const wasIdentified = Boolean(previous?.hash || session?.externalUserId);
   config.user = (isEmpty ? undefined : user) ?? undefined;
   config.company = company;
   if (!hasIdentity && wasIdentified) {

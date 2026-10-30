@@ -418,6 +418,12 @@ inbound sender).
   a signed page to an unsigned one creates a new anonymous session. The same goes for a
   session proven by `email_hash`, and for the email channel's later proof of ownership
   when it adds one, unless that channel gives the widget something to sign with.
+- Two messages sent before the first one answers both go without a ticket id, as the
+  widget only learns it from that answer: the backend opens two tickets.
+- After a page change in MPA mode, the widget reattaches to a live recording popup without
+  checking that the popup's session is the current one. A popup started by a user who has
+  since logged out can still set its ticket as the active one in the next user's view, and
+  that ticket's fetch and later sends then get a 404.
 - A wrong `user_hash` returns 403 and the widget doesn't start. A host app signing with
   an old secret loses the widget on its identified pages, not only their history.
 - Anonymization leaves personal data in places it can't judge: agent replies and internal

@@ -129,6 +129,8 @@ export class WidgetWebSocket {
     this.ws = ws;
 
     ws.onopen = () => {
+      // Retired while connecting: it's closing, and its timers would outlive it.
+      if (ws._retired) return;
       this.reconnectDelay = 1000;
       this.onConnectionChange?.(true);
 

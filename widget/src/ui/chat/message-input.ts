@@ -10,8 +10,31 @@
 
 import { renderAttachmentMenu } from "./attachment-menu";
 
+const INPUT_ERROR_CLASS = "sd-input-error";
+
+/** Say, above the input, that what the user tried to send didn't leave. */
+export function showSendError(): void {
+  const bar = document.querySelector(".sd-input-bar");
+  if (!bar) return;
+  clearSendError();
+  const error = document.createElement("div");
+  error.className = INPUT_ERROR_CLASS;
+  error.setAttribute("role", "alert");
+  error.textContent =
+    "Your message couldn't be sent. Check your connection and try again.";
+  bar.prepend(error);
+}
+
+export function clearSendError(): void {
+  document.querySelector(`.${INPUT_ERROR_CLASS}`)?.remove();
+}
+
 export interface MessageInputCallbacks {
-  onSendText: (text: string) => void;
+  /**
+   * True if the text is on its way. A promise if that takes waiting for a session: the
+   * input keeps the text meanwhile, and after if the answer is false.
+   */
+  onSendText: (text: string) => true | Promise<boolean>;
   onSendAudio: () => void;
   onScreenshot: () => void;
   onFile: (file: File) => void;
@@ -94,12 +117,34 @@ export function renderMessageInput(
   sendBtn.title = "Send";
   sendBtn.onclick = () => send();
 
-  function send(): void {
-    const text = textarea.value.trim();
-    if (!text) return;
-    callbacks.onSendText(text);
+  let waiting = false;
+
+  function clearInput(): void {
     textarea.value = "";
     textarea.style.height = "auto";
+  }
+
+  function setWaiting(value: boolean): void {
+    waiting = value;
+    textarea.readOnly = value;
+    sendBtn.disabled = value;
+  }
+
+  function send(): void {
+    const text = textarea.value.trim();
+    if (!text || waiting) return;
+    clearSendError();
+    const accepted = callbacks.onSendText(text);
+    if (accepted === true) {
+      clearInput();
+      return;
+    }
+    setWaiting(true);
+    void accepted.then((sent) => {
+      setWaiting(false);
+      if (sent) clearInput();
+      else showSendError();
+    });
   }
 
   inputRow.appendChild(attachWrapper);
