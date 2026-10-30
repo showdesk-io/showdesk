@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import DatabaseError, IntegrityError, OperationalError, connection
+from django.db.models import QuerySet
 from django.test.utils import CaptureQueriesContext
 
 from apps.contacts.models import Company, CompanyAttributeDef, Contact
@@ -950,3 +951,25 @@ def test_traits_or_company_that_isnt_an_object_is_ignored(api_client, org, field
     contact = WidgetSession.objects.get(id=res.data["session_id"]).contact
     assert contact.attributes == {}
     assert contact.company is None
+
+
+def test_session_race_returns_the_winners_session(api_client, org):
+    """The other request commits between our lookup and our insert."""
+    winner = WidgetSession.objects.create(organization=org, external_user_id="u1")
+    real_get = QuerySet.get
+    missed = []
+
+    def get(queryset, *args, **kwargs):
+        if queryset.model is WidgetSession and not missed:
+            missed.append(True)
+            raise WidgetSession.DoesNotExist
+        return real_get(queryset, *args, **kwargs)
+
+    with mock.patch.object(QuerySet, "get", get):
+        res = _post(
+            api_client, org, external_user_id="u1", user_hash=_sign("s3cret", "u1")
+        )
+    assert missed
+    assert res.status_code == 200
+    assert res.data["session_id"] == str(winner.id)
+    assert WidgetSession.objects.filter(organization=org).count() == 1

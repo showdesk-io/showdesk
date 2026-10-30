@@ -180,6 +180,13 @@ class WidgetSession(TimestampedModel):
         indexes = [
             models.Index(fields=["organization", "external_user_id"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "external_user_id"],
+                condition=~models.Q(external_user_id=""),
+                name="unique_widget_session_external_user_per_org",
+            ),
+        ]
 
     def __str__(self) -> str:
         identifier = self.email or self.name or str(self.id)[:8]

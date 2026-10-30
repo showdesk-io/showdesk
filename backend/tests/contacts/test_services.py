@@ -393,10 +393,10 @@ class TestDeclaredEmail:
         other = ContactFactory(organization=org, external_id="other", email="")
         before = _snapshot(other)
         contact = ContactFactory(organization=org, external_id="u1", email="")
+        session = _session(org, external_user_id="u1")
         for email in ("first@x.io", "Second@X.io"):
-            resolve_contact_for_widget_session(
-                _session(org, external_user_id="u1", email=email)
-            )
+            session.email = email
+            resolve_contact_for_widget_session(session)
         contact.refresh_from_db()
         assert (contact.email, contact.declared_email) == ("", "second@x.io")
         assert contact.email_verified_at is None
@@ -975,6 +975,7 @@ class TestUnsignedCompany:
             self._resolve(org, payload)
             contact.refresh_from_db()
             assert contact.company == current
+            WidgetSession.objects.filter(organization=org).delete()
         assert not Company.objects.filter(external_id="new").exists()
         assert other.contacts.count() == 0
 
