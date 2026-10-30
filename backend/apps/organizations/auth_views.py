@@ -21,6 +21,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.core.email import send_branded_email
+from apps.core.throttling import OTP_REQUEST_THROTTLES, OTP_VERIFY_THROTTLES
 
 from .models import OTPCode, User
 
@@ -49,7 +50,7 @@ class RequestOTPView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_scope = "otp"
+    throttle_classes = OTP_REQUEST_THROTTLES
 
     def post(self, request: Request) -> Response:
         serializer = RequestOTPSerializer(data=request.data)
@@ -98,7 +99,7 @@ class VerifyOTPView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_scope = "otp"
+    throttle_classes = OTP_VERIFY_THROTTLES
 
     def post(self, request: Request) -> Response:
         serializer = VerifyOTPSerializer(data=request.data)
@@ -107,14 +108,7 @@ class VerifyOTPView(APIView):
         email = serializer.validated_data["email"].lower()
         code = serializer.validated_data["code"]
 
-        # Find the most recent valid OTP for this email
-        otp = (
-            OTPCode.objects.filter(email=email, code=code, used_at__isnull=True)
-            .order_by("-created_at")
-            .first()
-        )
-
-        if not otp or not otp.is_valid:
+        if OTPCode.redeem(email, code) is None:
             return Response(
                 {"detail": "Invalid or expired code."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -127,9 +121,6 @@ class VerifyOTPView(APIView):
                 {"detail": "Invalid or expired code."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-
-        # Mark OTP as used
-        otp.mark_used()
 
         # Mark user as verified on first successful OTP
         if not user.is_verified:

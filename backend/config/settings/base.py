@@ -123,6 +123,19 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_RENDERER_CLASSES": ("rest_framework.renderers.JSONRenderer",),
+    # How many trusted proxies append to X-Forwarded-For. Unset, DRF identifies
+    # a client by the whole header, which the client can partly choose.
+    "NUM_PROXIES": config(
+        "DRF_NUM_PROXIES", default="", cast=lambda value: int(value) if value else None
+    ),
+    # Applied through apps.core.throttling, see OTP_*_THROTTLES. One code gets
+    # OTP_MAX_ATTEMPTS tries, so the email rates below bound the total guesses.
+    "DEFAULT_THROTTLE_RATES": {
+        "otp_request_ip": config("OTP_REQUEST_IP_RATE", default="30/hour"),
+        "otp_request_email": config("OTP_REQUEST_EMAIL_RATE", default="5/hour"),
+        "otp_verify_ip": config("OTP_VERIFY_IP_RATE", default="60/hour"),
+        "otp_verify_email": config("OTP_VERIFY_EMAIL_RATE", default="10/hour"),
+    },
 }
 
 # =============================================================================
@@ -341,3 +354,4 @@ BRAND_LOGO_URL = config("BRAND_LOGO_URL", default="")
 # =============================================================================
 OTP_LENGTH = config("OTP_LENGTH", default=6, cast=int)
 OTP_EXPIRY_SECONDS = config("OTP_EXPIRY_SECONDS", default=600, cast=int)
+OTP_MAX_ATTEMPTS = config("OTP_MAX_ATTEMPTS", default=5, cast=int)

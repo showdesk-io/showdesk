@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.core.email import send_branded_email
+from apps.core.throttling import OTP_REQUEST_THROTTLES
 from apps.organizations.models import OTPCode, User
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class SetupInitializeView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = OTP_REQUEST_THROTTLES
 
     def post(self, request: Request) -> Response:
         if is_instance_initialized():

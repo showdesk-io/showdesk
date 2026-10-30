@@ -10,7 +10,9 @@ from typing import ClassVar
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
+from django.db.models import F
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare
 
 from apps.core.models import TimestampedModel
 
@@ -431,7 +433,8 @@ class OTPCode(models.Model):
     """One-time password for passwordless email authentication.
 
     A new code is generated for each login attempt. Codes expire after
-    OTP_EXPIRY_SECONDS (default 10 minutes) and can only be used once.
+    OTP_EXPIRY_SECONDS (default 10 minutes), can only be used once, and stop
+    working after OTP_MAX_ATTEMPTS submissions.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -439,6 +442,7 @@ class OTPCode(models.Model):
     code = models.CharField(max_length=8)
     created_at = models.DateTimeField(auto_now_add=True)
     used_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
         ordering = ["-created_at"]
@@ -449,21 +453,41 @@ class OTPCode(models.Model):
     def __str__(self) -> str:
         return f"OTP for {self.email} ({self.code})"
 
-    @property
-    def is_expired(self) -> bool:
-        """Check if this OTP has expired."""
+    @classmethod
+    def redeem(cls, email: str, code: str) -> "OTPCode | None":
+        """Spend one attempt on the email's active code; consume it if it matches.
+
+        Returns the code on success. Returns None for a wrong code, and for an
+        email with no active code, so callers answer both the same way.
+
+        The attempt is counted before the comparison, by a conditional update:
+        however many submissions run in parallel, at most OTP_MAX_ATTEMPTS of
+        them ever get compared.
+        """
+        now = timezone.now()
         expiry = getattr(settings, "OTP_EXPIRY_SECONDS", 600)
-        return timezone.now() > self.created_at + timedelta(seconds=expiry)
+        otp = (
+            cls.objects.filter(
+                email=email,
+                used_at__isnull=True,
+                created_at__gte=now - timedelta(seconds=expiry),
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if otp is None:
+            return None
 
-    @property
-    def is_valid(self) -> bool:
-        """Check if this OTP can still be used."""
-        return self.used_at is None and not self.is_expired
+        limit = getattr(settings, "OTP_MAX_ATTEMPTS", 5)
+        active = cls.objects.filter(pk=otp.pk, used_at__isnull=True)
+        if not active.filter(attempts__lt=limit).update(attempts=F("attempts") + 1):
+            return None
 
-    def mark_used(self) -> None:
-        """Mark this OTP as used."""
-        self.used_at = timezone.now()
-        self.save(update_fields=["used_at"])
+        if constant_time_compare(otp.code, code):
+            return otp if active.update(used_at=now) else None
+
+        active.filter(attempts__gte=limit).update(used_at=now)
+        return None
 
     @classmethod
     def generate(cls, email: str) -> "OTPCode":
