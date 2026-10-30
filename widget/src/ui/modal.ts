@@ -16,6 +16,7 @@ import {
 } from "../api/chat-api";
 import { WidgetWebSocket } from "../api/websocket";
 import {
+  clearSession as clearStoredSession,
   getStoredSessionId,
   storeSessionId,
 } from "../session/session-manager";
@@ -28,7 +29,11 @@ import type {
   WidgetSession,
   WidgetTab,
 } from "../types";
-import { renderChatView, reattachPopupIfNeeded } from "./chat/chat-view";
+import {
+  letGoOfChatWork,
+  renderChatView,
+  reattachPopupIfNeeded,
+} from "./chat/chat-view";
 import { renderHistoryView } from "./history/history-view";
 
 /** Statuses that mean a conversation is still live (not resolved/closed). */
@@ -128,14 +133,38 @@ export function initSession(config: ShowdeskConfig): Promise<void> {
  * user's goes at once, even if the request then fails: that user is no longer here.
  */
 export function switchSession(config: ShowdeskConfig): Promise<void> {
-  const s = getStore();
-  const owner = s.state.session?.externalUserId;
+  const owner = getStore().state.session?.externalUserId;
   if (owner && owner !== String(config.user?.id ?? "")) {
-    ws?.disconnect();
-    s.update({ session: null, isConnected: false, ...EMPTY_VIEW });
-    renderActiveTab(config);
+    clearUserFromView(config);
   }
   return startSessionRun(config);
+}
+
+/**
+ * Start over with a new anonymous session, for the identity now in `config`: a logout
+ * that keeps the widget. Nothing of the session it replaces is resumed, shown or stored,
+ * even if the request then fails. Opening the panel tries again in that case.
+ */
+export function restartAnonymousSession(config: ShowdeskConfig): Promise<void> {
+  clearStoredSession();
+  clearUserFromView(config);
+  return startSessionRun(config);
+}
+
+/** True while a session is being created with no stored id to resume. */
+export function isCreatingNewSession(): boolean {
+  return (
+    runInFlight !== null && !getStore().state.session && !getStoredSessionId()
+  );
+}
+
+/** Take the session and whatever its user has on screen out of the view. */
+function clearUserFromView(config: ShowdeskConfig): void {
+  const s = getStore();
+  letGoOfChatWork(s, config, () => createModal(config));
+  ws?.disconnect();
+  s.update({ session: null, isConnected: false, ...EMPTY_VIEW });
+  renderActiveTab(config);
 }
 
 function startSessionRun(config: ShowdeskConfig): Promise<void> {
@@ -330,6 +359,8 @@ export function createModal(config: ShowdeskConfig): void {
   if (currentPanel) {
     currentPanel.style.display = "";
     resumeActiveConversation(config);
+    // The session may have failed, and the panel stayed mounted.
+    void initSession(config);
     return;
   }
 

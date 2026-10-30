@@ -41,6 +41,8 @@ import {
   destroyModal,
   getStore,
   initSession,
+  isCreatingNewSession,
+  restartAnonymousSession,
   switchSession,
 } from "./ui/modal";
 import { reattachPopupIfNeeded } from "./ui/chat/chat-view";
@@ -184,8 +186,11 @@ function open(): void {
  * - With an id and a hash (a login without a reload): the session is created again
  *   and replaces the stored one. An anonymous conversation carries on under the
  *   identified session; another user's is taken off the screen.
- * - With nothing, or without a hash when a user was identified (a logout): same as
- *   reset(). The widget is gone until the next init().
+ * - With nothing, or without a hash when a user was identified (a logout): starts over
+ *   with a new anonymous session. The stored id is cleared and the previous conversation
+ *   leaves the screen, while the widget stays usable. Whatever name or email was given
+ *   goes with the new session. Call this when the user logs out, not on every render of
+ *   a logged-out page: an anonymous visitor would lose their conversation each time.
  * - Otherwise, on an anonymous session (a name or an email without a hash): only
  *   updates the local config, sent to the server by the next init().
  *
@@ -206,12 +211,17 @@ function setUser(
   const wasIdentified = Boolean(
     config.user?.hash || getStore().state.session?.externalUserId,
   );
-  if (!hasIdentity && (isEmpty || wasIdentified)) {
-    reset();
+  const isLogout = !hasIdentity && (isEmpty || wasIdentified);
+  const hadNoUser = !config.user;
+  config.user = (isEmpty ? undefined : user) ?? undefined;
+  config.company = company;
+  if (isLogout) {
+    // Called twice for one logout: the request in flight is already the right one.
+    if (!(isEmpty && hadNoUser && isCreatingNewSession())) {
+      void restartAnonymousSession(config);
+    }
     return;
   }
-  config.user = user ?? undefined;
-  config.company = company;
   if (hasIdentity) {
     void switchSession(config);
   }
@@ -233,7 +243,8 @@ function destroy(): void {
  * Reset the widget: destroy the UI AND clear the stored session id.
  * Call this when the embedding app's user identity changes (e.g. logout)
  * so the next init() does not resume the previous user's conversation.
- * setUser() without an identity does the same. Call init() to bring the widget back.
+ * Call init() to bring the widget back. To keep the widget through a logout, call
+ * setUser() without an identity instead.
  */
 function reset(): void {
   destroy();

@@ -26,6 +26,7 @@ import {
 import { renderContactNudge } from "./contact-nudge";
 import { renderMessageBubble } from "./message-bubble";
 import { renderMessageInput } from "./message-input";
+import { closeLightbox } from "../media-lightbox";
 import { ScreenRecorder } from "../../recorder/screen-recorder";
 import type { RecordingMessage } from "../../recorder/broadcast-protocol";
 import {
@@ -235,6 +236,27 @@ function handleDeleteMessage(
   }, 5000);
 
   pendingDelete = { timer, messageId };
+}
+
+/**
+ * What the current session left running that would otherwise act on the next one:
+ * a delete waiting for its undo is committed now, under the session that asked for it,
+ * and a recording popup keeps uploading on its own, no longer tied to this view.
+ * Must run while the session is still in the store.
+ */
+export function letGoOfChatWork(
+  store: WidgetStore,
+  config: ShowdeskConfig,
+  onOpenPanel: () => void,
+): void {
+  if (pendingDelete) {
+    clearTimeout(pendingDelete.timer);
+    commitDelete(pendingDelete.messageId, store, config);
+    pendingDelete = null;
+  }
+  removeToast();
+  closeLightbox();
+  if (activePopupHandle) cleanupPopup(onOpenPanel);
 }
 
 function removeToast(): void {
@@ -748,6 +770,7 @@ async function loadPopupUploadedMessage(
   if (!session) return;
   try {
     const conv = await fetchConversation(config, session.sessionId, ticketId);
+    if (store.state.session?.sessionId !== session.sessionId) return;
     store.update({
       activeTicketId: conv.ticketId,
       activeTicketReference: conv.reference,

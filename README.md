@@ -258,12 +258,15 @@ An invalid `emailHash` or `company.hash` is ignored rather than refused: the val
 Showdesk.setUser(widgetIdentity.user, widgetIdentity.company);
 
 // After a logout
-Showdesk.setUser(); // Same as Showdesk.reset()
-Showdesk.init({ token: "your-organization-api-token" }); // If the widget should stay available
+Showdesk.setUser(); // The widget stays, on a new anonymous session
+
+// Or, if the widget should go away until the next init()
+Showdesk.reset();
 ```
 
 - `setUser(user, company)` with an id and a hash creates the session again, and the identified session returned replaces the stored one. An anonymous conversation carries on under it, in the panel and for agents. If another user was identified, their conversation leaves the screen first. If the request fails, an anonymous session stays as it was, and the next `init()` or `setUser()` tries again. `company` replaces the current one: leaving it out sends none.
-- `setUser()` without an identity, or without a hash once a user was identified, behaves like `reset()`. A name or an email without a hash on an anonymous session only pre-fills them, and reaches the server at the next `init()`.
+- `setUser()` without an identity, or without a hash once a user was identified, starts over with a new anonymous session. The stored session is forgotten and the previous conversation leaves the screen at once, even if the request then fails: opening the panel tries again. The panel stays as it was, and a later `setUser(user, company)` logs in as above. A name or an email given here goes with the new session. Call it when the user logs out rather than on every page of a logged-out visitor, who would lose their conversation each time. A recording still running in the page when the user logs out is sent on the new session.
+- A name or an email without a hash on an anonymous session only pre-fills them, and reaches the server at the next `init()`.
 - `reset()` removes the widget and forgets the stored session, so the next `init()` can't resume the previous user's conversation. Call `init()` to bring the widget back: `setUser()` does nothing until then. `init()` reads the `data-user-*` attributes again if it isn't given a `user`, so remove them from the script tag when the user logs out.
 
 #### Multi-Page Sites (MPA Mode)
