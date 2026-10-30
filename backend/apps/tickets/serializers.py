@@ -293,19 +293,16 @@ class TicketSerializer(serializers.ModelSerializer):
         return instance
 
 
-class WidgetSubmitResponseSerializer(TicketSerializer):
-    """What a widget gets back from a submission.
+class WidgetSubmitResponseSerializer(serializers.ModelSerializer):
+    """What a widget gets back from a submission: what it reads, and nothing else.
 
-    No contact data: the widget's token is public, and anyone can name an address
-    to find out about the contact holding it.
+    The widget's token is public, and anyone can name an address to find out about the
+    contact holding it.
     """
 
-    class Meta(TicketSerializer.Meta):
-        fields = [
-            field
-            for field in TicketSerializer.Meta.fields
-            if field not in ("contact", "contact_detail", "sender_verified")
-        ]
+    class Meta:
+        model = Ticket
+        fields = ["id", "reference"]
 
 
 class TicketListSerializer(serializers.ModelSerializer):

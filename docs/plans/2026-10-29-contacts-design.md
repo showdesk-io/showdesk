@@ -343,6 +343,8 @@ ticket's `requester_email`. It's null when there's no outside
 sender to verify: an agent-created ticket (source `agent` or `api`, or no session and no
 inbound sender).
 
+`widget_submit` answers with `{id, reference}` only, the token being public.
+
 `Contact.is_unsubscribed` blocks every non-essential email to the contact
 (enforced by the email channel).
 
@@ -430,6 +432,8 @@ inbound sender).
   details, or one more message on a scrubbed ticket. The window is one request, and
   anonymizing again repairs it. A video being processed at that moment can leave its
   thumbnail on the storage.
+- A ticket scrubbed while it had no Contact stays without one, so the upload endpoints that
+  take a ticket id and check for an anonymized Contact still accept files on it.
 - A file that the storage failed to delete is only logged: nothing retries it, and its row
   is gone.
 - An export holds the metadata of files, not the files. Past 20 MB encoded it isn't sent at
