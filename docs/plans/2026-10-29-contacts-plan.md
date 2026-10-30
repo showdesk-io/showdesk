@@ -2661,6 +2661,8 @@ def export_contact_data(contact_id: str, requested_by_id: str) -> None:
 
 `build_contact_export` uses `zipfile.ZipFile(io.BytesIO(), "w", zipfile.ZIP_DEFLATED)`, `json.dumps(..., default=str, indent=2)`, `csv.writer`; messages filtered on `message_type == TicketMessage.MessageType.REPLY`.
 
+Attachments with no message are only exported if the contact uploaded them (no uploader, or the requester): the agent UI uploads with no message even with the internal note box ticked. The whole lookup, build and send sits in the `try`. Any terminal failure, being an export over 20 MB once base64 encoded or the last retry failing, sends one `contact_export_failed` email with `reason` in its context (`too_large` or `error`); a failure of that email is logged and doesn't raise.
+
 Action: `require_org_admin`, `export_contact_data.delay(str(contact.id), str(request.user.id))`, return `Response({"status": "queued"}, status=202)`.
 
 **Step 4:** PASS (including existing `tests/core/test_email.py`). **Step 5: Commit** — `feat(backend): export contact data (GDPR art. 15)`
@@ -2825,7 +2827,7 @@ Left: logo, name, domain, website link, plan, MRR (`mrr_cents / 100`, no currenc
 - Modify: `frontend/src/components/tickets/TicketDetail.tsx` (the "Requester" block, ~line 970)
 - Test: `frontend/src/components/contacts/__tests__/ContactCard.test.tsx`
 
-When `ticket.contact_detail` exists: heading "Contact", name linking to `/contacts/:id`, email + `UnverifiedBadge`, `declared_email` + `UnverifiedBadge` when set, company line (logo, name, plan) linking to `/companies/:id`, "Other tickets: N" from `useContactTickets` excluding the current ticket. When `ticket.sender_verified === false`, show an "Unverified sender" hint on the card, even if the contact's email is verified: a forged ticket can link to a verified contact. Never show it when the value is null: an agent-created ticket (source `agent` or `api`, or no session and no inbound sender) has no sender to verify. When there's no `contact_detail`, keep the current requester rendering.
+When `ticket.contact_detail` exists: heading "Contact", name linking to `/contacts/:id`, email + `UnverifiedBadge`, `declared_email` + `UnverifiedBadge` when set, company line (logo, name, plan) linking to `/companies/:id`, "Other tickets: N" from `useContactTickets` excluding the current ticket. When `ticket.sender_verified === false`, show an "Unverified sender" hint on the card, even if the contact's email is verified: a forged ticket can link to a verified contact. The badge relates to the contact shown on the card, not to `requester_email`, which can differ from it: never show it next to that address alone. Never show it when the value is null: an agent-created ticket (source `agent` or `api`, or no session and no inbound sender) has no sender to verify. When there's no `contact_detail`, keep the current requester rendering.
 
 Test: the hint shows for `sender_verified: false` with a verified contact, and not for `sender_verified: true` or `null`.
 

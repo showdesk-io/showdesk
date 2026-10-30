@@ -1,5 +1,6 @@
 """Anonymization and export of a contact."""
 
+import base64
 import csv
 import hashlib
 import hmac
@@ -15,6 +16,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import DatabaseError, transaction
 from django.utils import timezone
 
+from apps.contacts import gdpr
 from apps.contacts.gdpr import (
     REMOVED_BODY,
     REMOVED_TITLE,
@@ -24,6 +26,7 @@ from apps.contacts.gdpr import (
 from apps.contacts.models import Contact
 from apps.contacts.services import resolve_contact_for_widget_session
 from apps.contacts.tasks import export_contact_data
+from apps.core.email import send_branded_email
 from apps.tickets.models import Ticket, TicketAttachment, TicketMessage, WidgetSession
 from apps.videos.models import VideoRecording
 from tests.factories import (
@@ -916,24 +919,83 @@ def test_export_task_skips_a_requester_deleted_since(organization):
 def test_export_too_large_to_attach_tells_the_admin_instead(
     admin_user, organization, monkeypatch, caplog
 ):
-    monkeypatch.setattr("apps.contacts.gdpr.MAX_EXPORT_ATTACHMENT_BYTES", 10)
+    monkeypatch.setattr("apps.contacts.gdpr.MAX_EXPORT_ENCODED_BYTES", 10)
     contact = ContactFactory(organization=organization, name="Alice")
-    export_contact_data(str(contact.id), str(admin_user.id))
+    with mock.patch.object(export_contact_data, "retry") as retry:
+        export_contact_data(str(contact.id), str(admin_user.id))
+    retry.assert_not_called()
     assert len(mail.outbox) == 1
     message = mail.outbox[0]
     assert message.to == [admin_user.email]
-    assert message.subject == "Contact export too large"
+    assert message.subject == "Contact export failed"
     assert message.attachments == []
     assert "too large" in message.body
+    assert str(contact.id) in message.body
     assert str(contact.id) in caplog.text
+
+
+def _encoded_size(data: bytes) -> int:
+    return len(base64.b64encode(data))
+
+
+def test_the_size_limit_is_20_mb_once_encoded():
+    assert gdpr.MAX_EXPORT_ENCODED_BYTES == 20 * 1024 * 1024
+    assert gdpr.export_fits_an_email(b"x" * (15 * 1024 * 1024))
+    assert not gdpr.export_fits_an_email(b"x" * (16 * 1024 * 1024))
+
+
+@pytest.mark.parametrize("length", [1, 2, 3, 4, 5, 6, 7, 100])
+def test_the_size_limit_counts_base64_exactly(monkeypatch, length):
+    data = b"x" * length
+    monkeypatch.setattr(gdpr, "MAX_EXPORT_ENCODED_BYTES", _encoded_size(data))
+    assert gdpr.export_fits_an_email(data)
+    monkeypatch.setattr(gdpr, "MAX_EXPORT_ENCODED_BYTES", _encoded_size(data) - 1)
+    assert not gdpr.export_fits_an_email(data)
 
 
 def test_export_at_the_size_limit_is_still_sent(admin_user, organization, monkeypatch):
     contact = ContactFactory(organization=organization)
-    size = len(build_contact_export(contact))
-    monkeypatch.setattr("apps.contacts.gdpr.MAX_EXPORT_ATTACHMENT_BYTES", size)
+    size = _encoded_size(build_contact_export(contact))
+    monkeypatch.setattr("apps.contacts.gdpr.MAX_EXPORT_ENCODED_BYTES", size)
     export_contact_data(str(contact.id), str(admin_user.id))
     assert mail.outbox[0].subject == "Contact export ready"
+
+
+def test_export_over_the_limit_only_once_encoded_is_not_sent(
+    admin_user, organization, monkeypatch
+):
+    contact = ContactFactory(organization=organization)
+    export = build_contact_export(contact)
+    assert len(export) < _encoded_size(export) - 1
+    monkeypatch.setattr(
+        "apps.contacts.gdpr.MAX_EXPORT_ENCODED_BYTES", _encoded_size(export) - 1
+    )
+    with mock.patch("apps.contacts.gdpr.build_contact_export", return_value=export):
+        export_contact_data(str(contact.id), str(admin_user.id))
+    assert mail.outbox[0].subject == "Contact export failed"
+
+
+def test_too_large_export_whose_failure_mail_fails_is_logged(
+    admin_user, organization, monkeypatch, caplog
+):
+    monkeypatch.setattr("apps.contacts.gdpr.MAX_EXPORT_ENCODED_BYTES", 10)
+    contact = ContactFactory(organization=organization)
+    with (
+        mock.patch(
+            "apps.contacts.tasks.send_branded_email", side_effect=OSError("smtp")
+        ) as send,
+        mock.patch.object(export_contact_data, "retry") as retry,
+    ):
+        export_contact_data(str(contact.id), str(admin_user.id))
+    assert send.call_count == 1
+    retry.assert_not_called()
+    assert str(contact.id) in caplog.text
+
+
+def _only_the_failure_mail_works(*args, template, **kwargs):
+    if template != "contact_export_failed":
+        raise OSError("smtp")
+    return send_branded_email(*args, template=template, **kwargs)
 
 
 def test_export_task_retries_a_failed_email(admin_user, organization):
@@ -949,6 +1011,170 @@ def test_export_task_retries_a_failed_email(admin_user, organization):
     ):
         export_contact_data(str(contact.id), str(admin_user.id))
     retry.assert_called_once()
+    assert mail.outbox == []
+
+
+def test_export_task_retries_a_failed_build(admin_user, organization):
+    contact = ContactFactory(organization=organization)
+    with (
+        mock.patch(
+            "apps.contacts.gdpr.build_contact_export", side_effect=ValueError("bug")
+        ),
+        mock.patch.object(
+            export_contact_data, "retry", side_effect=RuntimeError("retried")
+        ) as retry,
+        pytest.raises(RuntimeError, match="retried"),
+    ):
+        export_contact_data(str(contact.id), str(admin_user.id))
+    retry.assert_called_once()
+    assert mail.outbox == []
+
+
+def test_export_task_retries_a_failed_lookup(admin_user, organization):
+    contact = ContactFactory(organization=organization)
+    with (
+        mock.patch(
+            "apps.organizations.models.User.objects.filter", side_effect=OSError
+        ),
+        mock.patch.object(
+            export_contact_data, "retry", side_effect=RuntimeError("retried")
+        ) as retry,
+        pytest.raises(RuntimeError, match="retried"),
+    ):
+        export_contact_data(str(contact.id), str(admin_user.id))
+    retry.assert_called_once()
+
+
+def _assert_told_of_a_failure(admin_user, contact) -> None:
+    assert len(mail.outbox) == 1
+    message = mail.outbox[0]
+    assert message.to == [admin_user.email]
+    assert message.subject == "Contact export failed"
+    assert message.attachments == []
+    assert contact.name in message.body
+    assert "too large" not in message.body
+
+
+def test_build_failing_for_good_tells_the_admin(admin_user, organization):
+    contact = ContactFactory(organization=organization, name="Alice")
+    with mock.patch(
+        "apps.contacts.gdpr.build_contact_export", side_effect=ValueError("bug")
+    ):
+        result = export_contact_data.apply(
+            args=[str(contact.id), str(admin_user.id)],
+            retries=export_contact_data.max_retries,
+        )
+    assert result.successful()
+    _assert_told_of_a_failure(admin_user, contact)
+
+
+def test_send_failing_for_good_tells_the_admin(admin_user, organization):
+    contact = ContactFactory(organization=organization, name="Alice")
+    with mock.patch(
+        "apps.contacts.tasks.send_branded_email",
+        side_effect=_only_the_failure_mail_works,
+    ):
+        result = export_contact_data.apply(
+            args=[str(contact.id), str(admin_user.id)],
+            retries=export_contact_data.max_retries,
+        )
+    assert result.successful()
+    _assert_told_of_a_failure(admin_user, contact)
+
+
+def test_failing_for_good_after_every_retry_sends_one_mail(admin_user, organization):
+    contact = ContactFactory(organization=organization, name="Alice")
+    with mock.patch(
+        "apps.contacts.tasks.send_branded_email",
+        side_effect=_only_the_failure_mail_works,
+    ) as send:
+        export_contact_data.apply(args=[str(contact.id), str(admin_user.id)])
+    templates = [call.kwargs["template"] for call in send.call_args_list]
+    assert templates == ["contact_export_ready"] * 4 + ["contact_export_failed"]
+    _assert_told_of_a_failure(admin_user, contact)
+
+
+def test_a_failure_mail_that_fails_is_logged_and_doesnt_raise(
+    admin_user, organization, caplog
+):
+    contact = ContactFactory(organization=organization)
+    with mock.patch(
+        "apps.contacts.tasks.send_branded_email", side_effect=OSError("smtp")
+    ) as send:
+        result = export_contact_data.apply(
+            args=[str(contact.id), str(admin_user.id)],
+            retries=export_contact_data.max_retries,
+        )
+    assert result.successful()
+    assert [call.kwargs["template"] for call in send.call_args_list] == [
+        "contact_export_ready",
+        "contact_export_failed",
+    ]
+    assert f"Couldn't tell who asked for the export of contact {contact.id}" in (
+        caplog.text
+    )
+
+
+def test_a_lookup_failing_for_good_has_no_one_to_tell(admin_user, organization):
+    contact = ContactFactory(organization=organization)
+    with mock.patch(
+        "apps.organizations.models.User.objects.filter", side_effect=OSError
+    ):
+        result = export_contact_data.apply(
+            args=[str(contact.id), str(admin_user.id)],
+            retries=export_contact_data.max_retries,
+        )
+    assert result.successful()
+    assert mail.outbox == []
+
+
+def test_export_email_says_which_notes_are_in_it(admin_user, organization):
+    contact = ContactFactory(organization=organization)
+    export_contact_data(str(contact.id), str(admin_user.id))
+    message = mail.outbox[0]
+    for text in (message.body, message.alternatives[0][0]):
+        assert "notes agents wrote about this contact are included" in text
+        assert "Internal notes on tickets are not" in text
+
+
+# Export: files with no message
+
+
+def test_export_only_keeps_files_with_no_message_from_the_contact(organization, agent):
+    """Agents upload with no message even with the internal note box ticked."""
+    requester = EndUserFactory(organization=organization)
+    contact = ContactFactory(organization=organization)
+    ticket = TicketFactory(
+        organization=organization, contact=contact, requester=requester
+    )
+    reply = TicketMessageFactory(ticket=ticket, author=agent)
+    for uploader, message, filename in (
+        (None, None, "widget.png"),
+        (requester, None, "requester.png"),
+        (agent, reply, "reply.pdf"),
+        (agent, None, "note.pdf"),
+    ):
+        TicketAttachmentFactory(
+            ticket=ticket, uploaded_by=uploader, message=message, filename=filename
+        )
+
+    _, tickets, _ = _read_export(contact)
+
+    assert {row["filename"] for row in tickets[0]["attachments"]} == {
+        "widget.png",
+        "requester.png",
+        "reply.pdf",
+    }
+
+
+def test_export_skips_a_file_with_no_message_from_a_requester_who_is_staff(
+    organization, agent
+):
+    contact = ContactFactory(organization=organization)
+    ticket = TicketFactory(organization=organization, contact=contact, requester=agent)
+    TicketAttachmentFactory(ticket=ticket, uploaded_by=agent, filename="note.pdf")
+    _, tickets, _ = _read_export(contact)
+    assert tickets[0]["attachments"] == []
 
 
 # What a login leaves behind

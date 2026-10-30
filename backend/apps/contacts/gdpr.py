@@ -24,8 +24,8 @@ REMOVED_TITLE = "[Removed at the contact's request]"
 REMOVED_BODY = "[Content removed at the contact's request]"
 KEPT_CONTEXT_KEYS = {"browser", "os", "language", "timezone", "screen_resolution"}
 MAX_KEPT_CONTEXT_LENGTH = 100
-# What mail servers commonly accept, once the encoding has added its third.
-MAX_EXPORT_ATTACHMENT_BYTES = 20 * 1024 * 1024
+# What mail servers commonly accept, counted as sent: base64 adds a third.
+MAX_EXPORT_ENCODED_BYTES = 20 * 1024 * 1024
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
@@ -376,10 +376,16 @@ def _dumps(data) -> str:
     return json.dumps(data, cls=DjangoJSONEncoder, ensure_ascii=False, indent=2)
 
 
+def export_fits_an_email(export: bytes) -> bool:
+    """Tell if ``export`` is within the limit once base64 encoded, as an email sends it."""
+    return 4 * ((len(export) + 2) // 3) <= MAX_EXPORT_ENCODED_BYTES
+
+
 def build_contact_export(contact: Contact) -> bytes:
     """Return a ZIP of what the organization holds about ``contact``.
 
-    Internal notes stay out, and so do the files themselves: only their metadata goes.
+    Internal ticket notes stay out, and so do the files themselves: only their metadata
+    goes. Agent notes about the contact are in, without who wrote them.
     """
     public = TicketMessage.MessageType.REPLY
     tickets = list(
@@ -395,8 +401,11 @@ def build_contact_export(contact: Contact) -> bytes:
             ),
             Prefetch(
                 "attachments",
+                # An agent's upload has no message, even for an internal note: only
+                # the contact's own say nothing internal.
                 TicketAttachment.objects.filter(
-                    Q(message__isnull=True) | Q(message__message_type=public)
+                    Q(message__isnull=True) & _by_the_contact("uploaded_by")
+                    | Q(message__message_type=public)
                 ).order_by("created_at", "id"),
                 to_attr="public_attachments",
             ),

@@ -1,4 +1,4 @@
 {% extends "emails/base.txt" %}
 {% block content %}{% autoescape off %}The data held about {{ contact_name }} is attached to this email as a ZIP file: their profile, notes and tickets.
 
-It holds personal data. Internal notes are left out. Share it only with this person, and delete it once that's done.{% endautoescape %}{% endblock %}
+It holds personal data, and the notes agents wrote about this contact are included. Internal notes on tickets are not. Share it only with this person, and delete it once that's done.{% endautoescape %}{% endblock %}

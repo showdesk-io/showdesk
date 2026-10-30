@@ -288,11 +288,14 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
 - `GET/POST /api/v1/contacts/{id}/notes/`.
 - `GET /api/v1/contacts/{id}/tickets/`.
 - `POST /api/v1/contacts/{id}/export/` — admin only, Celery task, emails the requester a
-  ZIP attached (never a URL): `contact.json` (profile, attributes, notes), `tickets.json`
-  (tickets, public messages, attachment metadata, the contact's recordings with their
-  transcription; never internal notes, nor who at the organization wrote what) and
-  `tickets.csv` (formula-like cells escaped). Beyond 20 MB nothing is attached, and the
-  requester gets an email saying so.
+  ZIP attached (never a URL): `contact.json` (profile, attributes, the notes agents wrote
+  about the contact), `tickets.json` (tickets, public messages, metadata of the files on
+  public messages or with no message if the contact uploaded them, the contact's recordings
+  with their transcription; never internal ticket notes, nor who at the organization wrote
+  what) and `tickets.csv` (formula-like cells escaped). Beyond 20 MB once base64 encoded,
+  as an email carries it, nothing is attached. That and a build or send still failing after
+  its retries each send the requester one `contact_export_failed` email with the reason; if
+  that email fails, it's only logged.
 - `POST /api/v1/contacts/{id}/anonymize/` — admin only, irreversible, idempotent: a
   second call scrubs again and keeps the anonymized email, so it repairs what a stale write
   brought back, and changes nothing, dates included, if there's nothing to repair. Ticket
@@ -429,5 +432,7 @@ inbound sender).
   thumbnail on the storage.
 - A file that the storage failed to delete is only logged: nothing retries it, and its row
   is gone.
-- An export holds the metadata of files, not the files. Past 20 MB it isn't sent at all,
-  and there's no other way to get it: both need a download with its own access control.
+- An export holds the metadata of files, not the files. Past 20 MB encoded it isn't sent at
+  all, and there's no other way to get it: both need a download with its own access control.
+- A worker killed while exporting (out of memory, a hard time limit) tells no one: the
+  requester only has the 202.
