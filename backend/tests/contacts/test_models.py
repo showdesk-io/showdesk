@@ -14,7 +14,7 @@ from apps.contacts.models import (
     Contact,
     ContactAttributeDef,
 )
-from apps.tickets.models import WidgetSession
+from apps.tickets.models import Ticket, WidgetSession
 from tests.factories import (
     CompanyFactory,
     ContactAttributeDefFactory,
@@ -306,3 +306,31 @@ def test_widget_session_email_verified_at_defaults_to_none():
     session = WidgetSession.objects.create(organization=OrganizationFactory())
     session.refresh_from_db()
     assert session.email_verified_at is None
+
+
+def test_ticket_contact_from_another_org_is_rejected():
+    ticket = TicketFactory(contact=ContactFactory())
+    with pytest.raises(ValidationError) as excinfo:
+        ticket.full_clean()
+    assert list(excinfo.value.message_dict) == ["contact"]
+
+
+def test_ticket_contact_from_same_org_is_accepted():
+    contact = ContactFactory()
+    ticket = TicketFactory(organization=contact.organization, contact=contact)
+    ticket.full_clean()
+
+
+def test_ticket_without_contact_is_accepted():
+    TicketFactory().full_clean()
+
+
+def test_ticket_form_reports_foreign_contact_on_the_field():
+    form_class = modelform_factory(Ticket, fields=["organization", "contact"])
+    ticket = TicketFactory()
+    form = form_class(
+        {"organization": ticket.organization_id, "contact": ContactFactory().pk},
+        instance=ticket,
+    )
+    assert not form.is_valid()
+    assert list(form.errors) == ["contact"]

@@ -1,8 +1,10 @@
 """Ticket-related models: Ticket, TicketMessage, TicketAttachment, Tag, SLAPolicy."""
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
+from apps.contacts.models import Contact
 from apps.core.models import TimestampedModel
 
 
@@ -353,6 +355,19 @@ class Ticket(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.reference}: {self.title}"
+
+    def clean(self) -> None:
+        super().clean()
+        if (
+            self.contact_id
+            and self.organization_id
+            and Contact.objects.filter(pk=self.contact_id)
+            .exclude(organization_id=self.organization_id)
+            .exists()
+        ):
+            raise ValidationError(
+                {"contact": "This contact belongs to another organization."}
+            )
 
 
 class TicketMessage(TimestampedModel):
