@@ -26,6 +26,7 @@ function makeContact(overrides: Partial<ContactSummary> = {}): ContactSummary {
     declared_email: "",
     avatar_url: "",
     company_detail: null,
+    is_anonymized: false,
     ...overrides,
   };
 }
@@ -263,14 +264,29 @@ describe("ContactCard", () => {
       const line = screen.getByText("mallory@example.com").parentElement as HTMLElement;
       expect(within(line).queryByText("Unverified")).not.toBeInTheDocument();
     });
+  });
 
-    it("never shows an anonymized address left on a ticket", () => {
+  describe("a visitor who declares an address at the anonymization domain", () => {
+    it("isn't taken for an anonymized contact", () => {
       renderCard(
-        makeContact(),
-        makeTicket({ requester_email: "anonymized-abc@example.invalid" }),
+        makeContact({
+          display_name: "Mallory",
+          name: "Mallory",
+          email: "visitor@example.invalid",
+          email_verified: false,
+        }),
+        makeTicket({
+          sender_verified: false,
+          requester_name: "Someone else",
+          requester_email: "other@example.invalid",
+        }),
       );
 
-      expect(screen.queryByText(/example\.invalid/)).not.toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Mallory" })).toBeInTheDocument();
+      expect(screen.getByText("visitor@example.invalid")).toBeInTheDocument();
+      expect(screen.getByText("Unverified sender")).toBeInTheDocument();
+      expect(screen.getByText("Requester on this ticket")).toBeInTheDocument();
+      expect(screen.getByText("other@example.invalid")).toBeInTheDocument();
     });
   });
 
@@ -280,6 +296,7 @@ describe("ContactCard", () => {
       name: "Anonymized contact",
       email: "anonymized-abc@example.invalid",
       email_verified: false,
+      is_anonymized: true,
     });
 
     it("links to the read-only page without the placeholder email", () => {
@@ -291,6 +308,13 @@ describe("ContactCard", () => {
       );
       expect(screen.queryByText(/example\.invalid/)).not.toBeInTheDocument();
       expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
+    });
+
+    it("goes by the flag, not the address", () => {
+      renderCard({ ...anonymized, email: "ada@example.com" });
+
+      expect(screen.getByRole("link", { name: "Anonymized contact" })).toBeInTheDocument();
+      expect(screen.queryByText("ada@example.com")).not.toBeInTheDocument();
     });
 
     it("says it even if the contact was given another name since", () => {

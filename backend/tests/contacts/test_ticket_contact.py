@@ -101,6 +101,35 @@ class TestContactFields:
         assert detail["company_detail"]["id"] == str(company.id)
         assert detail["company_detail"]["name"] == "Acme"
 
+    def test_says_whether_the_contact_is_anonymized(
+        self, authenticated_client, organization
+    ):
+        contact = ContactFactory(organization=organization)
+        # A visitor can declare this address: only the flag means anonymized.
+        lookalike = ContactFactory(
+            organization=organization, email="visitor@example.invalid"
+        )
+        anonymized = ContactFactory(organization=organization)
+        tickets = [
+            _ticket(organization, contact=c) for c in (contact, lookalike, anonymized)
+        ]
+        anonymize_contact(anonymized)
+
+        flags = [
+            authenticated_client.get(_url(ticket)).data["contact_detail"][
+                "is_anonymized"
+            ]
+            for ticket in tickets
+        ]
+        rows = authenticated_client.get(TICKETS).data["results"]
+
+        assert flags == [False, False, True]
+        assert sorted(row["contact_detail"]["is_anonymized"] for row in rows) == [
+            False,
+            False,
+            True,
+        ]
+
     def test_list_exposes_the_contact(self, authenticated_client, organization):
         contact = ContactFactory(organization=organization)
         _ticket(organization, contact=contact)

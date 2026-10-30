@@ -10,19 +10,11 @@ import { Link } from "react-router";
 import { TIMELINE_TICKETS_LIMIT } from "@/api/contacts";
 import { useContactTickets } from "@/hooks/useContacts";
 import type { ContactSummary, Ticket } from "@/types";
+import { ANONYMIZED_CONTACT } from "./anonymized";
 import { Fact, SectionHeading } from "./DetailParts";
 import { NO_VALUE } from "./format";
 import { Avatar } from "./ListParts";
 import { UnverifiedBadge } from "./UnverifiedBadge";
-
-/**
- * Of the addresses anonymization gives a contact, and copies on their tickets. The summary
- * a ticket embeds has no `is_anonymized`, and only anonymization writes this domain.
- */
-const ANONYMIZED_EMAIL_SUFFIX = "@example.invalid";
-
-const isAnonymizedEmail = (email: string) =>
-  email.toLowerCase().endsWith(ANONYMIZED_EMAIL_SUFFIX);
 
 const isSame = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
@@ -35,12 +27,7 @@ function otherRequester(ticket: Ticket, contact: ContactSummary) {
   const email = ticket.requester_email.trim() || account?.email || "";
   return {
     name: isSame(name, contact.name) || isSame(name, contact.display_name) ? "" : name,
-    email:
-      isAnonymizedEmail(email) ||
-      isSame(email, contact.email) ||
-      isSame(email, contact.declared_email)
-        ? ""
-        : email,
+    email: isSame(email, contact.email) || isSame(email, contact.declared_email) ? "" : email,
   };
 }
 
@@ -75,12 +62,12 @@ export function ContactCard({
 }) {
   // An anonymized ticket lost its session, so its sender reads as unverified whoever it
   // was, and what it says of its requester went with the contact's data.
-  if (isAnonymizedEmail(contact.email)) {
+  if (contact.is_anonymized) {
     return (
       <section aria-label="Contact" className="mb-6 text-sm">
         <SectionHeading>Contact</SectionHeading>
         <div className="space-y-1">
-          <ContactLink contactId={contact.id}>Anonymized contact</ContactLink>
+          <ContactLink contactId={contact.id}>{ANONYMIZED_CONTACT}</ContactLink>
           <OtherTickets contactId={contact.id} ticketId={ticket.id} />
         </div>
       </section>

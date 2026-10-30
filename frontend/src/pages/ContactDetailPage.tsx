@@ -1,8 +1,8 @@
 /**
  * A contact: profile and custom attributes, timeline, and what's known around them.
  *
- * Anonymized contacts open read-only. The API refuses their writes with a 409, which also
- * covers a contact anonymized while its page was open.
+ * Anonymized contacts open read-only. The API refuses edits and notes with a 409, which
+ * also covers a contact anonymized while its page was open.
  */
 
 import { useState } from "react";
@@ -234,15 +234,12 @@ function Overview({ contact }: { contact: Contact }) {
 
 function AdminActions({ contact }: { contact: Contact }) {
   const exportContact = useExportContact();
-  const handleConflict = useContactConflict(contact.id);
   const [modal, setModal] = useState<"anonymize" | "delete" | null>(null);
 
   const handleExport = () => {
     exportContact.mutate(contact.id, {
       onSuccess: () => toast.success("Export queued — you will receive it by email"),
-      onError: (error) => {
-        if (!handleConflict(error)) toast.error("Failed to queue the export.");
-      },
+      onError: () => toast.error("Failed to queue the export."),
     });
   };
 
@@ -272,7 +269,6 @@ function AdminActions({ contact }: { contact: Contact }) {
 
 function AnonymizeModal({ contact, onClose }: { contact: Contact; onClose: () => void }) {
   const anonymize = useAnonymizeContact();
-  const handleConflict = useContactConflict(contact.id);
   const [typed, setTyped] = useState("");
   const [errors, setErrors] = useState<FormErrors>(NO_ERRORS);
   const expected = contact.email || contact.display_name;
@@ -287,10 +283,6 @@ function AnonymizeModal({ contact, onClose }: { contact: Contact; onClose: () =>
       toast.success("Contact anonymized.");
       onClose();
     } catch (error) {
-      if (handleConflict(error)) {
-        onClose();
-        return;
-      }
       const shown = readFormErrors(error, []);
       if (shown) setErrors(shown);
       else toast.error("Failed to anonymize contact.");
@@ -333,16 +325,14 @@ function AnonymizeModal({ contact, onClose }: { contact: Contact; onClose: () =>
 function DeleteModal({ contact, onClose }: { contact: Contact; onClose: () => void }) {
   const navigate = useNavigate();
   const deleteContact = useDeleteContact();
-  const handleConflict = useContactConflict(contact.id);
 
   const handleSubmit = async () => {
     try {
       await deleteContact.mutateAsync(contact.id);
       toast.success("Contact deleted.");
       void navigate("/contacts");
-    } catch (error) {
-      if (handleConflict(error)) onClose();
-      else toast.error("Failed to delete contact.");
+    } catch {
+      toast.error("Failed to delete contact.");
     }
   };
 

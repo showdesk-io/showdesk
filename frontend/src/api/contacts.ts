@@ -15,9 +15,6 @@ export interface ContactFilters {
   search?: string;
   company?: string;
   email_verified?: boolean;
-  last_seen_after?: string;
-  last_seen_before?: string;
-  ordering?: string;
   page?: number;
   page_size?: number;
   /** Exact match on custom attributes, by key. */

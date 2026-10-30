@@ -25,6 +25,7 @@ class ContactSummarySerializer(serializers.ModelSerializer):
             "declared_email",
             "avatar_url",
             "company_detail",
+            "is_anonymized",
         )
 
     def get_email_verified(self, obj) -> bool:

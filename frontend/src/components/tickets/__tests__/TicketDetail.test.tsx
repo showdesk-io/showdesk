@@ -32,6 +32,7 @@ const contact: ContactSummary = {
   declared_email: "",
   avatar_url: "",
   company_detail: null,
+  is_anonymized: false,
 };
 
 function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
@@ -104,5 +105,18 @@ describe("TicketDetail sidebar", () => {
     expect(screen.getByText("bob@example.com")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Contact" })).not.toBeInTheDocument();
     expect(contactTicketsCalls()).toHaveLength(0);
+  });
+
+  it("doesn't show the placeholder of a ticket scrubbed with no contact", () => {
+    renderDetail(
+      makeTicket({
+        requester_name: "Anonymized contact",
+        requester_email: "anonymized-abc@example.invalid",
+      }),
+    );
+
+    expect(screen.getByRole("heading", { name: "Requester" })).toBeInTheDocument();
+    expect(screen.getByText("Anonymized contact")).toBeInTheDocument();
+    expect(screen.queryByText(/example\.invalid/)).not.toBeInTheDocument();
   });
 });

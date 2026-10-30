@@ -331,6 +331,7 @@ export interface ContactSummary {
   declared_email: string;
   avatar_url: string;
   company_detail: CompanySummary | null;
+  is_anonymized: boolean;
 }
 
 export interface Contact extends ContactSummary {
@@ -346,7 +347,6 @@ export interface Contact extends ContactSummary {
   last_seen_at: string | null;
   last_contacted_at: string | null;
   is_unsubscribed: boolean;
-  is_anonymized: boolean;
   attributes: Record<string, unknown>;
   tickets_count: number;
   open_tickets_count: number;

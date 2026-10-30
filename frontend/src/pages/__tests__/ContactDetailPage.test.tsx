@@ -753,7 +753,7 @@ describe("attribute editor", () => {
     expect(container.querySelector('a[href^="javascript"]')).toBeNull();
   });
 
-  it("shows loading and error states for the definitions", async () => {
+  it("shows an error for the definitions, and tries again on demand", async () => {
     const user = userEvent.setup();
     refused["/contact-attributes/"] = refusal(500, {});
     renderPage();
@@ -1037,61 +1037,6 @@ describe("export", () => {
     await user.click(screen.getByRole("button", { name: "Export data" }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Failed to queue the export."));
-  });
-});
-
-describe("a 409 on an admin action", () => {
-  const conflict = () => refusal(409, { detail: "This contact has been anonymized." });
-
-  it("on export, shows a toast and refreshes", async () => {
-    const user = userEvent.setup();
-    client.post.mockRejectedValue(conflict());
-    renderPage();
-    await loaded();
-    const before = gets("/contacts/c1/").length;
-
-    await user.click(screen.getByRole("button", { name: "Export data" }));
-
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith("This contact has been anonymized."),
-    );
-    await waitFor(() => expect(gets("/contacts/c1/").length).toBeGreaterThan(before));
-  });
-
-  it("on delete, shows a toast, refreshes and stays", async () => {
-    const user = userEvent.setup();
-    client.delete.mockRejectedValue(conflict());
-    renderPage();
-    await loaded();
-    const before = gets("/contacts/c1/").length;
-
-    await user.click(screen.getByRole("button", { name: "Delete" }));
-    const dialog = await screen.findByRole("dialog", { name: "Delete contact" });
-    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
-
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith("This contact has been anonymized."),
-    );
-    await waitFor(() => expect(gets("/contacts/c1/").length).toBeGreaterThan(before));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByTestId("location")).toHaveTextContent("/contacts/c1");
-  });
-
-  it("on anonymize, shows a toast, refreshes and closes", async () => {
-    const user = userEvent.setup();
-    client.post.mockRejectedValue(conflict());
-    renderPage();
-    await loaded();
-
-    await user.click(screen.getByRole("button", { name: "Anonymize" }));
-    const dialog = await screen.findByRole("dialog", { name: "Anonymize contact" });
-    await user.type(within(dialog).getByRole("textbox"), "ada@example.com");
-    await user.click(within(dialog).getByRole("button", { name: "Anonymize" }));
-
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith("This contact has been anonymized."),
-    );
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
 

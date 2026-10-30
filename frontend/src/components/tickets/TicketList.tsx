@@ -11,6 +11,7 @@ import { Link } from "react-router";
 import { clsx } from "clsx";
 import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
+import { requesterAddress } from "@/components/contacts/anonymized";
 import type { TicketListItem, TicketStatus, Tag } from "@/types";
 import { useUpdateTicket, useAssignTicket } from "@/hooks/useTickets";
 import { useTags, useCreateTag, useSetTicketTags } from "@/hooks/useTags";
@@ -481,7 +482,7 @@ function CompactRow({ ticket, selected, focused, onToggleSelected }: RowProps) {
           <TagBadges tags={ticket.tags_detail} />
         </div>
         <p className="mt-0.5 text-xs text-gray-500">
-          {ticket.requester_detail?.email ?? ticket.requester_email}
+          {requesterAddress(ticket)}
         </p>
       </Link>
 
@@ -554,7 +555,7 @@ function ExpandedRow({ ticket, selected, focused, onToggleSelected }: RowProps) 
             </p>
           )}
           <div className="mt-1 flex items-center gap-3 text-xs text-gray-400">
-            <span>{ticket.requester_detail?.email ?? ticket.requester_email}</span>
+            <span>{requesterAddress(ticket)}</span>
             <span>{ticket.message_count} msg</span>
           </div>
         </Link>

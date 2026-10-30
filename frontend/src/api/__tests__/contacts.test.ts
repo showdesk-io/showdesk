@@ -1,37 +1,20 @@
 /**
- * Tests for the requests the contacts, companies and attribute definition API modules
- * make, and for reading what the API answers when it refuses a write.
+ * Tests for what the contacts, companies and attribute definition API modules work out
+ * themselves, and for reading what the API answers when it refuses a write. The plain
+ * requests are covered through the hooks.
  */
 
 import { AxiosError, type AxiosResponse } from "axios";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  fetchAttributeDefs,
-  createAttributeDef,
-  updateAttributeDef,
-} from "../attributeDefs";
+import { fetchAttributeDefs } from "../attributeDefs";
 import { apiClient } from "../client";
 import {
   createCompany,
   deleteCompany,
   fetchCompanies,
-  fetchCompany,
-  fetchCompanyContacts,
-  fetchCompanyTickets,
   updateCompany,
 } from "../companies";
-import {
-  anonymizeContact,
-  createContact,
-  createContactNote,
-  deleteContact,
-  exportContact,
-  fetchContact,
-  fetchContactNotes,
-  fetchContacts,
-  fetchContactTickets,
-  updateContact,
-} from "../contacts";
+import { fetchContacts } from "../contacts";
 import { parseApiError } from "../errors";
 
 vi.mock("../client", () => ({
@@ -71,65 +54,6 @@ describe("fetchContacts", () => {
       params: { email_verified: false, page: 2, page_size: 50 },
     });
   });
-
-  it("returns the page as the API sent it", async () => {
-    const page = { count: 1, next: null, previous: null, results: [{ id: "c1" }] };
-    client.get.mockResolvedValue({ data: page });
-
-    await expect(fetchContacts()).resolves.toEqual(page);
-  });
-});
-
-describe("contact requests", () => {
-  it("reads a contact, its tickets and its notes", async () => {
-    client.get.mockResolvedValue({ data: [{ id: "x" }] });
-
-    await expect(fetchContactTickets("c1")).resolves.toEqual([{ id: "x" }]);
-    await expect(fetchContactNotes("c1")).resolves.toEqual([{ id: "x" }]);
-    await fetchContact("c1");
-
-    expect(client.get.mock.calls.map(([url]) => url)).toEqual([
-      "/contacts/c1/tickets/",
-      "/contacts/c1/notes/",
-      "/contacts/c1/",
-    ]);
-  });
-
-  it("writes to the matching endpoints", async () => {
-    client.post.mockResolvedValue({ data: { id: "c1" } });
-    client.patch.mockResolvedValue({ data: { id: "c1" } });
-    client.delete.mockResolvedValue({ data: undefined });
-
-    await createContact({ email: "a@x.io" });
-    await updateContact("c1", { attributes: { plan: null } });
-    await createContactNote("c1", "Called them");
-    await deleteContact("c1");
-
-    expect(client.post).toHaveBeenCalledWith("/contacts/", { email: "a@x.io" });
-    expect(client.patch).toHaveBeenCalledWith("/contacts/c1/", {
-      attributes: { plan: null },
-    });
-    expect(client.post).toHaveBeenCalledWith("/contacts/c1/notes/", {
-      body: "Called them",
-    });
-    expect(client.delete).toHaveBeenCalledWith("/contacts/c1/");
-  });
-
-  it("exports and anonymizes with a POST and no body", async () => {
-    client.post.mockResolvedValueOnce({ data: { status: "queued" } });
-    await expect(exportContact("c1")).resolves.toEqual({ status: "queued" });
-
-    client.post.mockResolvedValueOnce({ data: { id: "c1", is_anonymized: true } });
-    await expect(anonymizeContact("c1")).resolves.toEqual({
-      id: "c1",
-      is_anonymized: true,
-    });
-
-    expect(client.post.mock.calls).toEqual([
-      ["/contacts/c1/export/"],
-      ["/contacts/c1/anonymize/"],
-    ]);
-  });
 });
 
 describe("company requests", () => {
@@ -141,20 +65,6 @@ describe("company requests", () => {
     expect(client.get).toHaveBeenCalledWith("/companies/", {
       params: { "attr.tier": "gold", ordering: "-mrr_cents" },
     });
-  });
-
-  it("reads a company, its contacts and its tickets", async () => {
-    client.get.mockResolvedValue({ data: [{ id: "x" }] });
-
-    await fetchCompany("co1");
-    await expect(fetchCompanyContacts("co1")).resolves.toEqual([{ id: "x" }]);
-    await expect(fetchCompanyTickets("co1")).resolves.toEqual([{ id: "x" }]);
-
-    expect(client.get.mock.calls.map(([url]) => url)).toEqual([
-      "/companies/co1/",
-      "/companies/co1/contacts/",
-      "/companies/co1/tickets/",
-    ]);
   });
 
   it("writes to the matching endpoints", async () => {
@@ -186,20 +96,6 @@ describe("attribute definition requests", () => {
       "/contact-attributes/",
       "/company-attributes/",
     ]);
-  });
-
-  it("creates and updates under that endpoint", async () => {
-    client.post.mockResolvedValue({ data: { id: "d1" } });
-    client.patch.mockResolvedValue({ data: { id: "d1" } });
-    const data = { key: "plan", label: "Plan", type: "string" } as const;
-
-    await createAttributeDef("company", data);
-    await updateAttributeDef("contact", "d1", { is_archived: true });
-
-    expect(client.post).toHaveBeenCalledWith("/company-attributes/", data);
-    expect(client.patch).toHaveBeenCalledWith("/contact-attributes/d1/", {
-      is_archived: true,
-    });
   });
 });
 
