@@ -65,6 +65,10 @@ class Company(TimestampedModel):
         super().save(*args, **kwargs)
 
 
+# Of the addresses anonymization gives a contact: ``.invalid`` can never be delivered.
+ANONYMIZED_EMAIL_DOMAIN = "example.invalid"
+
+
 class Contact(TimestampedModel):
     """An end-user talking to an Organization's support."""
 

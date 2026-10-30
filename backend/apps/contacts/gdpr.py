@@ -16,7 +16,7 @@ from apps.organizations.models import User
 from apps.tickets.models import Ticket, TicketAttachment, TicketMessage
 from apps.videos.models import VideoRecording
 
-from .models import Contact
+from .models import ANONYMIZED_EMAIL_DOMAIN, Contact
 
 logger = logging.getLogger(__name__)
 
@@ -118,47 +118,48 @@ def _kept_metadata(metadata) -> dict:
     }
 
 
-def _scrub_tickets(contact: Contact, tickets) -> None:
-    now = timezone.now()
-    for ticket in tickets:
+def _scrubbed_ticket(contact: Contact, ticket: Ticket) -> dict:
+    return {
         # Widget endpoints look a ticket up by session: this stops an open tab,
         # including one on a session since moved to another contact, adding to it.
-        ticket.widget_session = None
+        "widget_session_id": None,
         # The widget copies the first message into these two.
-        ticket.title = REMOVED_TITLE
-        ticket.description = REMOVED_BODY
-        ticket.requester_email = contact.email
-        ticket.requester_name = contact.name
-        ticket.external_user_id = ""
-        ticket.context_url = ""
-        ticket.context_user_agent = ""
-        ticket.context_metadata = _kept_metadata(ticket.context_metadata)
+        "title": REMOVED_TITLE,
+        "description": REMOVED_BODY,
+        "requester_email": contact.email,
+        "requester_name": contact.name,
+        "external_user_id": "",
+        "context_url": "",
+        "context_user_agent": "",
+        "context_metadata": _kept_metadata(ticket.context_metadata),
+    }
+
+
+def _scrub_tickets(contact: Contact, tickets) -> None:
+    """Scrub the tickets that need it, so that doing it again changes nothing."""
+    now = timezone.now()
+    changed = []
+    fields: set[str] = set()
+    for ticket in tickets:
+        scrubbed = _scrubbed_ticket(contact, ticket)
+        fields.update(scrubbed)
+        if all(getattr(ticket, field) == value for field, value in scrubbed.items()):
+            continue
+        for field, value in scrubbed.items():
+            setattr(ticket, field, value)
         ticket.updated_at = now
-    Ticket.objects.bulk_update(
-        tickets,
-        [
-            "widget_session",
-            "title",
-            "description",
-            "requester_email",
-            "requester_name",
-            "external_user_id",
-            "context_url",
-            "context_user_agent",
-            "context_metadata",
-            "updated_at",
-        ],
-        batch_size=500,
-    )
+        changed.append(ticket)
+    Ticket.objects.bulk_update(changed, [*fields, "updated_at"], batch_size=500)
 
 
 def _scrub_messages(ticket_ids) -> None:
+    body_type = TicketMessage.BodyType.TEXT
     TicketMessage.objects.filter(
         Q(sender_type=TicketMessage.SenderType.USER) | _the_requester("author"),
         ticket__in=ticket_ids,
-    ).update(
+    ).exclude(body=REMOVED_BODY, body_type=body_type, widget_session=None).update(
         body=REMOVED_BODY,
-        body_type=TicketMessage.BodyType.TEXT,
+        body_type=body_type,
         widget_session=None,
         updated_at=timezone.now(),
     )
@@ -179,20 +180,52 @@ def _tickets_of(contact: Contact, session_ids, external_id: str):
     )
 
 
+def _scrub_contact(contact: Contact) -> None:
+    email = contact.email
+    if not (contact.is_anonymized and email.endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")):
+        email = f"anonymized-{uuid.uuid4().hex}@{ANONYMIZED_EMAIL_DOMAIN}"
+    scrubbed = {
+        "email": email,
+        "email_verified_at": None,
+        "declared_email": "",
+        "name": "Anonymized contact",
+        "phone": "",
+        "external_id": "",
+        "avatar_url": "",
+        "job_title": "",
+        "locale": "",
+        "timezone": "",
+        "company_id": None,  # A small company can tell who this was.
+        "attributes": {},
+        "last_contacted_at": None,
+        "is_anonymized": True,
+    }
+    changed = [
+        field for field, value in scrubbed.items() if getattr(contact, field) != value
+    ]
+    for field in changed:
+        setattr(contact, field, scrubbed[field])
+    if changed:
+        contact.save(update_fields=[*changed, "updated_at"])
+
+
 @transaction.atomic
 def anonymize_contact(contact: Contact) -> Contact | None:
     """Irreversibly strip personal data while keeping the structure of the tickets.
 
-    Return the anonymized row, as it already was if it had been anonymized before, or
-    None if it no longer exists. What this leaves is listed in the design document,
-    section 8.
+    Return the anonymized row, or None if it no longer exists. What this leaves is
+    listed in the design document, section 8.
+
+    On an already anonymized contact it does all of it again, keeping the anonymized
+    email: that repairs what a request holding older data wrote since, and changes
+    nothing, not even a date, if there's nothing to repair.
     """
     # Same row lock as the identity service, which checks ``is_anonymized`` under it,
     # and same order, contact then sessions: without this, a widget session resolving
     # at the same time could save the personal data back over the anonymized row.
     contact = Contact.objects.select_for_update().filter(pk=contact.pk).first()
-    if contact is None or contact.is_anonymized:
-        return contact
+    if contact is None:
+        return None
 
     tickets = list(
         _tickets_of(
@@ -202,22 +235,7 @@ def anonymize_contact(contact: Contact) -> Contact | None:
         )
     )
     ticket_ids = [ticket.pk for ticket in tickets]
-
-    contact.email = f"anonymized-{uuid.uuid4().hex}@example.invalid"
-    contact.email_verified_at = None
-    contact.declared_email = ""
-    contact.name = "Anonymized contact"
-    contact.phone = ""
-    contact.external_id = ""
-    contact.avatar_url = ""
-    contact.job_title = ""
-    contact.locale = ""
-    contact.timezone = ""
-    contact.company = None  # A small company can tell who this was.
-    contact.attributes = {}
-    contact.last_contacted_at = None
-    contact.is_anonymized = True
-    contact.save()
+    _scrub_contact(contact)
 
     # Free text written by agents, which can hold personal data about the contact.
     contact.notes.all().delete()

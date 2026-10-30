@@ -279,6 +279,19 @@ class TicketSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    def update(self, instance, validated_data):
+        """Save only what the request sent, not what the view read before.
+
+        Saving the whole row could restore what an anonymization just removed.
+        """
+        tags = validated_data.pop("tags", None)
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        instance.save(update_fields=[*validated_data, "updated_at"])
+        if tags is not None:
+            instance.tags.set(tags)
+        return instance
+
 
 class WidgetSubmitResponseSerializer(TicketSerializer):
     """What a widget gets back from a submission.

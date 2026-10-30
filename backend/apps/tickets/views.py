@@ -784,16 +784,20 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket = self.get_object()
         agent_id = request.data.get("agent_id")
         team_id = request.data.get("team_id")
+        fields = ["status", "updated_at"]
 
         if agent_id:
             ticket.assigned_agent_id = agent_id
+            fields.append("assigned_agent")
         if team_id:
             ticket.assigned_team_id = team_id
+            fields.append("assigned_team")
         if not ticket.first_response_at and agent_id:
             ticket.first_response_at = timezone.now()
+            fields.append("first_response_at")
 
         ticket.status = Ticket.Status.IN_PROGRESS
-        ticket.save()
+        ticket.save(update_fields=fields)
 
         # Notify
         try:
@@ -811,7 +815,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket = self.get_object()
         ticket.status = Ticket.Status.RESOLVED
         ticket.resolved_at = timezone.now()
-        ticket.save()
+        ticket.save(update_fields=["status", "resolved_at", "updated_at"])
 
         # Notify
         try:
@@ -828,7 +832,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket = self.get_object()
         ticket.status = Ticket.Status.CLOSED
         ticket.closed_at = timezone.now()
-        ticket.save()
+        ticket.save(update_fields=["status", "closed_at", "updated_at"])
 
         try:
             notify_ticket_update(ticket)
@@ -844,7 +848,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket.status = Ticket.Status.OPEN
         ticket.resolved_at = None
         ticket.closed_at = None
-        ticket.save()
+        ticket.save(update_fields=["status", "resolved_at", "closed_at", "updated_at"])
 
         try:
             notify_ticket_update(ticket)
@@ -946,22 +950,30 @@ class TicketViewSet(viewsets.ModelViewSet):
         now = timezone.now()
         with transaction.atomic():
             for ticket in tickets:
+                fields = ["updated_at"]
                 if new_priority is not None:
                     ticket.priority = new_priority
+                    fields.append("priority")
                 if agent_provided:
                     ticket.assigned_agent_id = new_agent_id or None
+                    fields.append("assigned_agent")
                     if new_agent_id and not ticket.first_response_at:
                         ticket.first_response_at = now
+                        fields.append("first_response_at")
                 if new_status is not None:
                     ticket.status = new_status
+                    fields.append("status")
                     if new_status == Ticket.Status.RESOLVED:
                         ticket.resolved_at = ticket.resolved_at or now
+                        fields.append("resolved_at")
                     elif new_status == Ticket.Status.CLOSED:
                         ticket.closed_at = ticket.closed_at or now
+                        fields.append("closed_at")
                     elif new_status == Ticket.Status.OPEN:
                         ticket.resolved_at = None
                         ticket.closed_at = None
-                ticket.save()
+                        fields += ["resolved_at", "closed_at"]
+                ticket.save(update_fields=fields)
 
         for ticket in tickets:
             try:

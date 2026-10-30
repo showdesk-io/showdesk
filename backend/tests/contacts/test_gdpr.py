@@ -24,7 +24,7 @@ from apps.contacts.gdpr import (
 from apps.contacts.models import Contact
 from apps.contacts.services import resolve_contact_for_widget_session
 from apps.contacts.tasks import export_contact_data
-from apps.tickets.models import TicketAttachment, TicketMessage, WidgetSession
+from apps.tickets.models import Ticket, TicketAttachment, TicketMessage, WidgetSession
 from apps.videos.models import VideoRecording
 from tests.factories import (
     CompanyFactory,
@@ -227,22 +227,121 @@ def test_anonymize_leaves_the_requester_user_alone(organization):
     assert ticket.requester == requester
 
 
-def test_anonymize_is_idempotent(organization):
+def test_anonymize_is_idempotent(organization, agent):
     contact = ContactFactory(organization=organization, email="a@x.io")
+    session = WidgetSession.objects.create(organization=organization, contact=contact)
+    ticket = TicketFactory(
+        organization=organization,
+        contact=contact,
+        requester=None,
+        widget_session=session,
+    )
+    message = TicketMessageFactory(
+        ticket=ticket, author=None, sender_type=TicketMessage.SenderType.USER
+    )
+    TicketMessageFactory(ticket=ticket, author=agent, body="Agent's")
     anonymize_contact(contact)
     contact.refresh_from_db()
-    first = (contact.email, contact.updated_at)
-    # Written after the anonymization: a second one has no business touching it.
-    ticket = TicketFactory(
-        organization=organization, contact=contact, requester=None, title="Kept"
-    )
+    ticket.refresh_from_db()
+    message.refresh_from_db()
+    first = (contact.email, contact.updated_at, ticket.updated_at, message.updated_at)
 
     anonymize_contact(contact)
 
     contact.refresh_from_db()
     ticket.refresh_from_db()
-    assert (contact.email, contact.updated_at) == first
-    assert ticket.title == "Kept"
+    message.refresh_from_db()
+    assert (
+        contact.email,
+        contact.updated_at,
+        ticket.updated_at,
+        message.updated_at,
+    ) == first
+
+
+def test_anonymizing_again_repairs_what_a_stale_write_restored(
+    organization, media, django_capture_on_commit_callbacks
+):
+    """A request holding the row from before can save it back in full."""
+    contact = ContactFactory(organization=organization, email="a@x.io", name="Alice")
+    session = WidgetSession.objects.create(
+        organization=organization, contact=contact, email="a@x.io", name="Alice"
+    )
+    stale = TicketFactory(
+        organization=organization,
+        contact=contact,
+        requester=None,
+        widget_session=session,
+        title="Alice's invoice",
+        requester_email="a@x.io",
+        requester_name="Alice",
+    )
+    message = TicketMessageFactory(
+        ticket=stale,
+        author=None,
+        widget_session=session,
+        sender_type=TicketMessage.SenderType.USER,
+    )
+    stale_title = stale.title
+    anonymize_contact(contact)
+    contact.refresh_from_db()
+    anonymized_email = contact.email
+
+    Ticket.objects.filter(pk=stale.pk).update(
+        title=stale_title,
+        requester_email="a@x.io",
+        requester_name="Alice",
+        widget_session=session,
+    )
+    TicketMessage.objects.filter(pk=message.pk).update(body="secret")
+    Contact.objects.filter(pk=contact.pk).update(name="Alice", phone="+33")
+    WidgetSession.objects.filter(pk=session.pk).update(contact=contact, email="a@x.io")
+    upload = TicketAttachmentFactory(ticket=stale, uploaded_by=None, file=_file())
+    path = media / upload.file.name
+
+    with django_capture_on_commit_callbacks(execute=True):
+        anonymize_contact(contact)
+
+    contact.refresh_from_db()
+    stale.refresh_from_db()
+    message.refresh_from_db()
+    session.refresh_from_db()
+    assert contact.email == anonymized_email
+    assert contact.name == "Anonymized contact"
+    assert contact.phone == ""
+    assert stale.title == REMOVED_TITLE
+    assert stale.requester_email == anonymized_email
+    assert stale.requester_name == "Anonymized contact"
+    assert stale.widget_session is None
+    assert message.body == REMOVED_BODY
+    assert session.email == ""
+    assert session.contact is None
+    assert not TicketAttachment.objects.filter(pk=upload.pk).exists()
+    assert not path.exists()
+
+
+def test_anonymizing_again_replaces_a_real_email_a_stale_write_restored(organization):
+    contact = ContactFactory(organization=organization, email="a@x.io")
+    anonymize_contact(contact)
+    Contact.objects.filter(pk=contact.pk).update(email="a@x.io")
+
+    anonymize_contact(contact)
+
+    contact.refresh_from_db()
+    assert contact.email.startswith("anonymized-")
+    assert contact.email.endswith("@example.invalid")
+
+
+def test_anonymizing_again_scrubs_a_ticket_written_since(organization):
+    """What a widget request past its session lookup can leave: see design, section 8."""
+    contact = ContactFactory(organization=organization)
+    anonymize_contact(contact)
+    ticket = TicketFactory(
+        organization=organization, contact=contact, requester=None, title="Late"
+    )
+    anonymize_contact(contact)
+    ticket.refresh_from_db()
+    assert ticket.title == REMOVED_TITLE
 
 
 def test_anonymizing_a_deleted_contact_does_nothing(organization):
@@ -893,7 +992,7 @@ def _anonymous_session(organization, **kwargs) -> tuple[Contact, WidgetSession]:
 
 
 def test_login_blanks_the_session_it_leaves_behind(api_client, secret_org):
-    contact, session = _anonymous_session(secret_org)
+    _, session = _anonymous_session(secret_org)
     WidgetSession.objects.filter(pk=session.pk).update(email_verified_at=timezone.now())
     res = api_client.post(
         SESSION_URL,
@@ -929,7 +1028,7 @@ def test_login_deletes_the_email_only_contact_left_empty(api_client, secret_org)
 def test_login_deletes_a_contact_only_a_moved_ticket_was_on(api_client, secret_org):
     """The session may have changed contact since it wrote the ticket."""
     previous = ContactFactory(organization=secret_org, email="previous@x.io")
-    contact, session = _anonymous_session(secret_org)
+    _, session = _anonymous_session(secret_org)
     TicketFactory(
         organization=secret_org,
         contact=previous,

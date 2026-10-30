@@ -293,8 +293,11 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   transcription; never internal notes, nor who at the organization wrote what) and
   `tickets.csv` (formula-like cells escaped). Beyond 20 MB nothing is attached, and the
   requester gets an email saying so.
-- `POST /api/v1/contacts/{id}/anonymize/` — admin only, irreversible, idempotent (a
-  second call changes nothing). Contact: email → `anonymized-{uuid}@example.invalid`, name
+- `POST /api/v1/contacts/{id}/anonymize/` — admin only, irreversible, idempotent: a
+  second call scrubs again and keeps the anonymized email, so it repairs what a stale write
+  brought back, and changes nothing, dates included, if there's nothing to repair. Ticket
+  writes only save the fields they change, which leaves that window to a widget request.
+  Contact: email → `anonymized-{uuid}@example.invalid`, name
   → "Anonymized contact", phone, external_id, declared_email, email_verified_at, avatar,
   job title, locale, timezone and company cleared, attributes emptied,
   `last_contacted_at` cleared, `is_anonymized = True`, notes deleted (free text that can
@@ -421,8 +424,9 @@ inbound sender).
   an agent searched for in a `SavedView`, which can be the contact's name or address.
 - A widget request already past its session lookup when an anonymization commits can
   still write what it holds: a new ticket on the anonymized Contact with the old requester
-  details, or one more message on a scrubbed ticket. The window is one request. A video
-  being processed at that moment can leave its thumbnail on the storage.
+  details, or one more message on a scrubbed ticket. The window is one request, and
+  anonymizing again repairs it. A video being processed at that moment can leave its
+  thumbnail on the storage.
 - A file that the storage failed to delete is only logged: nothing retries it, and its row
   is gone.
 - An export holds the metadata of files, not the files. Past 20 MB it isn't sent at all,
