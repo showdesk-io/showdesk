@@ -7,6 +7,7 @@ All factories are self-contained and can be used independently.
 import factory
 from django.utils import timezone
 
+from apps.contacts.models import Company, Contact
 from apps.organizations.models import Organization, Team, User
 from apps.tickets.models import (
     CannedResponse,
@@ -220,3 +221,25 @@ class VideoRecordingFactory(factory.django.DjangoModelFactory):
     expires_at = factory.LazyFunction(
         lambda: timezone.now() + timezone.timedelta(days=90)
     )
+
+
+class CompanyFactory(factory.django.DjangoModelFactory):
+    """Factory for creating Company instances."""
+
+    class Meta:
+        model = Company
+
+    organization = factory.SubFactory(OrganizationFactory)
+    name = factory.Sequence(lambda n: f"Company {n}")
+    domain = factory.Sequence(lambda n: f"company{n}.example")
+
+
+class ContactFactory(factory.django.DjangoModelFactory):
+    """Factory for creating Contact instances."""
+
+    class Meta:
+        model = Contact
+
+    organization = factory.SubFactory(OrganizationFactory)
+    name = factory.Faker("name")
+    email = factory.Sequence(lambda n: f"contact{n}@customer.example")
