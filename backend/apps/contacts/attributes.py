@@ -21,7 +21,7 @@ class _Invalid(Exception):
     pass
 
 
-def _coerce(type_: str, value: Any, options: list) -> Any:
+def _coerce(type_: str, value: Any, options: Any) -> Any:
     if type_ == "string":
         if isinstance(value, (dict, list)):
             raise _Invalid
@@ -41,6 +41,8 @@ def _coerce(type_: str, value: Any, options: list) -> Any:
             raise _Invalid
         return value
     if type_ == "date":
+        if isinstance(value, (dict, list)):
+            raise _Invalid
         if isinstance(value, date):
             return value.isoformat()[:10]
         text = str(value)
@@ -52,10 +54,17 @@ def _coerce(type_: str, value: Any, options: list) -> Any:
             raise _Invalid
         return parsed.isoformat()[:10]
     if type_ == "enum":
-        if value not in options:
+        # Containers and booleans can only compare equal to an option by
+        # accident (``True == 1``), and comparing deep containers can overflow
+        # the stack. ``options`` is a free-form JSONField: trust no shape.
+        if isinstance(value, (dict, list, bool)):
+            raise _Invalid
+        if not isinstance(options, list) or value not in options:
             raise _Invalid
         return value
     if type_ == "url":
+        if isinstance(value, (dict, list)):
+            raise _Invalid
         try:
             _url_validator(str(value))
         except ValidationError as exc:

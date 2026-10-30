@@ -120,3 +120,60 @@ def test_cleaned_values_can_be_stored(defs, traits):
         attributes=clean_attributes(defs, traits),
     )
     contact.refresh_from_db()
+
+
+def _deeply_nested(depth: int = 200_000) -> list:
+    value: list = []
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+@pytest.mark.parametrize("key", ["signup", "site", "plan"])
+@pytest.mark.parametrize("value", [{}, [], {"a": 1}, ["2026-01-15"]])
+def test_containers_are_dropped(defs, key, value):
+    assert clean_attributes(defs, {key: value}) == {}
+
+
+@pytest.mark.parametrize("key", ["signup", "site", "plan", "role", "seats"])
+def test_deeply_nested_value_does_not_overflow_the_stack(defs, key):
+    assert clean_attributes(defs, {key: _deeply_nested()}) == {}
+
+
+def _enum_defs(options):
+    org = OrganizationFactory()
+    ContactAttributeDef.objects.create(
+        organization=org, key="plan", label="plan", type="enum", options=options
+    )
+    return ContactAttributeDef.objects.filter(organization=org)
+
+
+@pytest.mark.parametrize(
+    ("options", "value"),
+    [
+        (3, "pro"),
+        (True, "pro"),
+        ("free,pro", "pro"),
+        ("free,pro", "e,p"),
+        ({"pro": 1}, "pro"),
+        ({"pro": 1}, ["pro"]),
+    ],
+)
+def test_enum_with_malformed_options_rejects_everything(options, value):
+    assert clean_attributes(_enum_defs(options), {"plan": value}) == {}
+
+
+@pytest.mark.parametrize(
+    ("options", "value"),
+    [
+        ([["pro"]], ["pro"]),
+        ([{"a": 1}], {"a": 1}),
+        ([1, 2], True),
+    ],
+)
+def test_enum_rejects_odd_values_equal_to_an_option(options, value):
+    assert clean_attributes(_enum_defs(options), {"plan": value}) == {}
+
+
+def test_enum_keeps_a_non_string_option():
+    assert clean_attributes(_enum_defs([1, 2]), {"plan": 2}) == {"plan": 2}
