@@ -19,7 +19,8 @@ This document covers the **P0 scope** of the research note (§10). P1 items
 (CSV import/export, manual merge, audit log, saved views for contacts,
 server-side `identify` API, logo auto-fetch) are out of scope.
 
-Delivered as one branch / PR: `feat/contacts` → `develop`.
+Delivered as one branch / PR: `feat/contacts` → `develop`. It contains the security PR
+#4 (`fix/tenant-isolation`), which has to merge first.
 
 ---
 
@@ -144,8 +145,13 @@ a malformed `external_user_id` is a 400.
    unverified). The agent UI shows an "unverified" badge. This grants no access,
    and a proof later attaches to that Contact. `declared_email` is never looked
    up, so an address merely declared by an identified user never leads to their
-   Contact. An anonymous session keeps its first email unless a different one is
-   signed. On a Contact that already exists, an unproven anonymous session writes
+   Contact. On a `POST` resume, an anonymous session keeps its first email unless a
+   different one is signed. A `PATCH` (the widget's contact form) replaces the session's
+   email without a signature: it clears the proof of the previous one and links the
+   session to the Contact owning the new one, which proves nothing unless it's signed
+   (rule 2). Tickets keep the
+   Contact they have and the requester details they hold; only blank ones are filled, each
+   on its own. On a Contact that already exists, an unproven anonymous session writes
    nothing at all: no seen dates, no `updated_at`, no company; it only links the
    session. A proven one updates the name (if blank), traits and seen dates.
 4. **Company**, only from an identified session:
@@ -261,9 +267,12 @@ Per organization, in one transaction, by `apps/contacts/backfill.py`:
    vouched external id or else its usable email. With no session of its organization, it
    then goes by its `requester`, when that's an end-user account that doesn't belong to
    another organization (as in `manage.py seed` and legacy API tickets). Otherwise it
-   stays unlinked: an agent or admin requester never becomes a Contact. A ticket whose
-   session ended without a Contact (anonymized, or an id it can't have) stays without
-   one.
+   stays unlinked: an agent, admin or superuser (whatever the role) never becomes a
+   Contact, and neither does the `requester_email` of a ticket when it's the email of the
+   staff member who filed it, wherever that email would have counted (items 3 and 5
+   included). The same requester with a customer's email does link to that customer. A
+   ticket whose session ended without a Contact (anonymized, or an id it can't have) stays
+   without one.
 5. **New Contacts** take their seen dates from every row linked to them, and their name
    from the most recent session, or else the most recent ticket. Their `declared_email`
    comes from their session, or else their most recent ticket. A ticket whose external
@@ -311,8 +320,9 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   hold personal data). Sessions: name, email, external_user_id, email_verified_at and user
   agent cleared, unlinked from the Contact. Tickets, being the Contact's and also, in the
   organization, those with no Contact that are on one of its sessions (an agent cleared
-  the Contact) or carry its external id (`widget_submit` takes one unsigned, and links
-  nothing): title and description replaced (the widget copies the first message there),
+  the Contact) and those carrying its external id whatever their Contact (`widget_submit`
+  takes one unsigned and links by email alone). Such a ticket on another Contact moves to
+  the anonymized one, and one with no Contact stays without: title and description replaced (the widget copies the first message there),
   requester name and email set to the anonymized ones, an end-user `requester` removed
   (one who's staff stays), external_user_id, context_url and
   context_user_agent cleared, `context_metadata` reduced to a whitelist (which also removes
@@ -351,13 +361,22 @@ inbound sender and no requester account).
 Tickets created through `POST /api/v1/tickets/` take the Contact the request names, or
 none on an explicit null. Otherwise they resolve one from `requester_email`, or else an
 end-user `requester` that doesn't belong to another organization. It stays a declared
-email. An agent or admin of the organization never becomes a Contact, by account or
-address.
+email. An agent, admin or superuser never becomes a Contact: by account, by the email of
+the account filing the ticket, or by the address of one in the organization.
+
+An agent's reply is emailed to the ticket's `requester_email`, or if that's blank to its
+Contact's `email`, then `declared_email`. Not on an anonymized Contact, and not on a
+ticket a login moved (rule 8): that Contact isn't necessarily who wrote it. The other
+requester emails (ticket resolved) only use `requester_email`.
+
+`widget_message` keeps of its `context` only what it can store: the named fields take a
+string, cut to the column's length, and the metadata leaves out what `jsonb` refuses.
 
 `widget_submit` answers with `{id, reference}` only, the token being public.
 
 `Contact.is_unsubscribed` blocks every non-essential email to the contact
-(enforced by the email channel).
+(enforced by the email channel, so nothing reads it yet). A reply on the contact's own
+ticket is essential, whichever of these addresses it goes to.
 
 ---
 
@@ -410,6 +429,14 @@ address.
   and name: when it still has another ticket, session or note, or data of its own such as
   a phone or an attribute, and when the identified session ended with no Contact to move
   the tickets to.
+- A login whose payload has no email drops the address from the Contacts: the email-only
+  Contact the move emptied is deleted, and the identified Contact takes neither `email`
+  nor `declared_email` from it. The address survives in `requester_email` on the moved
+  tickets holding it, from the session's email when they were written or from a contact
+  form sent before the login (rule 3), and agent replies on those tickets still reach it.
+  A moved ticket with a blank `requester_email` gets no reply by email: a later `PATCH`
+  doesn't fill it, and it doesn't fall back on its Contact's address (§5). Nothing marks the identified Contact as having
+  that address, so it isn't found by it.
 - A tab still holding the anonymous session after a login, in another window or as a
   recording popup, gets a 404 on the tickets that moved, misses their replies, and a
   new conversation it starts stays with the anonymous session.
@@ -451,6 +478,15 @@ address.
   the Contact's to erase, and it can have other tickets, of other contacts. Until then its
   name and email stay in the users list and on those other tickets. A requester from
   outside the organization who's an agent or admin stays too: role alone decides it here.
+- A ticket that anonymization catches by external id alone can have been filed by someone
+  else, as `widget_submit` takes the id unsigned: it's scrubbed all the same. The email-only
+  Contact it moves away from stays, with its email and name, since nothing proves it's the
+  same person: an admin who knows it is anonymizes it too. A contact's export only holds the
+  tickets linked to it, so not those until the anonymization moves them.
+- Anonymization clears the Contact's `external_id`, so if the host app keeps signing that
+  user, the next init creates a new Contact for the id, with an empty history, and stores
+  again whatever the payload says about them. Nothing here can tell that apart from a new
+  user: the host app must stop sending that user.
 - A widget request already past its session lookup when an anonymization commits can
   still write what it holds: a new ticket on the anonymized Contact with the old requester
   details, or one more message on a scrubbed ticket. The window is one request, and

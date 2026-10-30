@@ -1,5 +1,7 @@
 # Contacts & Companies Implementation Plan
 
+> **Historical plan.** This is what was planned, not what was built: names and samples below have changed since (`IsOrganizationAdminOrReadOnly` is now `IsOrgAdminOrReadOnly`, for one). The code and `docs/plans/2026-10-29-contacts-design.md` are authoritative. The widget has no `npm run lint` that works, as eslint isn't installed for it: verify it with `npm test && npm run build`.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add org-scoped `Contact` / `Company` records (with custom attributes, notes, GDPR export/anonymize) and link every widget session and ticket to a Contact, as specified in `docs/plans/2026-10-29-contacts-design.md`.
@@ -8,7 +10,7 @@
 
 **Tech Stack:** Django 6.1, DRF, django-filter, Celery, pytest + factory_boy; React 19, TypeScript, React Query, React Router 8, Tailwind 4, Vitest; widget in vanilla TS.
 
-**Branch:** `feat/contacts`, created from `docs/channels-design` (carries the design docs). PR → `develop`.
+**Branch:** `feat/contacts`. PR → `develop`, after the security PR #4 (`fix/tenant-isolation`), which it contains, has merged.
 
 ---
 
@@ -35,8 +37,8 @@ cd backend && python -m pytest -q   # baseline: all green before starting
 
 Lint: `ruff check backend/ && ruff format --check backend/` (ruff 0.17).
 Frontend (Node 26): `cd frontend && npm run lint && npm test && npm run build`.
-Widget: `cd widget && npm run lint && npm run build`.
-Teardown at the end: `docker stop showdesk-test-pg showdesk-test-redis`.
+Widget: `cd widget && npm test && npm run build`.
+Teardown at the end: stop the disposable test Postgres and Redis.
 
 ---
 
@@ -2705,7 +2707,7 @@ A verified session email only counts for a ticket created at or after `session.e
 - Modify: `widget/src/types.ts`, `widget/src/widget.ts` (`buildUserFromDataAttrs` ~73), `widget/src/api/chat-api.ts` (`createOrResumeSession` ~25)
 - Modify: widget integration docs (`grep -rn "data-user-hash" docs README.md widget` to find them)
 
-No widget test runner exists; verification is `npm run lint && npm run build` plus the backend tests of Task 7.
+Verification is `npm test && npm run build` plus the backend tests of Task 7.
 
 ```ts
 export interface ShowdeskUserIdentity {
@@ -2862,10 +2864,10 @@ Table: label, key (monospace), type, options, archived toggle. Admin-only form: 
 1. `ROADMAP.md`: add under Phase 3.5 a "Contacts & Companies (P0)" checklist, checked, and keep P1 items as open bullets. Confirm no `.env.example` change is needed (this PR adds no variable).
 2. `cd backend && python -m pytest -q` → all green; `ruff check backend/ && ruff format --check backend/` → clean; `python manage.py makemigrations --check --dry-run` → "No changes detected".
 3. `cd frontend && npm run lint && npm test && npm run build` → clean, 0 warnings.
-4. `cd widget && npm run lint && npm run build` → clean.
+4. `cd widget && npm test && npm run build` → clean.
 5. Manual smoke with `make dev`: Contacts page, create a contact, a widget session with `data-user-*` attributes creates/updates a contact, the ticket card links to it.
 6. Use superpowers:requesting-code-review; address findings.
 7. Release notes, before deploying: count the rows the reserved prefixes now exclude, with `WidgetSession.objects.filter(external_user_id__startswith="email:").count()` and the same on `Ticket` (and `company\n` on both). Those sessions can't be resumed and get no contact, so check any non-zero count with the integrator concerned. Tell integrators that a `user_hash` is required on every init of an identified user: an init without one now counts as a logout and starts a new anonymous session. The same goes for an `email_hash` once a session proved its email: an integrator signing it has to sign it on every init.
 8. Push `feat/contacts`; open a PR → `develop` titled `feat: contacts and companies` with summary, migration note (back-fill runs during the deploy migrate step), test instructions for the development environment, the `CONTRIBUTING.md` checklist, and the Claude Code attribution line.
 9. Post-deploy, in the release notes: pods still running the old code keep writing rows without a contact after the back-fill migration. Once none is left, run `python manage.py backfill_contacts` once. It runs the same idempotent function, on the rows still unlinked and only there. Don't run it later: it would also link again a ticket whose contact an agent cleared.
-10. `docker stop showdesk-test-pg showdesk-test-redis`.
+10. Stop the disposable test Postgres and Redis.

@@ -111,7 +111,7 @@ Everything needed before writing real feature code. **All done.**
 - [x] Email notification: ticket assigned (notify agent)
 - [x] Email notification: ticket resolved (notify requester)
 - [x] WebSocket signals wired in all ticket views
-- [x] API tests: 88 pytest tests (tickets, widget, messages, orgs, users, tags, attachments, priorities, saved views)
+- [x] API tests with pytest (tickets, widget, messages, orgs, users, tags, attachments, priorities, saved views)
 - [x] Model tests + factory_boy factories
 - [x] Rate limiting on widget endpoints (10/min submit, 20/min upload)
 - [x] Celery Beat schedule for expired video cleanup (every 6 hours)
@@ -175,7 +175,7 @@ Everything needed before writing real feature code. **All done.**
 - [x] File attachment upload
 - [x] Form validation + error handling + loading states
 - [x] Upload progress indicator
-- [x] E2E browser tests (Playwright, 19 tests)
+- [x] E2E browser tests (Playwright)
 - [x] Screenshot capture button (getDisplayMedia single-frame capture, hides overlay during capture, thumbnail previews with remove, uploaded as ticket attachment)
 - [ ] Retry on upload failure
 - [x] Multi-page site support (`data-navigation-mode="mpa"`, popup-based recording)
@@ -206,10 +206,9 @@ Everything needed before writing real feature code. **All done.**
 
 ### Tests
 
-- [x] Backend: 88 pytest tests (API + models, including saved views)
-- [x] Frontend: 15 Vitest tests (components + stores)
-- [x] E2E: 19 Playwright tests (widget demo, auth, API health)
-- Total: **122 tests**
+- [x] Backend: pytest (API + models, including saved views)
+- [x] Frontend: Vitest (components + stores)
+- [x] E2E: Playwright (widget demo, auth, API health)
 
 ---
 
@@ -810,7 +809,7 @@ model, no inbound pipeline feeds it.
 | Backend API | **~99%** | Everything in Phases 0-3 (signup, verified domains, branded emails, SLA CRUD, bulk update, usage dashboard, plans + feature gates) on Django 6.1 | Video duration validation |
 | Frontend | **~99%** | Full agent app on React 19 / Vite 8 / Tailwind 4 / React Router 8 | Agent video reply |
 | Widget | **~99%** | Messaging, recording, identity, MPA, `Showdesk.reset()` | Retry, i18n, accessibility |
-| Tests | **~93%** | 1379 pytest + 355 Vitest + 76 widget Vitest + Playwright e2e | Video API tests |
+| Tests | **~93%** | pytest, Vitest (frontend and widget), Playwright e2e | Video API tests |
 | Widget UX (Phase 2) | **~92%** | P0/P1 done, P2 mostly done | Screenshot annotation, multi-attach, session replay, video markers |
 | Signup & Onboarding (2.5) | **100%** | Incl. opt-in domain claim (2026-10-29) | -- |
 | Verified Domains (2.6) | **100%** | -- | -- |
