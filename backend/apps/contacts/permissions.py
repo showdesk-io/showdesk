@@ -7,7 +7,15 @@ from apps.core.permissions import get_active_org, impersonates_no_organization
 from apps.organizations.models import User
 
 
-class IsOrganizationStaff(BasePermission):
+class IsNotEndUser(BasePermission):
+    """Refuse end users. A superuser's role means nothing: it defaults to end user."""
+
+    def has_permission(self, request, view) -> bool:
+        user = request.user
+        return user.role != User.Role.END_USER or user.is_superuser
+
+
+class IsOrganizationStaff(IsNotEndUser):
     """Allow an organization's agents and admins, not its end users.
 
     The API needs an active organization: a superuser without one has to
@@ -17,8 +25,7 @@ class IsOrganizationStaff(BasePermission):
     """
 
     def has_permission(self, request, view) -> bool:
-        user = request.user
-        if user.role == User.Role.END_USER and not user.is_superuser:
+        if not super().has_permission(request, view):
             return False
         if impersonates_no_organization(request):
             raise ValidationError({"detail": "Unknown organization."})

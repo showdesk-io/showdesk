@@ -1,9 +1,13 @@
 """Serializers for ticket-related models."""
 
+from django.db.models import Count, Q
 from rest_framework import serializers
 from rest_framework.fields import empty
 
 from apps.contacts.attributes import is_storable
+from apps.contacts.models import Contact
+from apps.contacts.summary import ContactSummarySerializer
+from apps.core.permissions import get_active_org
 from apps.organizations.models import RESERVED_EXTERNAL_ID_PREFIXES
 from apps.organizations.serializers import UserSerializer
 
@@ -180,6 +184,27 @@ class TicketMessageSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
+class TicketContactField(serializers.PrimaryKeyRelatedField):
+    """A contact a ticket can take. Any other reads as one that doesn't exist.
+
+    That's one of the ticket's organization, or on creation of the active one. An
+    anonymized contact takes no more tickets, but a ticket can keep the one it has.
+    """
+
+    def get_queryset(self):
+        ticket = self.parent.instance
+        if ticket is not None:
+            return Contact.objects.filter(
+                Q(is_anonymized=False) | Q(pk=ticket.contact_id),
+                organization_id=ticket.organization_id,
+            )
+        request = self.context.get("request")
+        org = get_active_org(request) if request else None
+        if org is None:
+            return Contact.objects.none()
+        return Contact.objects.filter(organization=org, is_anonymized=False)
+
+
 class TicketSerializer(serializers.ModelSerializer):
     """Serializer for the Ticket model."""
 
@@ -197,6 +222,11 @@ class TicketSerializer(serializers.ModelSerializer):
     )
     requester_detail = UserSerializer(source="requester", read_only=True)
     assigned_agent_detail = UserSerializer(source="assigned_agent", read_only=True)
+    contact = TicketContactField(
+        queryset=Contact.objects.none(), required=False, allow_null=True
+    )
+    contact_detail = ContactSummarySerializer(source="contact", read_only=True)
+    sender_verified = serializers.BooleanField(read_only=True, allow_null=True)
 
     class Meta:
         model = Ticket
@@ -213,6 +243,9 @@ class TicketSerializer(serializers.ModelSerializer):
             "requester_detail",
             "requester_name",
             "requester_email",
+            "contact",
+            "contact_detail",
+            "sender_verified",
             "assigned_agent",
             "assigned_agent_detail",
             "assigned_team",
@@ -237,6 +270,7 @@ class TicketSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "organization",
             "reference",
             "first_response_at",
             "resolved_at",
@@ -246,13 +280,30 @@ class TicketSerializer(serializers.ModelSerializer):
         ]
 
 
+class WidgetSubmitResponseSerializer(TicketSerializer):
+    """What a widget gets back from a submission.
+
+    No contact data: the widget's token is public, and anyone can name an address
+    to find out about the contact holding it.
+    """
+
+    class Meta(TicketSerializer.Meta):
+        fields = [
+            field
+            for field in TicketSerializer.Meta.fields
+            if field not in ("contact", "contact_detail", "sender_verified")
+        ]
+
+
 class TicketListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for ticket list views."""
 
     requester_detail = UserSerializer(source="requester", read_only=True)
     assigned_agent_detail = UserSerializer(source="assigned_agent", read_only=True)
     tags_detail = TagSerializer(source="tags", many=True, read_only=True)
-    message_count = serializers.SerializerMethodField()
+    message_count = serializers.IntegerField(read_only=True)
+    contact_detail = ContactSummarySerializer(source="contact", read_only=True)
+    sender_verified = serializers.BooleanField(read_only=True, allow_null=True)
 
     class Meta:
         model = Ticket
@@ -268,6 +319,9 @@ class TicketListSerializer(serializers.ModelSerializer):
             "requester_detail",
             "requester_name",
             "requester_email",
+            "contact",
+            "contact_detail",
+            "sender_verified",
             "assigned_agent_detail",
             "assigned_team",
             "tags_detail",
@@ -276,9 +330,19 @@ class TicketListSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    def get_message_count(self, obj: Ticket) -> int:
-        """Return the number of messages on this ticket."""
-        return obj.messages.count()
+
+def ticket_list_rows(tickets):
+    """Return the rows ``TicketListSerializer`` shows, without an N+1.
+
+    Distinct: filtering on several tags joins them, one row per tag matched.
+    """
+    return (
+        tickets.select_related(
+            "requester", "assigned_agent", "contact__company", "widget_session"
+        )
+        .prefetch_related("tags")
+        .annotate(message_count=Count("messages", distinct=True))
+    )
 
 
 class TicketCreateFromWidgetSerializer(serializers.ModelSerializer):

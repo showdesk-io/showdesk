@@ -9,10 +9,12 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.contacts.permissions import IsNotEndUser
 from apps.contacts.services import (
     resolve_contact_for_email,
     resolve_contact_for_widget_session,
@@ -33,6 +35,7 @@ from apps.notifications.signals import (
 from apps.organizations.models import RESERVED_EXTERNAL_ID_PREFIXES, Organization
 
 from .models import (
+    PRE_LOGIN_ANONYMOUS_KEY,
     CannedResponse,
     PriorityLevel,
     SavedView,
@@ -58,6 +61,8 @@ from .serializers import (
     WidgetMessageCreateSerializer,
     WidgetMessageSerializer,
     WidgetSessionSerializer,
+    WidgetSubmitResponseSerializer,
+    ticket_list_rows,
 )
 from .tasks import (
     send_ticket_assigned_email,
@@ -68,10 +73,8 @@ from .tasks import (
 
 logger = logging.getLogger(__name__)
 
-# In ``Ticket.context_metadata``: written anonymously, then moved to the session of
-# a login. Its sender never counts as verified.
-PRE_LOGIN_ANONYMOUS_KEY = "pre_login_anonymous"
-# Next to it: the digest of the anonymous session it came from, to trace the move.
+# Next to ``PRE_LOGIN_ANONYMOUS_KEY``: the digest of the anonymous session it came
+# from, to trace the move.
 PRE_LOGIN_SESSION_HASH_KEY = "pre_login_session_hash"
 
 
@@ -426,9 +429,12 @@ class TicketViewSet(viewsets.ModelViewSet):
 
     Supports full CRUD operations, filtering by status/priority/assignee,
     and a special widget submission endpoint.
+
+    Agents only, as tickets show their contact's personal data. The ``widget_*``
+    actions have their own permissions: they authenticate with the widget's token.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsNotEndUser]
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,
@@ -455,16 +461,23 @@ class TicketViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Filter tickets by the active organization."""
         org = get_active_org(self.request)
-        if org:
-            return Ticket.objects.filter(organization=org)
-        return Ticket.objects.none()
+        if not org:
+            return Ticket.objects.none()
+        tickets = Ticket.objects.filter(organization=org)
+        # Not on the others: an annotation would change what ``stats`` groups by.
+        if self.action == "list":
+            return ticket_list_rows(tickets)
+        return tickets.select_related("contact__company", "widget_session")
 
     def perform_create(self, serializer) -> None:
-        """Set organization and reference on creation."""
+        """Set organization, reference and source on creation."""
         org = get_active_org(self.request)
+        if org is None:
+            raise PermissionDenied("No active organization.")
         ticket = serializer.save(
             organization=org,
             reference=org.next_ticket_reference(),
+            source=serializer.validated_data.get("source", Ticket.Source.AGENT),
         )
         # Notify via WebSocket + email
         try:
@@ -594,7 +607,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         send_ticket_created_email.delay(str(ticket.id))
 
         return Response(
-            TicketSerializer(ticket).data,
+            WidgetSubmitResponseSerializer(ticket).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -830,7 +843,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         detail=False,
         methods=["post"],
         url_path="bulk_update",
-        permission_classes=[IsAuthenticated, has_feature("bulk_actions")],
+        permission_classes=[IsAuthenticated, IsNotEndUser, has_feature("bulk_actions")],
     )
     def bulk_update(self, request):
         """Apply a single update to many tickets at once.

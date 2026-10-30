@@ -21,6 +21,7 @@ from rest_framework.response import Response
 
 from apps.core.permissions import get_active_org
 from apps.tickets.models import Ticket
+from apps.tickets.serializers import TicketListSerializer, ticket_list_rows
 
 from .attributes import is_storable
 from .gdpr import anonymize_contact
@@ -39,7 +40,6 @@ from .serializers import (
     ContactAttributeDefSerializer,
     ContactNoteSerializer,
     ContactSerializer,
-    ContactTicketSerializer,
 )
 from .tasks import export_contact_data
 
@@ -134,13 +134,8 @@ def filter_by_attributes(queryset, params):
 
 
 def timeline_tickets(tickets):
-    """Return the rows ``ContactTicketSerializer`` shows, without an N+1."""
-    return (
-        tickets.select_related("requester", "assigned_agent")
-        .prefetch_related("tags")
-        .annotate(message_count=Count("messages"))
-        .order_by("-updated_at", "-id")[:TIMELINE_LIMIT]
-    )
+    """Return a timeline's rows, without an N+1."""
+    return ticket_list_rows(tickets).order_by("-updated_at", "-id")[:TIMELINE_LIMIT]
 
 
 def contacts_with_counts(contacts):
@@ -297,7 +292,7 @@ class ContactViewSet(LockedWriteViewSet):
         tickets = timeline_tickets(
             contact.tickets.filter(organization_id=contact.organization_id)
         )
-        return Response(ContactTicketSerializer(tickets, many=True).data)
+        return Response(TicketListSerializer(tickets, many=True).data)
 
     @action(detail=True, methods=["get", "post"])
     def notes(self, request, pk=None):
@@ -391,7 +386,7 @@ class CompanyViewSet(LockedWriteViewSet):
                 organization_id=company.organization_id, contact__company=company
             )
         )
-        return Response(ContactTicketSerializer(tickets, many=True).data)
+        return Response(TicketListSerializer(tickets, many=True).data)
 
 
 class AttributeDefViewSet(OrgScopedMixin, viewsets.ModelViewSet):

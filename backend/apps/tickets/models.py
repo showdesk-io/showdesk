@@ -193,6 +193,11 @@ class WidgetSession(TimestampedModel):
         return f"WidgetSession {identifier} ({self.organization})"
 
 
+# In ``Ticket.context_metadata``: written anonymously, then moved to the session of
+# a login. Its sender never counts as verified.
+PRE_LOGIN_ANONYMOUS_KEY = "pre_login_anonymous"
+
+
 class Ticket(TimestampedModel):
     """A support ticket submitted by an end-user or created by an agent.
 
@@ -362,6 +367,38 @@ class Ticket(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.reference}: {self.title}"
+
+    @property
+    def sender_verified(self) -> bool | None:
+        """Tell whether this ticket's sender proved being its contact.
+
+        The contact's own ``email_verified_at`` can't say: a forged ticket can link
+        to a verified contact. None when there's no outside sender to verify.
+
+        A signed external id is proof whatever the email. A proven email only is
+        while the contact still holds it, since an agent can change it: the
+        session's date is about the address it had then.
+        """
+        session = self.widget_session
+        if self.source in (self.Source.AGENT, self.Source.API) or (
+            session is None and not self.requester_email
+        ):
+            return None
+        metadata = self.context_metadata
+        if isinstance(metadata, dict) and metadata.get(PRE_LOGIN_ANONYMOUS_KEY) is True:
+            return False
+        if session is None or not self.contact_id:
+            return False
+        if session.contact_id != self.contact_id:
+            return False
+        if session.external_user_id:
+            return True
+        email = session.email.strip().lower()
+        return bool(
+            session.email_verified_at
+            and email
+            and email == self.contact.email.strip().lower()
+        )
 
     def clean(self) -> None:
         super().clean()

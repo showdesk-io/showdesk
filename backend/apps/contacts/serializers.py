@@ -6,8 +6,6 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import DomainNameValidator
 from rest_framework import serializers
 
-from apps.tickets.serializers import TicketListSerializer
-
 from .attributes import clean_attributes, validate_options
 from .models import (
     Company,
@@ -339,13 +337,3 @@ class ContactNoteSerializer(serializers.ModelSerializer):
         if not obj.author:
             return ""
         return obj.author.get_full_name() or obj.author.email
-
-
-class ContactTicketSerializer(TicketListSerializer):
-    """Ticket rows shown on timelines, from ``views.timeline_tickets``.
-
-    ``TicketListSerializer`` runs one COUNT per ticket for ``message_count``: here
-    it comes from the annotation.
-    """
-
-    message_count = serializers.IntegerField(read_only=True)
