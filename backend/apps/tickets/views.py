@@ -70,6 +70,8 @@ logger = logging.getLogger(__name__)
 # In ``Ticket.context_metadata``: written anonymously, then moved to the session of
 # a login. Its sender never counts as verified.
 PRE_LOGIN_ANONYMOUS_KEY = "pre_login_anonymous"
+# Next to it: the id of the anonymous session it came from, to trace the move.
+PRE_LOGIN_SESSION_ID_KEY = "pre_login_session_id"
 
 
 def _get_widget_org(request):
@@ -237,7 +239,8 @@ def _update_session(request, org, identity) -> Response:
         session.email = email
         fields.append("email")
     session.save(update_fields=fields)
-    # Backfill on linked tickets with blank requester info
+    # Backfill on linked tickets with blank requester info. Not on those a login moved
+    # here: their requester is whoever wrote them, not necessarily this user.
     if session.name or session.email:
         update_fields = {}
         if session.name:
@@ -245,9 +248,12 @@ def _update_session(request, org, identity) -> Response:
         if session.email:
             update_fields["requester_email"] = session.email
         Ticket.objects.filter(
+            organization=org,
             widget_session=session,
             requester_name="",
-        ).update(**update_fields)
+        ).exclude(context_metadata__has_key=PRE_LOGIN_ANONYMOUS_KEY).update(
+            **update_fields
+        )
     _link_session_contact(org, session, **_contact_claims(identity))
     return Response(WidgetSessionSerializer(session).data)
 
@@ -286,15 +292,46 @@ def _move_conversation_to_identified_session(org, anonymous, identified) -> None
             ticket.context_metadata = {
                 **(metadata if isinstance(metadata, dict) else {}),
                 PRE_LOGIN_ANONYMOUS_KEY: True,
+                PRE_LOGIN_SESSION_ID_KEY: str(anonymous.pk),
             }
         Ticket.objects.bulk_update(
             tickets,
             ["widget_session", "external_user_id", "contact", "context_metadata"],
             batch_size=500,
         )
-        TicketMessage.objects.filter(
+        moved_messages = TicketMessage.objects.filter(
             widget_session=anonymous, ticket__organization=org
         ).update(widget_session=identified)
+    if tickets or moved_messages:
+        # Only ids and counts: this log must not carry personal data.
+        logger.info(
+            "Moved %d ticket(s) and %d message(s) from widget session %s to %s at login",
+            len(tickets),
+            moved_messages,
+            anonymous.pk,
+            identified.pk,
+        )
+
+
+def _create_user_message(ticket, **fields) -> TicketMessage:
+    """Create a widget user's message on the session its ticket is on now.
+
+    A login may have moved the ticket since the request found it through the anonymous
+    session. Under this lock, either the login is over and the message follows the
+    ticket, or it's still to come and it will move the committed message.
+    """
+    with transaction.atomic():
+        session_id = (
+            Ticket.objects.select_for_update(no_key=True)
+            .values_list("widget_session_id", flat=True)
+            .get(pk=ticket.pk)
+        )
+        return TicketMessage.objects.create(
+            ticket=ticket,
+            widget_session_id=session_id,
+            sender_type=TicketMessage.SenderType.USER,
+            **fields,
+        )
 
 
 def _create_or_resume_session(request, org, identity) -> Response:
@@ -988,13 +1025,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = TicketMessage.objects.create(
-            ticket=ticket,
-            widget_session=session,
-            sender_type=TicketMessage.SenderType.USER,
-            body=body,
-            body_type=body_type,
-        )
+        message = _create_user_message(ticket, body=body, body_type=body_type)
 
         try:
             notify_new_message(message)
@@ -1079,13 +1110,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = TicketMessage.objects.create(
-            ticket=ticket,
-            widget_session=session,
-            sender_type=TicketMessage.SenderType.USER,
-            body=body,
-            body_type=body_type,
-        )
+        message = _create_user_message(ticket, body=body, body_type=body_type)
 
         # Validate and save attachment
         att_serializer = TicketAttachmentSerializer(

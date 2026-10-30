@@ -2,10 +2,12 @@
 
 import hashlib
 import hmac
+import logging
 from unittest import mock
 
 import pytest
-from django.db import OperationalError
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import OperationalError, connection
 from rest_framework.test import APIClient
 
 from apps.contacts.models import Contact
@@ -185,7 +187,11 @@ class TestLogin:
         ticket = self._ticket(context_metadata={"locale": "fr"})
         self._login()
         ticket.refresh_from_db()
-        assert ticket.context_metadata == {"locale": "fr", "pre_login_anonymous": True}
+        assert ticket.context_metadata == {
+            "locale": "fr",
+            "pre_login_anonymous": True,
+            "pre_login_session_id": str(self.anon.id),
+        }
 
     @pytest.mark.parametrize("metadata", [[], "text", 1])
     def test_marking_copes_with_any_stored_metadata(self, metadata):
@@ -193,7 +199,10 @@ class TestLogin:
         Ticket.objects.filter(pk=ticket.pk).update(context_metadata=metadata)
         self._login()
         ticket.refresh_from_db()
-        assert ticket.context_metadata == {"pre_login_anonymous": True}
+        assert ticket.context_metadata == {
+            "pre_login_anonymous": True,
+            "pre_login_session_id": str(self.anon.id),
+        }
 
     def test_a_ticket_opened_after_the_login_isnt_marked(self):
         session_id = self._login().data["session_id"]
@@ -206,6 +215,134 @@ class TestLogin:
         )
         ticket = Ticket.objects.get(id=res.data["ticket_id"])
         assert "pre_login_anonymous" not in ticket.context_metadata
+
+    def test_the_move_is_logged_without_personal_data(self, caplog):
+        ticket = self._ticket(requester_email="ann@x.io", requester_name="Ann Doe")
+        TicketMessage.objects.create(ticket=ticket, widget_session=self.anon, body="Hi")
+        with caplog.at_level(logging.INFO, logger="apps.tickets.views"):
+            session_id = self._login(email="ann@x.io", name="Ann Doe").data[
+                "session_id"
+            ]
+        moves = [r.getMessage() for r in caplog.records if "at login" in r.getMessage()]
+        assert len(moves) == 1
+        assert "1 ticket(s)" in moves[0]
+        assert "1 message(s)" in moves[0]
+        assert str(self.anon.id) in moves[0]
+        assert session_id in moves[0]
+        assert "ann@x.io" not in caplog.text
+        assert "Ann Doe" not in caplog.text
+        assert "u1" not in moves[0]
+
+    def test_a_login_moving_nothing_logs_nothing(self, caplog):
+        with caplog.at_level(logging.INFO, logger="apps.tickets.views"):
+            self._login()
+        assert "at login" not in caplog.text
+
+    def _post_during_the_login(self, path, ticket, format, **body):
+        """Post with the anonymous session, the login landing right after its lookup."""
+        state = {"done": False}
+
+        def login_once(execute, sql, params, many, context):
+            if not state["done"] and "FOR NO KEY UPDATE" in sql:
+                state["done"] = True
+                self._login()
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(login_once):
+            res = self.client.post(
+                f"/api/v1/tickets/{path}/",
+                {"ticket_id": str(ticket.id), **body},
+                format=format,
+                HTTP_X_WIDGET_TOKEN=self.org.api_token,
+                HTTP_X_WIDGET_SESSION=str(self.anon.id),
+            )
+        assert state["done"]
+        return res
+
+    def test_a_message_in_flight_follows_its_ticket(self):
+        ticket = self._ticket()
+        res = self._post_during_the_login(
+            "widget_message", ticket, "json", body="Sent while logging in"
+        )
+        assert res.status_code == 201
+        ticket.refresh_from_db()
+        message = TicketMessage.objects.get(id=res.data["message_id"])
+        assert ticket.widget_session.external_user_id == "u1"
+        assert message.widget_session == ticket.widget_session
+
+    def test_an_attachment_in_flight_follows_its_ticket(self, settings):
+        settings.STORAGES = {
+            **settings.STORAGES,
+            "default": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
+        }
+        ticket = self._ticket()
+        res = self._post_during_the_login(
+            "widget_message_attachment",
+            ticket,
+            "multipart",
+            file=SimpleUploadedFile("a.png", b"x", content_type="image/png"),
+        )
+        assert res.status_code == 201
+        ticket.refresh_from_db()
+        message = TicketMessage.objects.get(id=res.data["message_id"])
+        assert ticket.widget_session.external_user_id == "u1"
+        assert message.widget_session == ticket.widget_session
+
+    def test_a_message_keeps_the_session_of_a_ticket_that_didnt_move(self):
+        ticket = self._ticket()
+        res = self.client.post(
+            "/api/v1/tickets/widget_message/",
+            {"ticket_id": str(ticket.id), "body": "Hi"},
+            format="json",
+            HTTP_X_WIDGET_TOKEN=self.org.api_token,
+            HTTP_X_WIDGET_SESSION=str(self.anon.id),
+        )
+        assert res.status_code == 201
+        message = TicketMessage.objects.get(id=res.data["message_id"])
+        assert message.widget_session == self.anon
+
+    def _patch(self, session_id, **body):
+        return self.client.patch(
+            URL,
+            data=body,
+            format="json",
+            HTTP_X_WIDGET_TOKEN=self.org.api_token,
+            HTTP_X_WIDGET_SESSION=session_id,
+        )
+
+    def test_patch_keeps_the_original_requester_of_a_moved_ticket(self):
+        moved = self._ticket(requester_name="", requester_email="anon@x.io")
+        session_id = self._login().data["session_id"]
+        own = self._ticket(
+            session=WidgetSession.objects.get(id=session_id),
+            requester_name="",
+            requester_email="",
+        )
+        assert self._patch(session_id, name="Ann", email="ann@x.io").status_code == 200
+        moved.refresh_from_db()
+        own.refresh_from_db()
+        assert (moved.requester_name, moved.requester_email) == ("", "anon@x.io")
+        assert (own.requester_name, own.requester_email) == ("Ann", "ann@x.io")
+
+    def test_patch_leaves_a_ticket_of_another_organization_alone(self):
+        foreign = TicketFactory(
+            organization=OrganizationFactory(),
+            widget_session=self.anon,
+            requester=None,
+            requester_name="",
+            requester_email="",
+        )
+        res = self._patch(str(self.anon.id), name="Ann", email="ann@x.io")
+        assert res.status_code == 200
+        foreign.refresh_from_db()
+        assert (foreign.requester_name, foreign.requester_email) == ("", "")
+
+    def test_patch_copes_with_metadata_that_isnt_an_object(self):
+        ticket = self._ticket(requester_name="", requester_email="")
+        Ticket.objects.filter(pk=ticket.pk).update(context_metadata=[])
+        assert self._patch(str(self.anon.id), name="Ann").status_code == 200
+        ticket.refresh_from_db()
+        assert ticket.requester_name == "Ann"
 
     def test_joins_the_session_the_user_already_has(self):
         existing = WidgetSession.objects.create(
@@ -220,7 +357,10 @@ class TestLogin:
         moved.refresh_from_db()
         assert moved.widget_session == existing
         assert own.context_metadata == {}
-        assert moved.context_metadata == {"pre_login_anonymous": True}
+        assert moved.context_metadata == {
+            "pre_login_anonymous": True,
+            "pre_login_session_id": str(self.anon.id),
+        }
 
     def test_is_idempotent(self):
         ticket = self._ticket(context_metadata={"locale": "fr"})

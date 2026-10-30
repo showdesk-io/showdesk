@@ -187,7 +187,12 @@ a malformed `external_user_id` is a 400.
      (`widget_session`, `external_user_id`, `contact`), and their messages too, so the
      conversation goes on. Those tickets were written before anyone proved who they
      are: `context_metadata["pre_login_anonymous"]` records it, and `sender_verified`
-     stays false on them. It's idempotent: nothing is left to move on a retry.
+     stays false on them. `context_metadata["pre_login_session_id"]` keeps the anonymous
+     session's id, and the move is logged at info level, with ids and counts only. It's
+     idempotent: nothing is left to move on a retry. A message being posted meanwhile
+     takes the session its ticket is on, under the ticket's row lock, so it can't stay
+     behind. A later `PATCH` of the session's name or email doesn't fill the blank
+     requester of a moved ticket: it isn't necessarily this user's.
    - **Identified, valid hash**: find-or-create on the id sent, which is the user's own
      session unless another user logged in since on that browser.
    - **Identified, no hash (logout)**: a new anonymous session. Nothing is written to
