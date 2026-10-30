@@ -12,6 +12,7 @@ from django.db import transaction
 from django.db.models import F, Prefetch, Q
 from django.utils import timezone
 
+from apps.organizations.models import User
 from apps.tickets.models import Ticket, TicketAttachment, TicketMessage
 from apps.videos.models import VideoRecording
 
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 REMOVED_TITLE = "[Removed at the contact's request]"
 REMOVED_BODY = "[Content removed at the contact's request]"
 KEPT_CONTEXT_KEYS = {"browser", "os", "language", "timezone", "screen_resolution"}
+MAX_KEPT_CONTEXT_LENGTH = 100
 # What mail servers commonly accept, once the encoding has added its third.
 MAX_EXPORT_ATTACHMENT_BYTES = 20 * 1024 * 1024
 _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -45,24 +47,46 @@ def _delete_files_after_commit(files) -> None:
     transaction.on_commit(delete)
 
 
-def _contacts_recordings(videos):
-    return videos.filter(
-        Q(recorded_by__isnull=True) | Q(recorded_by=F("ticket__requester"))
+def _the_requester(field: str) -> Q:
+    """Match ``field`` being the ticket's requester, when that's the contact's account.
+
+    An agent or admin of the organization filing a ticket for a contact stays an agent:
+    what they write or upload there is their work, like any agent's.
+    """
+    return Q(**{field: F("ticket__requester")}) & ~Q(
+        **{
+            f"{field}__role__in": (User.Role.AGENT, User.Role.ADMIN),
+            f"{field}__organization": F("ticket__organization"),
+        }
     )
 
 
-def _delete_uploads(contact: Contact) -> None:
-    """Delete what the contact uploaded on their tickets, rows and files.
+def _by_the_contact(field: str) -> Q:
+    """Match an upload the contact made.
 
     The widget uploads without a user, and so does anyone once their account is gone:
-    a file with no uploader goes as well, rather than stay if it was the contact's.
-    An agent's own files stay, like their replies.
+    a file with no uploader counts as well, rather than stay if it was the contact's.
     """
-    attachments = TicketAttachment.objects.filter(ticket__contact=contact).filter(
-        Q(uploaded_by__isnull=True) | Q(uploaded_by=F("ticket__requester"))
+    return Q(**{f"{field}__isnull": True}) | _the_requester(field)
+
+
+def _contacts_recordings(videos):
+    return videos.filter(_by_the_contact("recorded_by"))
+
+
+def _delete_uploads(ticket_ids) -> None:
+    """Delete what the contact uploaded on these tickets, rows and files.
+
+    An agent's own files stay, like their replies. By primary key: a row added since
+    they were read isn't lost while its file stays on the storage.
+    """
+    attachments = list(
+        TicketAttachment.objects.filter(ticket__in=ticket_ids).filter(
+            _by_the_contact("uploaded_by")
+        )
     )
-    videos = _contacts_recordings(
-        VideoRecording.objects.filter(ticket__contact=contact)
+    videos = list(
+        _contacts_recordings(VideoRecording.objects.filter(ticket__in=ticket_ids))
     )
     _delete_files_after_commit(
         [
@@ -74,13 +98,28 @@ def _delete_uploads(contact: Contact) -> None:
             ),
         ]
     )
-    attachments.delete()
-    videos.delete()
+    TicketAttachment.objects.filter(pk__in=[row.pk for row in attachments]).delete()
+    VideoRecording.objects.filter(pk__in=[row.pk for row in videos]).delete()
 
 
-def _scrub_tickets(contact: Contact) -> None:
+def _kept_metadata(metadata) -> dict:
+    """Keep the whitelist, which also takes the ``pre_login_*`` trace of a login.
+
+    A page can put anything in there: only a value that looks like what the key is for
+    stays.
+    """
+    return {
+        key: value
+        for key, value in (metadata if isinstance(metadata, dict) else {}).items()
+        if key in KEPT_CONTEXT_KEYS
+        and isinstance(value, str)
+        and len(value) <= MAX_KEPT_CONTEXT_LENGTH
+        and "@" not in value
+    }
+
+
+def _scrub_tickets(contact: Contact, tickets) -> None:
     now = timezone.now()
-    tickets = list(contact.tickets.all())
     for ticket in tickets:
         # Widget endpoints look a ticket up by session: this stops an open tab,
         # including one on a session since moved to another contact, adding to it.
@@ -93,13 +132,7 @@ def _scrub_tickets(contact: Contact) -> None:
         ticket.external_user_id = ""
         ticket.context_url = ""
         ticket.context_user_agent = ""
-        # A whitelist: it also takes the ``pre_login_*`` trace of the login.
-        metadata = ticket.context_metadata
-        ticket.context_metadata = {
-            key: value
-            for key, value in (metadata if isinstance(metadata, dict) else {}).items()
-            if key in KEPT_CONTEXT_KEYS
-        }
+        ticket.context_metadata = _kept_metadata(ticket.context_metadata)
         ticket.updated_at = now
     Ticket.objects.bulk_update(
         tickets,
@@ -119,6 +152,33 @@ def _scrub_tickets(contact: Contact) -> None:
     )
 
 
+def _scrub_messages(ticket_ids) -> None:
+    TicketMessage.objects.filter(
+        Q(sender_type=TicketMessage.SenderType.USER) | _the_requester("author"),
+        ticket__in=ticket_ids,
+    ).update(
+        body=REMOVED_BODY,
+        body_type=TicketMessage.BodyType.TEXT,
+        widget_session=None,
+        updated_at=timezone.now(),
+    )
+
+
+def _tickets_of(contact: Contact, session_ids, external_id: str):
+    """Return the contact's tickets, and those it wrote that no longer say so.
+
+    An agent can clear a ticket's contact, and ``widget_submit`` takes an external id
+    with no contact, unsigned. To be read before the sessions are unlinked.
+    """
+    unlinked = Q(widget_session__in=session_ids)
+    if external_id:
+        unlinked |= Q(external_user_id=external_id)
+    return Ticket.objects.filter(
+        Q(contact=contact)
+        | (Q(contact__isnull=True, organization_id=contact.organization_id) & unlinked)
+    )
+
+
 @transaction.atomic
 def anonymize_contact(contact: Contact) -> Contact | None:
     """Irreversibly strip personal data while keeping the structure of the tickets.
@@ -134,6 +194,15 @@ def anonymize_contact(contact: Contact) -> Contact | None:
     if contact is None or contact.is_anonymized:
         return contact
 
+    tickets = list(
+        _tickets_of(
+            contact,
+            list(contact.sessions.values_list("pk", flat=True)),
+            contact.external_id,
+        )
+    )
+    ticket_ids = [ticket.pk for ticket in tickets]
+
     contact.email = f"anonymized-{uuid.uuid4().hex}@example.invalid"
     contact.email_verified_at = None
     contact.declared_email = ""
@@ -146,6 +215,7 @@ def anonymize_contact(contact: Contact) -> Contact | None:
     contact.timezone = ""
     contact.company = None  # A small company can tell who this was.
     contact.attributes = {}
+    contact.last_contacted_at = None
     contact.is_anonymized = True
     contact.save()
 
@@ -160,16 +230,9 @@ def anonymize_contact(contact: Contact) -> Contact | None:
         user_agent="",
         contact=None,
     )
-    _delete_uploads(contact)
-    TicketMessage.objects.filter(
-        ticket__contact=contact, sender_type=TicketMessage.SenderType.USER
-    ).update(
-        body=REMOVED_BODY,
-        body_type=TicketMessage.BodyType.TEXT,
-        widget_session=None,
-        updated_at=timezone.now(),
-    )
-    _scrub_tickets(contact)
+    _delete_uploads(ticket_ids)
+    _scrub_messages(ticket_ids)
+    _scrub_tickets(contact, tickets)
     return contact
 
 

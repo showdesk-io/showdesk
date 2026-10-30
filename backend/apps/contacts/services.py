@@ -475,3 +475,42 @@ def resolve_contact_for_widget_session(
         return _resolve_session_atomically(*args)
     except IntegrityError:
         return _resolve_session_atomically(*args)
+
+
+def delete_contact_if_left_empty(contact_id) -> bool:
+    """Delete an email-only contact that a login emptied, and tell if it did.
+
+    Only a contact with nothing of its own: no ticket, session or note, and nothing
+    an agent or a proven session entered, which no one could get back. Under the same
+    row lock as a resolution, so one that's linking a session either goes first and
+    keeps the contact, or finds it gone and creates another.
+
+    The caller must have committed its move: the identity lock order is contact, then
+    sessions, and a move holds its session's row.
+    """
+    with transaction.atomic():
+        contact = (
+            Contact.objects.select_for_update()
+            .filter(
+                pk=contact_id,
+                external_id="",
+                is_anonymized=False,
+                is_unsubscribed=False,
+                phone="",
+                avatar_url="",
+                job_title="",
+                locale="",
+                timezone="",
+                attributes={},
+            )
+            .first()
+        )
+        if (
+            contact is None
+            or contact.tickets.exists()
+            or contact.sessions.exists()
+            or contact.notes.exists()
+        ):
+            return False
+        contact.delete()
+        return True

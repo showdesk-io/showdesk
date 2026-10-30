@@ -201,7 +201,12 @@ a malformed `external_user_id` is a 400.
      It's idempotent: nothing is left to move on a retry. A message being posted meanwhile
      takes the session its ticket is on, under the ticket's row lock, so it can't stay
      behind. A later `PATCH` of the session's name or email doesn't fill the blank
-     requester of a moved ticket: it isn't necessarily this user's.
+     requester of a moved ticket: it isn't necessarily this user's. In the same
+     transaction the anonymous session is blanked (name, email, user agent,
+     `email_verified_at`, Contact), since anonymizing the Contact later wouldn't reach
+     it. Once committed, an email-only Contact the move emptied is deleted, unless it holds
+     a ticket, a session, a note, an unsubscription, or a phone, avatar, job title, locale,
+     timezone or attribute; a failure there is logged and the login goes on.
    - **Identified, valid hash**: find-or-create on the id sent, which is the user's own
      session unless another user logged in since on that browser.
    - **Identified, no hash (logout)**: a new anonymous session, which the widget stores
@@ -292,18 +297,23 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   second call changes nothing). Contact: email → `anonymized-{uuid}@example.invalid`, name
   → "Anonymized contact", phone, external_id, declared_email, email_verified_at, avatar,
   job title, locale, timezone and company cleared, attributes emptied,
-  `is_anonymized = True`, notes deleted (free text that can hold personal data). Sessions:
-  name, email, external_user_id, email_verified_at and user agent cleared, unlinked from
-  the Contact. Tickets: title and description replaced (the widget copies the first
-  message there), requester name and email set to the anonymized ones, external_user_id,
-  context_url and context_user_agent cleared, `context_metadata` reduced to a whitelist
-  (which also removes the `pre_login_*` trace), `widget_session` unlinked. The contact's
-  messages: body replaced by a placeholder, unlinked from their session. Files: the
-  contact's attachments and recordings are deleted, rows and files. "The contact's" means
-  uploaded with no user (as the widget does, or by an account since deleted) or by the
-  ticket's requester. Files go once the
-  transaction has committed; a failure is logged with the file's path, and doesn't fail
-  the request.
+  `last_contacted_at` cleared, `is_anonymized = True`, notes deleted (free text that can
+  hold personal data). Sessions: name, email, external_user_id, email_verified_at and user
+  agent cleared, unlinked from the Contact. Tickets, being the Contact's and also, in the
+  organization, those with no Contact that are on one of its sessions (an agent cleared
+  the Contact) or carry its external id (`widget_submit` takes one unsigned, and links
+  nothing): title and description replaced (the widget copies the first message there),
+  requester name and email set to the anonymized ones, external_user_id, context_url and
+  context_user_agent cleared, `context_metadata` reduced to a whitelist (which also removes
+  the `pre_login_*` trace), where only strings of 100 characters at most without `@` stay,
+  `widget_session` unlinked. On those tickets, the contact's messages (sender type `user`,
+  or written by the requester): body replaced by a placeholder, unlinked from their
+  session. Files: the contact's attachments and recordings are deleted, rows and files.
+  "The contact's" means uploaded with no user (as the widget does, or by an account since
+  deleted) or by the ticket's requester. A requester who's an agent or admin of the
+  organization filed the ticket for the contact: what they wrote or uploaded stays. Files
+  go once the transaction has committed; a failure is logged with the file's path, and
+  doesn't fail the request.
 - `GET/POST /api/v1/companies/`, `GET/PATCH/DELETE /api/v1/companies/{id}/`,
   `GET /api/v1/companies/{id}/contacts/`, `GET /api/v1/companies/{id}/tickets/`.
   `external_id` is read-only, as on a Contact: it's what signed widget payloads upsert a
@@ -376,7 +386,11 @@ inbound sender).
   stays false on them, and agents see the requester details they were written with.
 - A login sets the Contact of every ticket it moves, since a ticket without one can't
   tell an agent's clearing from never having had one. That overrides an agent's choice
-  on a ticket of an anonymous session. The email-only Contact they leave stays as it is.
+  on a ticket of an anonymous session. The email-only Contact they leave is deleted when
+  nothing is left on it (rule 8). Otherwise it stays as it is, on its own, with its email
+  and name: when it still has another ticket, session or note, or data of its own such as
+  a phone or an attribute, and when the identified session ended with no Contact to move
+  the tickets to.
 - A tab still holding the anonymous session after a login, in another window or as a
   recording popup, gets a 404 on the tickets that moved, misses their replies, and a
   new conversation it starts stays with the anonymous session.
@@ -401,8 +415,10 @@ inbound sender).
 - Anonymization leaves personal data in places it can't judge: agent replies and internal
   notes on the tickets (free text that may quote the contact), agents' own attachments and
   recordings (a screenshot of the contact's account, say), and the `requester` user of a
-  ticket, an account the Contact doesn't own. It also keeps the OS, browser and screen
-  resolution of the tickets, and the Contact's seen dates.
+  ticket, an account the Contact doesn't own. It also keeps, on the tickets, the OS, browser
+  and screen resolution, and the `language`, `timezone` and other whitelisted values of
+  `context_metadata`, the names of their tags, the Contact's seen dates, and whatever text
+  an agent searched for in a `SavedView`, which can be the contact's name or address.
 - A widget request already past its session lookup when an anonymization commits can
   still write what it holds: a new ticket on the anonymized Contact with the old requester
   details, or one more message on a scrubbed ticket. The window is one request. A video

@@ -16,6 +16,7 @@ from rest_framework.response import Response
 
 from apps.contacts.permissions import IsNotEndUser
 from apps.contacts.services import (
+    delete_contact_if_left_empty,
     resolve_contact_for_email,
     resolve_contact_for_widget_session,
 )
@@ -286,18 +287,27 @@ def _move_conversation_to_identified_session(org, anonymous, identified) -> None
     Those tickets were written before anyone proved who they are, so they're marked
     as such for ``sender_verified``. Moved, there's nothing left to do on a retry.
 
+    The anonymous session keeps nothing about its user: anonymizing the contact later
+    wouldn't reach it, as it's no longer on that contact.
+
     Not caught, unlike a contact that can't be linked: the widget has to keep the
     anonymous session's id for its next init, the only way to retry this.
     """
     origin_hash = _session_digest(anonymous.pk)
     with transaction.atomic():
-        WidgetSession.objects.select_for_update(no_key=True).get(pk=anonymous.pk)
+        left_contact_id = (
+            WidgetSession.objects.select_for_update(no_key=True)
+            .values_list("contact_id", flat=True)
+            .get(pk=anonymous.pk)
+        )
+        left_contact_ids = {left_contact_id}
         tickets = list(
             Ticket.objects.select_for_update(no_key=True).filter(
                 organization=org, widget_session=anonymous
             )
         )
         for ticket in tickets:
+            left_contact_ids.add(ticket.contact_id)
             ticket.widget_session = identified
             ticket.external_user_id = identified.external_user_id
             ticket.contact_id = identified.contact_id or ticket.contact_id
@@ -315,6 +325,15 @@ def _move_conversation_to_identified_session(org, anonymous, identified) -> None
         moved_messages = TicketMessage.objects.filter(
             widget_session=anonymous, ticket__organization=org
         ).update(widget_session=identified)
+        WidgetSession.objects.filter(pk=anonymous.pk).update(
+            name="",
+            email="",
+            user_agent="",
+            email_verified_at=None,
+            contact=None,
+            updated_at=timezone.now(),
+        )
+    _delete_contacts_left_empty(left_contact_ids - {None, identified.contact_id})
     if tickets or moved_messages:
         # Only digests and counts: no personal data, and no usable session id.
         logger.info(
@@ -324,6 +343,15 @@ def _move_conversation_to_identified_session(org, anonymous, identified) -> None
             origin_hash,
             _session_digest(identified.pk),
         )
+
+
+def _delete_contacts_left_empty(contact_ids) -> None:
+    """Delete the contacts a login emptied. The login is done: one that stays is fine."""
+    for contact_id in contact_ids:
+        try:
+            delete_contact_if_left_empty(contact_id)
+        except DatabaseError:
+            logger.exception("Could not delete the emptied contact %s", contact_id)
 
 
 def _create_user_message(ticket, **fields) -> TicketMessage:

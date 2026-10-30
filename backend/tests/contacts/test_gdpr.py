@@ -12,7 +12,7 @@ import pytest
 from django.core import mail
 from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from apps.contacts.gdpr import (
@@ -850,3 +850,442 @@ def test_export_task_retries_a_failed_email(admin_user, organization):
     ):
         export_contact_data(str(contact.id), str(admin_user.id))
     retry.assert_called_once()
+
+
+# What a login leaves behind
+
+
+def _sign(value: str) -> str:
+    return hmac.new(b"s3cret", value.encode(), hashlib.sha256).hexdigest()
+
+
+@pytest.fixture
+def secret_org():
+    return OrganizationFactory(widget_secret="s3cret")
+
+
+def _login(api_client, organization, session, external_user_id="u1"):
+    res = api_client.post(
+        SESSION_URL,
+        {
+            "session_id": str(session.id),
+            "external_user_id": external_user_id,
+            "user_hash": _sign(external_user_id),
+        },
+        format="json",
+        HTTP_X_WIDGET_TOKEN=str(organization.api_token),
+    )
+    assert res.status_code in (200, 201), res.data
+    return WidgetSession.objects.get(id=res.data["session_id"])
+
+
+def _anonymous_session(organization, **kwargs) -> tuple[Contact, WidgetSession]:
+    contact = ContactFactory(organization=organization, email="alice@x.io", **kwargs)
+    session = WidgetSession.objects.create(
+        organization=organization,
+        contact=contact,
+        email="alice@x.io",
+        name="Alice",
+        user_agent="Mozilla/5.0",
+        email_verified_at=None,
+    )
+    return contact, session
+
+
+def test_login_blanks_the_session_it_leaves_behind(api_client, secret_org):
+    contact, session = _anonymous_session(secret_org)
+    WidgetSession.objects.filter(pk=session.pk).update(email_verified_at=timezone.now())
+    res = api_client.post(
+        SESSION_URL,
+        {
+            "session_id": str(session.id),
+            "external_user_id": "u1",
+            "user_hash": _sign("u1"),
+        },
+        format="json",
+        HTTP_X_WIDGET_TOKEN=str(secret_org.api_token),
+    )
+    assert res.status_code == 201
+    session.refresh_from_db()
+    assert (session.name, session.email, session.user_agent) == ("", "", "")
+    assert session.email_verified_at is None
+    assert session.contact is None
+
+
+def test_login_deletes_the_email_only_contact_left_empty(api_client, secret_org):
+    contact, session = _anonymous_session(secret_org)
+    ticket = TicketFactory(
+        organization=secret_org,
+        contact=contact,
+        requester=None,
+        widget_session=session,
+    )
+    identified = _login(api_client, secret_org, session)
+    ticket.refresh_from_db()
+    assert ticket.contact == identified.contact
+    assert not Contact.objects.filter(pk=contact.pk).exists()
+
+
+def test_login_deletes_a_contact_only_a_moved_ticket_was_on(api_client, secret_org):
+    """The session may have changed contact since it wrote the ticket."""
+    previous = ContactFactory(organization=secret_org, email="previous@x.io")
+    contact, session = _anonymous_session(secret_org)
+    TicketFactory(
+        organization=secret_org,
+        contact=previous,
+        requester=None,
+        widget_session=session,
+    )
+    _login(api_client, secret_org, session)
+    assert not Contact.objects.filter(pk=previous.pk).exists()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"phone": "+33"},
+        {"job_title": "CTO"},
+        {"avatar_url": "https://x.io/a.png"},
+        {"locale": "fr"},
+        {"timezone": "Europe/Paris"},
+        {"attributes": {"plan": "pro"}},
+        {"is_unsubscribed": True},
+        {"external_id": "other"},
+    ],
+    ids=lambda fields: next(iter(fields)),
+)
+def test_login_keeps_a_left_contact_holding_data_of_its_own(
+    api_client, secret_org, fields
+):
+    contact, session = _anonymous_session(secret_org, **fields)
+    _login(api_client, secret_org, session)
+    assert Contact.objects.filter(pk=contact.pk).exists()
+
+
+def test_login_keeps_a_left_contact_with_notes(api_client, secret_org):
+    contact, session = _anonymous_session(secret_org)
+    ContactNoteFactory(contact=contact, body="Call back")
+    _login(api_client, secret_org, session)
+    assert contact.notes.exists()
+
+
+def test_login_keeps_a_left_contact_with_another_session(api_client, secret_org):
+    contact, session = _anonymous_session(secret_org)
+    other = WidgetSession.objects.create(organization=secret_org, contact=contact)
+    _login(api_client, secret_org, session)
+    other.refresh_from_db()
+    assert other.contact == contact
+
+
+def test_login_keeps_a_left_contact_with_another_ticket(api_client, secret_org):
+    contact, session = _anonymous_session(secret_org)
+    other = TicketFactory(organization=secret_org, contact=contact, requester=None)
+    _login(api_client, secret_org, session)
+    other.refresh_from_db()
+    assert other.contact == contact
+
+
+def test_login_keeps_the_contact_when_the_tickets_cant_move_to_another(
+    api_client, secret_org
+):
+    contact, session = _anonymous_session(secret_org)
+    ticket = TicketFactory(
+        organization=secret_org,
+        contact=contact,
+        requester=None,
+        widget_session=session,
+    )
+    # An anonymized contact holds this id: the identified session gets no contact.
+    gone = ContactFactory(organization=secret_org, external_id="u1")
+    anonymize_contact(gone)
+    Contact.objects.filter(pk=gone.pk).update(external_id="u1")
+
+    identified = _login(api_client, secret_org, session)
+
+    assert identified.contact is None
+    ticket.refresh_from_db()
+    assert ticket.contact == contact
+
+
+def test_login_keeps_the_contact_the_identified_session_attached_to(
+    api_client, secret_org
+):
+    contact, session = _anonymous_session(secret_org)
+    res = api_client.post(
+        SESSION_URL,
+        {
+            "session_id": str(session.id),
+            "external_user_id": "u1",
+            "user_hash": _sign("u1"),
+            "email": "alice@x.io",
+            "email_hash": _sign("email:alice@x.io"),
+        },
+        format="json",
+        HTTP_X_WIDGET_TOKEN=str(secret_org.api_token),
+    )
+    identified = WidgetSession.objects.get(id=res.data["session_id"])
+    assert identified.contact == contact
+    contact.refresh_from_db()
+    assert contact.external_id == "u1"
+
+
+def test_login_survives_a_contact_it_cant_delete(api_client, secret_org, caplog):
+    contact, session = _anonymous_session(secret_org)
+    with mock.patch(
+        "apps.tickets.views.delete_contact_if_left_empty",
+        side_effect=DatabaseError("deadlock"),
+    ):
+        identified = _login(api_client, secret_org, session)
+    assert identified.external_user_id == "u1"
+    assert Contact.objects.filter(pk=contact.pk).exists()
+    assert "alice@x.io" not in caplog.text
+
+
+# Anonymization: tickets that no longer point at the contact
+
+
+def test_anonymize_scrubs_tickets_an_agent_unlinked_from_the_contact(
+    organization, media, django_capture_on_commit_callbacks
+):
+    contact = ContactFactory(organization=organization, email="alice@x.io")
+    session = WidgetSession.objects.create(organization=organization, contact=contact)
+    cleared = TicketFactory(
+        organization=organization,
+        contact=None,
+        requester=None,
+        widget_session=session,
+        title="Alice's invoice",
+        description="My card is 4242",
+        requester_email="alice@x.io",
+        requester_name="Alice",
+        context_url="https://app/x",
+    )
+    message = TicketMessageFactory(
+        ticket=cleared,
+        author=None,
+        widget_session=session,
+        sender_type=TicketMessage.SenderType.USER,
+        body="secret",
+    )
+    upload = TicketAttachmentFactory(ticket=cleared, uploaded_by=None, file=_file())
+    path = media / upload.file.name
+
+    with django_capture_on_commit_callbacks(execute=True):
+        anonymize_contact(contact)
+
+    contact.refresh_from_db()
+    cleared.refresh_from_db()
+    message.refresh_from_db()
+    assert cleared.widget_session is None
+    assert cleared.contact is None
+    assert (cleared.title, cleared.description) == (REMOVED_TITLE, REMOVED_BODY)
+    assert cleared.requester_email == contact.email
+    assert cleared.context_url == ""
+    assert message.body == REMOVED_BODY
+    assert message.widget_session is None
+    assert not TicketAttachment.objects.filter(pk=upload.pk).exists()
+    assert not path.exists()
+
+
+def test_anonymize_leaves_another_contacts_ticket_on_the_same_session(organization):
+    contact = ContactFactory(organization=organization)
+    other = ContactFactory(organization=organization)
+    session = WidgetSession.objects.create(organization=organization, contact=contact)
+    ticket = TicketFactory(
+        organization=organization,
+        contact=other,
+        requester=None,
+        widget_session=session,
+        title="Kept",
+    )
+    anonymize_contact(contact)
+    ticket.refresh_from_db()
+    assert ticket.title == "Kept"
+
+
+def test_anonymize_scrubs_unlinked_tickets_naming_its_external_id(organization):
+    """``widget_submit`` takes any external id, unsigned, and links nothing."""
+    contact = ContactFactory(organization=organization, external_id="u1")
+    named = TicketFactory(
+        organization=organization,
+        contact=None,
+        requester=None,
+        external_user_id="u1",
+        title="Alice's invoice",
+    )
+    linked_elsewhere = TicketFactory(
+        organization=organization,
+        contact=ContactFactory(organization=organization),
+        requester=None,
+        external_user_id="u1",
+        title="Kept",
+    )
+    other_org = TicketFactory(
+        organization=OrganizationFactory(),
+        contact=None,
+        requester=None,
+        external_user_id="u1",
+        title="Kept",
+    )
+
+    anonymize_contact(contact)
+
+    for ticket in (named, linked_elsewhere, other_org):
+        ticket.refresh_from_db()
+    assert named.title == REMOVED_TITLE
+    assert named.external_user_id == ""
+    assert linked_elsewhere.title == "Kept"
+    assert linked_elsewhere.external_user_id == "u1"
+    assert other_org.title == "Kept"
+
+
+def test_anonymizing_a_contact_without_external_id_spares_tickets_without_one(
+    organization,
+):
+    contact = ContactFactory(organization=organization, external_id="")
+    ticket = TicketFactory(
+        organization=organization,
+        contact=None,
+        requester=None,
+        external_user_id="",
+        title="Kept",
+    )
+    anonymize_contact(contact)
+    ticket.refresh_from_db()
+    assert ticket.title == "Kept"
+
+
+# Anonymization: details
+
+
+def test_anonymize_clears_the_last_contact_date(organization):
+    contact = ContactFactory(
+        organization=organization, last_contacted_at=timezone.now()
+    )
+    anonymize_contact(contact)
+    contact.refresh_from_db()
+    assert contact.last_contacted_at is None
+
+
+def test_anonymize_keeps_whitelisted_metadata_only_if_harmless(organization):
+    contact = ContactFactory(organization=organization)
+    ticket = TicketFactory(
+        organization=organization,
+        contact=contact,
+        requester=None,
+        context_metadata={
+            "language": "fr",
+            "timezone": "alice@x.io",
+            "browser": {"name": "Chrome"},
+            "os": "x" * 101,
+            "screen_resolution": "1920x1080",
+            "custom": "secret",
+        },
+    )
+    anonymize_contact(contact)
+    ticket.refresh_from_db()
+    assert ticket.context_metadata == {
+        "language": "fr",
+        "screen_resolution": "1920x1080",
+    }
+
+
+def test_anonymize_scrubs_messages_by_the_requester_whatever_their_sender_type(
+    organization, agent
+):
+    requester = EndUserFactory(organization=organization)
+    contact = ContactFactory(organization=organization)
+    ticket = TicketFactory(
+        organization=organization, contact=contact, requester=requester
+    )
+    by_requester = TicketMessageFactory(
+        ticket=ticket,
+        author=requester,
+        sender_type=TicketMessage.SenderType.AGENT,
+        body="secret",
+    )
+    by_agent = TicketMessageFactory(
+        ticket=ticket,
+        author=agent,
+        sender_type=TicketMessage.SenderType.AGENT,
+        body="reply",
+    )
+    system = TicketMessageFactory(
+        ticket=ticket,
+        author=None,
+        sender_type=TicketMessage.SenderType.SYSTEM,
+        body="Reopened",
+    )
+    anonymize_contact(contact)
+    for message in (by_requester, by_agent, system):
+        message.refresh_from_db()
+    assert by_requester.body == REMOVED_BODY
+    assert by_agent.body == "reply"
+    assert system.body == "Reopened"
+
+
+@pytest.mark.parametrize("role", ["agent", "admin"])
+def test_anonymize_keeps_what_a_requester_who_is_staff_uploaded_and_wrote(
+    organization, media, role
+):
+    """An agent filed the ticket for the contact: their work isn't the contact's."""
+    requester = UserFactory(organization=organization, role=role)
+    contact = ContactFactory(organization=organization)
+    ticket = TicketFactory(
+        organization=organization, contact=contact, requester=requester
+    )
+    upload = TicketAttachmentFactory(ticket=ticket, uploaded_by=requester, file=_file())
+    video = VideoRecordingFactory(
+        ticket=ticket, recorded_by=requester, original_file=_file("a.webm")
+    )
+    reply = TicketMessageFactory(
+        ticket=ticket,
+        author=requester,
+        sender_type=TicketMessage.SenderType.AGENT,
+        body="reply",
+    )
+    anonymize_contact(contact)
+    reply.refresh_from_db()
+    assert reply.body == "reply"
+    assert TicketAttachment.objects.filter(pk=upload.pk).exists()
+    assert VideoRecording.objects.filter(pk=video.pk).exists()
+
+
+def test_anonymize_deletes_what_a_requester_who_is_staff_elsewhere_uploaded(
+    organization, media
+):
+    requester = UserFactory(organization=OrganizationFactory(), role="agent")
+    orphan = UserFactory(organization=None, role="end_user")
+    contact = ContactFactory(organization=organization)
+    uploads = [
+        TicketAttachmentFactory(
+            ticket=TicketFactory(
+                organization=organization, contact=contact, requester=user
+            ),
+            uploaded_by=user,
+            file=_file(),
+        )
+        for user in (requester, orphan)
+    ]
+    anonymize_contact(contact)
+    assert not TicketAttachment.objects.filter(
+        pk__in=[upload.pk for upload in uploads]
+    ).exists()
+
+
+def test_a_row_added_while_collecting_uploads_keeps_its_file(organization, media):
+    """Only what got collected goes: its row can't go without its file."""
+    contact = ContactFactory(organization=organization)
+    ticket = TicketFactory(organization=organization, contact=contact, requester=None)
+    late = []
+
+    def add_rows(files):
+        late.append(TicketAttachmentFactory(ticket=ticket, uploaded_by=None))
+        late.append(VideoRecordingFactory(ticket=ticket))
+
+    with mock.patch("apps.contacts.gdpr._delete_files_after_commit", add_rows):
+        anonymize_contact(contact)
+
+    attachment, video = late
+    assert TicketAttachment.objects.filter(pk=attachment.pk).exists()
+    assert VideoRecording.objects.filter(pk=video.pk).exists()
