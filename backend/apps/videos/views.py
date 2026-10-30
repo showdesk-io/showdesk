@@ -7,7 +7,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import get_active_org
+from apps.core.permissions import LOOKUP_ERRORS, get_active_org
 from apps.core.throttling import WidgetUploadThrottle
 from apps.organizations.models import Organization
 
@@ -60,7 +60,7 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
 
         try:
             organization = Organization.objects.get(api_token=token, is_active=True)
-        except Organization.DoesNotExist:
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Invalid or inactive organization token."},
                 status=status.HTTP_401_UNAUTHORIZED,

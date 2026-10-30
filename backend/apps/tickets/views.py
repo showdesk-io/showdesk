@@ -82,7 +82,7 @@ def _get_widget_org(request):
         )
     try:
         org = Organization.objects.get(api_token=token, is_active=True)
-    except Organization.DoesNotExist:
+    except LOOKUP_ERRORS:
         return None, Response(
             {"error": "Invalid or inactive organization token."},
             status=status.HTTP_401_UNAUTHORIZED,
@@ -113,7 +113,7 @@ def _get_widget_session(request, organization):
         )
     try:
         session = WidgetSession.objects.get(id=session_id, organization=organization)
-    except (WidgetSession.DoesNotExist, ValueError):
+    except LOOKUP_ERRORS:
         return None, Response(
             {"error": "Invalid session."},
             status=status.HTTP_401_UNAUTHORIZED,
@@ -260,7 +260,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         try:
             organization = Organization.objects.get(api_token=token, is_active=True)
-        except Organization.DoesNotExist:
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Invalid or inactive organization token."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -308,7 +308,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         try:
             organization = Organization.objects.get(api_token=token, is_active=True)
-        except Organization.DoesNotExist:
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Invalid or inactive organization token."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -325,7 +325,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         try:
             ticket = Ticket.objects.get(id=ticket_id, organization=organization)
-        except Ticket.DoesNotExist:
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -369,7 +369,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         try:
             organization = Organization.objects.get(api_token=token, is_active=True)
-        except Organization.DoesNotExist:
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Invalid or inactive organization token."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -673,7 +673,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         if session_id:
             try:
                 session = WidgetSession.objects.get(id=session_id, organization=org)
-            except (WidgetSession.DoesNotExist, ValueError):
+            except LOOKUP_ERRORS:
                 session = None
 
             # Identity mismatch (e.g. a different user logged into the same
@@ -778,7 +778,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                     organization=org,
                     widget_session=session,
                 )
-            except Ticket.DoesNotExist:
+            except LOOKUP_ERRORS:
                 return Response(
                     {"error": "Ticket not found."},
                     status=status.HTTP_404_NOT_FOUND,
@@ -886,7 +886,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                     organization=org,
                     widget_session=session,
                 )
-            except Ticket.DoesNotExist:
+            except LOOKUP_ERRORS:
                 return Response(
                     {"error": "Ticket not found."},
                     status=status.HTTP_404_NOT_FOUND,
@@ -999,7 +999,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 organization=org,
                 widget_session=session,
             )
-        except (Ticket.DoesNotExist, ValueError):
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -1081,7 +1081,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 organization=org,
                 widget_session=session,
             )
-        except (Ticket.DoesNotExist, ValueError):
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -1123,7 +1123,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 widget_session=session,
                 ticket__organization=org,
             )
-        except (TicketMessage.DoesNotExist, ValueError):
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Message not found."},
                 status=status.HTTP_404_NOT_FOUND,
