@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("@/api/users");
@@ -111,21 +111,32 @@ describe("OnboardingPage", () => {
     expect(screen.getByText(/abc-123/)).toBeInTheDocument();
   });
 
-  it("redirects agents to /: the wizard only has admin steps", async () => {
+  it("redirects agents opening the URL to /: the wizard only has admin steps", async () => {
     useAuthStore.setState({ isAuthenticated: true });
     vi.mocked(usersApi.fetchOrganization).mockResolvedValue(makeOrg());
     vi.mocked(usersApi.fetchCurrentUser).mockResolvedValue({
       role: "agent",
       is_superuser: false,
     } as User);
-    renderOnboarding();
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <MemoryRouter initialEntries={["/onboarding"]}>
+          <Routes>
+            <Route path="/" element={<div>dashboard</div>} />
+            <Route path="/onboarding" element={<OnboardingPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
 
-    await waitFor(() => {
-      expect(usersApi.fetchCurrentUser).toHaveBeenCalled();
-      expect(
-        screen.queryByRole("heading", { name: /welcome to showdesk/i }),
-      ).not.toBeInTheDocument();
-    });
+    expect(await screen.findByText("dashboard")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /customize your widget/i }),
+    ).not.toBeInTheDocument();
     useAuthStore.setState({ isAuthenticated: false });
   });
 
