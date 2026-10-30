@@ -1154,7 +1154,8 @@ def test_company_hash_refuses_a_newline_in_any_field(company_id, name, domain):
 ### Task 7: Wire the identity service into widget endpoints
 
 **Files:**
-- Modify: `backend/apps/tickets/views.py` — `widget_session` (~613), `widget_submit` (~241), ticket creation in `widget_message` (~733), `widget_upload_attachment` (~289), `widget_message_attachment` (~839)
+- Modify: `backend/apps/tickets/views.py` — `widget_session` (~613), `widget_submit` (~241), `widget_tickets` (~347), ticket creation in `widget_message` (~733) and `widget_message_attachment` (~839)
+- Modify: `backend/apps/tickets/serializers.py`
 - Test: `backend/tests/contacts/test_widget_identity.py`
 
 Read `tests/tickets/test_widget_session.py`, `test_widget_identity.py` and `test_widget_submit.py` first and reuse their request shapes (headers, minimal payloads).
@@ -1311,11 +1312,12 @@ def test_signed_traits_only_apply_to_a_new_company(api_client, org):
     "body",
     [
         {"email": ["a@x.io"]},
-        {"email": "not-an-email"},
+        {"email": 42},
         {"email": "x" * 250 + "@x.io"},
         {"name": {"a": 1}},
         {"name": "n" * 256},
-        {"external_user_id": 42, "user_hash": "x"},
+        {"external_user_id": True, "user_hash": "x"},
+        {"external_user_id": 1.5, "user_hash": "x"},
         {"external_user_id": "x" * 256, "user_hash": "x"},
         {"external_user_id": "\ud800", "user_hash": "x"},
         {"name": "\ud800"},
@@ -1508,6 +1510,8 @@ def test_widget_submit_links_contact_by_email(api_client, org):
     assert Contact.objects.filter(organization=org).count() == 1
 ```
 
+The test file also covers what real clients send (`TestRealClientPayloads`): an empty body, a stored `session_id` alone, null in every field on POST and PATCH, an email that passes the widget's check but isn't valid, a numeric user id with and without its hash, and a stored `session_id` that isn't a UUID. Also a deeply nested `name` (100,000 levels), and an attachment as first message (with `InMemoryStorage`, tests have no object storage).
+
 **Step 2:** FAIL.
 
 **Step 3: Implement**
@@ -1515,29 +1519,36 @@ def test_widget_submit_links_contact_by_email(api_client, org):
 Import at the top of `views.py`:
 
 ```python
-from apps.contacts.attributes import is_storable
 from apps.contacts.services import (
     resolve_contact_for_email,
     resolve_contact_for_widget_session,
 )
 ```
 
-Identity fields are validated before the session is touched: a non-string (DRF's `CharField` would coerce numbers), a value too long for its column, an invalid email format or a non-ASCII hash (`hmac.compare_digest` raises `TypeError` on one) is a 400 and nothing is written. `external_user_id` isn't trimmed, since the HMAC covers its exact value. An id starting with `email:` or `company\n` is refused (400), so a `user_hash` can never double as an `email_hash` or `company_hash`: otherwise a page holding a valid `email_hash` could present it as the `user_hash` of the user `email:<address>`, and a host app whose users choose their id could be made to sign an `email_hash` by accident. Put this serializer in `apps/tickets/serializers.py`:
+Identity fields are validated before the session is touched: a wrong type, a value too long for its column or a non-ASCII hash (`hmac.compare_digest` raises `TypeError` on one) is a 400 and nothing is written. Real clients set the limits of that strictness:
+
+- Null means absent, on every field. Direct integrations can send it, and PATCH already treated it that way.
+- `email` is checked as text, not as an email. The contact nudge only checks for an `@` and ignores the response, so a 400 would silently lose the name sent with `a@b`, and `init()` would fail on whatever a host page passes. It's stored as before, and the identity service ignores what isn't a valid email.
+- `external_user_id` also accepts an integer, as plain JavaScript can pass `init({ user: { id: 42 } })`. It's read as its decimal string, which the HMAC covers. The same goes for `company.id`.
+
+`external_user_id` isn't trimmed, since the HMAC covers its exact value. An id starting with `email:` or `company\n` is refused (400), so a `user_hash` can never double as an `email_hash` or `company_hash`: otherwise a page holding a valid `email_hash` could present it as the `user_hash` of the user `email:<address>`, and a host app whose users choose their id could be made to sign an `email_hash` by accident. Put this serializer in `apps/tickets/serializers.py`:
 
 ```python
 class StrictCharField(serializers.CharField):
     """A CharField that refuses non-strings instead of coercing numbers."""
 
-    def to_internal_value(self, data):
-        if not isinstance(data, str):
+    def run_validation(self, data=empty):
+        # Before the parent's str(data), a RecursionError on a deeply nested list.
+        if data is not empty and data is not None and not isinstance(data, str):
             self.fail("invalid")
-        return super().to_internal_value(data)
+        return super().run_validation(data)
 
 
 class WidgetHashField(StrictCharField):
     def __init__(self, **kwargs):
         super().__init__(
-            required=False, allow_blank=True, max_length=128, trim_whitespace=False, **kwargs
+            required=False, allow_null=True, allow_blank=True, max_length=128,
+            trim_whitespace=False, **kwargs,
         )
 
     def to_internal_value(self, data):
@@ -1547,29 +1558,41 @@ class WidgetHashField(StrictCharField):
         return value
 
 
+class WidgetExternalIdField(StrictCharField):
+    def __init__(self, **kwargs):
+        super().__init__(
+            required=False, allow_null=True, allow_blank=True, max_length=255,
+            trim_whitespace=False, **kwargs,
+        )
+
+    def run_validation(self, data=empty):
+        if type(data) is int and abs(data) < 2**63:
+            data = str(data)
+        return super().run_validation(data)
+
+
 # ``Organization.verify_email_hash`` and ``verify_company_hash`` sign these.
 RESERVED_EXTERNAL_ID_PREFIXES = ("email:", "company\n")
 
 
 class WidgetIdentitySerializer(serializers.Serializer):
-    name = StrictCharField(required=False, allow_blank=True, max_length=255)
-    email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
-    external_user_id = StrictCharField(
-        required=False, allow_blank=True, max_length=255, trim_whitespace=False
-    )
+    name = StrictCharField(required=False, allow_null=True, allow_blank=True, max_length=255)
+    email = StrictCharField(required=False, allow_null=True, allow_blank=True, max_length=254)
+    external_user_id = WidgetExternalIdField()
     user_hash = WidgetHashField()
     email_hash = WidgetHashField()
     company_hash = WidgetHashField()
 
-    def validate_external_user_id(self, value: str) -> str:
-        if value.startswith(RESERVED_EXTERNAL_ID_PREFIXES):
+    def validate_external_user_id(self, value: str | None) -> str | None:
+        # DRF calls this with None too.
+        if value and value.startswith(RESERVED_EXTERNAL_ID_PREFIXES):
             raise serializers.ValidationError("This prefix is reserved.")
         return value
 ```
 
-At the very start of `widget_session` (POST and PATCH), run `WidgetIdentitySerializer(data=request.data).is_valid(raise_exception=True)`. The ticket history endpoint (`verify_user_hash` at ~391 in `views.py`) refuses the same prefixes with a 400.
+In `widget_session` (POST and PATCH), right after the token check, run the serializer and read `name`, `email`, `external_user_id` and the hashes from its `validated_data` (null becomes `""` on POST, and leaves the field alone on PATCH): `request.data` would give the untrimmed values and null. A `session_id` that isn't a UUID raises Django's `ValidationError` rather than `ValueError`: catch it at both lookups, so it starts a new session on POST and is a 401 in the `X-Widget-Session` header. The ticket history endpoint (`verify_user_hash` at ~391 in `views.py`) refuses the same prefixes with a 400.
 
-Both resume paths of `widget_session` (the `session.save()` calls at ~680 and ~710) become `session.save(update_fields=["name", "email", "last_seen_at"])`. A full save writes the whole row as it was read, which restores the personal data a concurrent anonymization just wiped.
+Both resume paths of `widget_session` (the `session.save()` calls at ~680 and ~710) go through one helper, which writes `last_seen_at`, `updated_at` and only the fields it actually fills. A full save writes the whole row as it was read, which restores the personal data a concurrent anonymization just wiped, and so would listing `name` and `email` unconditionally. PATCH likewise writes only the fields it was given.
 
 In the PATCH branch, when the email actually changes (compare lowercased, stripped values), also set `session.email_verified_at = None` and add it to the session's `update_fields`: the proof was about the previous email.
 
@@ -1583,26 +1606,22 @@ def _company_hash_is_valid(org, company, company_hash) -> bool:
     # Same values the service accepts as an id, without str() on a huge integer.
     if type(company_id) is int and abs(company_id) < 2**63:
         company_id = str(company_id)
-    return (
-        isinstance(company_id, str)
-        # A lone surrogate survives JSON parsing and can't be encoded for the HMAC.
-        and is_storable(company_id)
-        and org.verify_company_hash(
-            company_id, company.get("name"), company.get("domain"), company_hash
-        )
+    return org.verify_company_hash(
+        company_id, company.get("name"), company.get("domain"), company_hash
     )
 
 
-def _link_session_contact(request, org, session) -> None:
+def _link_session_contact(request, org, session, identity) -> None:
     """Resolve the session's contact from the widget init payload.
 
-    ``email_hash`` and ``company_hash`` are optional: an invalid one is ignored
-    (the value stays unsigned) so a misconfigured host app never breaks the
-    widget. For the same reason a database error (a conflict the service's retry
-    couldn't settle, a deadlock, a lock timeout) is logged, and the session goes
-    on without a contact until the next init.
+    ``identity`` is the validated ``WidgetIdentitySerializer`` data. ``email_hash``
+    and ``company_hash`` are optional: an invalid one is ignored (the value stays
+    unsigned) so a misconfigured host app never breaks the widget. For the same
+    reason a database error (a conflict the service's retry couldn't settle, a
+    deadlock, a lock timeout) is logged, and the session goes on without a contact
+    until the next init.
     """
-    email_hash = request.data.get("email_hash", "")
+    email_hash = identity.get("email_hash")
     email_verified = bool(
         session.email and email_hash and org.verify_email_hash(session.email, email_hash)
     )
@@ -1614,14 +1633,14 @@ def _link_session_contact(request, org, session) -> None:
             traits=request.data.get("traits"),
             company=company,
             company_verified=_company_hash_is_valid(
-                org, company, request.data.get("company_hash", "")
+                org, company, identity.get("company_hash")
             ),
         )
         # The normal flow is first message, then contact nudge: tickets opened
         # before the session had a contact would otherwise never get one.
         if session.contact_id:
             Ticket.objects.filter(widget_session=session, contact__isnull=True).update(
-                contact=session.contact
+                contact_id=session.contact_id
             )
     except DatabaseError:
         logger.exception("Could not link widget session %s to a contact", session.pk)
@@ -1632,19 +1651,25 @@ Import `DatabaseError` from `django.db` in `views.py`. Catching it is safe becau
 A valid `company_hash` proves the `id`, `name` and `domain` of the payload (`company_verified=True`), not its `traits`: the service updates the name and domain of an existing company and may move the contact, and applies `traits` to a company it creates only (design rule 4).
 
 In `widget_session`:
-- PATCH: after `session.save(...)` call `_link_session_contact(request, org, session)`.
-- POST: call `_link_session_contact(request, org, session)` immediately before each of the three `return Response(WidgetSessionSerializer(session).data …)` (resume, HMAC, anonymous).
+- PATCH: after `session.save(...)` call `_link_session_contact(request, org, session, identity)`.
+- POST: call `_link_session_contact(request, org, session, identity)` immediately before each of the three `return Response(WidgetSessionSerializer(session).data …)` (resume, HMAC, anonymous).
 
-Every `Ticket.objects.create(...)` with `widget_session=session` (in `widget_message`, `widget_upload_attachment`, `widget_message_attachment`) gets `contact=session.contact,`.
+Every `Ticket.objects.create(...)` with `widget_session=session` (in `widget_message` and `widget_message_attachment`; `widget_upload_attachment` never creates a ticket) gets `contact_id=session.contact_id,`.
 
 In `widget_submit`, after `serializer.save(...)`:
 
 ```python
         if ticket.requester_email:
-            ticket.contact = resolve_contact_for_email(
-                organization, ticket.requester_email, name=ticket.requester_name
-            )
-            ticket.save(update_fields=["contact"])
+            try:
+                contact = resolve_contact_for_email(
+                    organization, ticket.requester_email, name=ticket.requester_name
+                )
+                if contact is not None:
+                    ticket.contact = contact
+                    ticket.save(update_fields=["contact"])
+            except DatabaseError:
+                # The ticket exists: failing here would lose its notifications.
+                logger.exception("Could not link ticket %s to a contact", ticket.pk)
 ```
 
 **Step 4:** `python -m pytest tests/contacts tests/tickets -q` → PASS (existing widget tests stay green). **Step 5: Commit** — `feat(backend): resolve contacts from the widget`
@@ -2824,6 +2849,7 @@ Docs: `data-user-email-hash`, `init({ user: { emailHash, traits }, company: { �
 - `company.traits` aren't signed. They apply when the payload creates a company, signed or not, and never to an existing company: update those from the Companies API or the UI.
 - What each signature unlocks: without `emailHash` an email stays declared; without `company.hash` a company can be created or linked once, never updated, and a contact is never moved. With it, the name and domain of an existing company are updated and the contact may be moved.
 - External user ids starting with `email:` or `company\n` are refused, since those prefixes are reserved for the other two hashes.
+- A numeric user or company id is accepted, and signed as its decimal string.
 
 **Commit** — `feat(widget): send signed email, signed company and traits`
 

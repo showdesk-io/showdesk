@@ -1,6 +1,7 @@
 """Serializers for ticket-related models."""
 
 from rest_framework import serializers
+from rest_framework.fields import empty
 
 from apps.organizations.serializers import UserSerializer
 
@@ -430,6 +431,84 @@ class CannedResponseSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 # Widget messaging serializers
 # ---------------------------------------------------------------------------
+
+
+class StrictCharField(serializers.CharField):
+    """A CharField that refuses non-strings instead of coercing numbers."""
+
+    def run_validation(self, data=empty):
+        # Before the parent's str(data), a RecursionError on a deeply nested list.
+        if data is not empty and data is not None and not isinstance(data, str):
+            self.fail("invalid")
+        return super().run_validation(data)
+
+
+class WidgetHashField(StrictCharField):
+    def __init__(self, **kwargs):
+        super().__init__(
+            required=False,
+            allow_null=True,
+            allow_blank=True,
+            max_length=128,
+            trim_whitespace=False,
+            **kwargs,
+        )
+
+    def to_internal_value(self, data):
+        value = super().to_internal_value(data)
+        if not value.isascii():  # hmac.compare_digest raises TypeError otherwise.
+            self.fail("invalid")
+        return value
+
+
+class WidgetExternalIdField(StrictCharField):
+    """A user id, as a string. A plain JavaScript host may pass an integer."""
+
+    def __init__(self, **kwargs):
+        super().__init__(
+            required=False,
+            allow_null=True,
+            allow_blank=True,
+            max_length=255,
+            trim_whitespace=False,  # The HMAC covers its exact value.
+            **kwargs,
+        )
+
+    def run_validation(self, data=empty):
+        if type(data) is int and abs(data) < 2**63:
+            data = str(data)
+        return super().run_validation(data)
+
+
+# ``Organization.verify_email_hash`` and ``verify_company_hash`` sign messages
+# starting with these, so a ``user_hash`` for such an id would double as one of them.
+RESERVED_EXTERNAL_ID_PREFIXES = ("email:", "company\n")
+
+
+class WidgetIdentitySerializer(serializers.Serializer):
+    """Check the shape of the identity fields of a widget session payload.
+
+    Null means absent. ``email`` is only checked as text: the widget's contact
+    form lets anything with an "@" through and a host page can pass anything, and
+    neither should stop the widget or lose the name sent with it. Stored as is, it
+    shows agents what was typed, and the identity service ignores what isn't valid.
+    """
+
+    name = StrictCharField(
+        required=False, allow_null=True, allow_blank=True, max_length=255
+    )
+    email = StrictCharField(
+        required=False, allow_null=True, allow_blank=True, max_length=254
+    )
+    external_user_id = WidgetExternalIdField()
+    user_hash = WidgetHashField()
+    email_hash = WidgetHashField()
+    company_hash = WidgetHashField()
+
+    def validate_external_user_id(self, value: str | None) -> str | None:
+        if value and value.startswith(RESERVED_EXTERNAL_ID_PREFIXES):
+            raise serializers.ValidationError("This prefix is reserved.")
+        return value
 
 
 class WidgetSessionSerializer(serializers.ModelSerializer):

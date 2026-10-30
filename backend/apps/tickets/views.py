@@ -2,7 +2,8 @@
 
 import logging
 
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.db import DatabaseError, models
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
@@ -11,6 +12,10 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.contacts.services import (
+    resolve_contact_for_email,
+    resolve_contact_for_widget_session,
+)
 from apps.core.permissions import get_active_org, has_feature
 from apps.core.throttling import (
     WidgetMessageThrottle,
@@ -37,6 +42,7 @@ from .models import (
     WidgetSession,
 )
 from .serializers import (
+    RESERVED_EXTERNAL_ID_PREFIXES,
     CannedResponseSerializer,
     PriorityLevelSerializer,
     SavedViewSerializer,
@@ -48,6 +54,7 @@ from .serializers import (
     TicketMessageSerializer,
     TicketSerializer,
     WidgetConversationListSerializer,
+    WidgetIdentitySerializer,
     WidgetMessageCreateSerializer,
     WidgetMessageSerializer,
     WidgetSessionSerializer,
@@ -106,12 +113,77 @@ def _get_widget_session(request, organization):
         )
     try:
         session = WidgetSession.objects.get(id=session_id, organization=organization)
-    except (WidgetSession.DoesNotExist, ValueError):
+    except (WidgetSession.DoesNotExist, ValidationError):
         return None, Response(
             {"error": "Invalid session."},
             status=status.HTTP_401_UNAUTHORIZED,
         )
     return session, None
+
+
+def _record_session_resume(session, name: str, email: str) -> None:
+    """Fill the session's blank name and email, and record the visit.
+
+    Writes only what changes: saving a value read before a concurrent
+    anonymization would restore the personal data it just wiped.
+    """
+    fields = ["last_seen_at", "updated_at"]
+    if name and not session.name:
+        session.name = name
+        fields.append("name")
+    if email and not session.email:
+        session.email = email
+        fields.append("email")
+    session.save(update_fields=fields)
+
+
+def _company_hash_is_valid(org, company, company_hash) -> bool:
+    if not company_hash or not isinstance(company, dict):
+        return False
+    company_id = company.get("id")
+    # Same values the service accepts as an id, without str() on a huge integer.
+    if type(company_id) is int and abs(company_id) < 2**63:
+        company_id = str(company_id)
+    return org.verify_company_hash(
+        company_id, company.get("name"), company.get("domain"), company_hash
+    )
+
+
+def _link_session_contact(request, org, session, identity) -> None:
+    """Resolve the session's contact from the widget init payload.
+
+    ``identity`` is the validated ``WidgetIdentitySerializer`` data. ``email_hash``
+    and ``company_hash`` are optional: an invalid one is ignored (the value stays
+    unsigned) so a misconfigured host app never breaks the widget. For the same
+    reason a database error (a conflict the service's retry couldn't settle, a
+    deadlock, a lock timeout) is logged, and the session goes on without a contact
+    until the next init.
+    """
+    email_hash = identity.get("email_hash")
+    email_verified = bool(
+        session.email
+        and email_hash
+        and org.verify_email_hash(session.email, email_hash)
+    )
+    company = request.data.get("company")
+    try:
+        resolve_contact_for_widget_session(
+            session,
+            email_verified=email_verified,
+            traits=request.data.get("traits"),
+            company=company,
+            company_verified=_company_hash_is_valid(
+                org, company, identity.get("company_hash")
+            ),
+        )
+        # The normal flow is first message, then contact nudge: tickets opened
+        # before the session had a contact would otherwise never get one.
+        if session.contact_id:
+            Ticket.objects.filter(widget_session=session, contact__isnull=True).update(
+                contact_id=session.contact_id
+            )
+    except DatabaseError:
+        logger.exception("Could not link widget session %s to a contact", session.pk)
 
 
 class TicketViewSet(viewsets.ModelViewSet):
@@ -267,6 +339,18 @@ class TicketViewSet(viewsets.ModelViewSet):
             source=Ticket.Source.WIDGET,
         )
 
+        if ticket.requester_email:
+            try:
+                contact = resolve_contact_for_email(
+                    organization, ticket.requester_email, name=ticket.requester_name
+                )
+                if contact is not None:
+                    ticket.contact = contact
+                    ticket.save(update_fields=["contact"])
+            except DatabaseError:
+                # The ticket exists: failing here would lose its notifications.
+                logger.exception("Could not link ticket %s to a contact", ticket.pk)
+
         # Notify via WebSocket + email
         try:
             notify_new_ticket(ticket)
@@ -371,6 +455,11 @@ class TicketViewSet(viewsets.ModelViewSet):
         if not external_user_id:
             return Response(
                 {"error": "external_user_id query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if external_user_id.startswith(RESERVED_EXTERNAL_ID_PREFIXES):
+            return Response(
+                {"error": "This external_user_id prefix is reserved."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -620,17 +709,28 @@ class TicketViewSet(viewsets.ModelViewSet):
         if err:
             return err
 
+        serializer = WidgetIdentitySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        identity = serializer.validated_data
+
         if request.method == "PATCH":
             session, err = _get_widget_session(request, org)
             if err:
                 return err
-            name = request.data.get("name")
-            email = request.data.get("email")
+            name = identity.get("name")
+            email = identity.get("email")
+            fields = ["last_seen_at", "updated_at"]
             if name is not None:
                 session.name = name
+                fields.append("name")
             if email is not None:
+                # The proof was about the previous email.
+                if email.lower() != session.email.strip().lower():
+                    session.email_verified_at = None
+                    fields.append("email_verified_at")
                 session.email = email
-            session.save(update_fields=["name", "email", "last_seen_at"])
+                fields.append("email")
+            session.save(update_fields=fields)
             # Backfill on linked tickets with blank requester info
             if session.name or session.email:
                 update_fields = {}
@@ -642,20 +742,21 @@ class TicketViewSet(viewsets.ModelViewSet):
                     widget_session=session,
                     requester_name="",
                 ).update(**update_fields)
+            _link_session_contact(request, org, session, identity)
             return Response(WidgetSessionSerializer(session).data)
 
         # POST — create or resume
         session_id = request.data.get("session_id")
-        external_user_id = request.data.get("external_user_id", "")
-        user_hash = request.data.get("user_hash", "")
-        name = request.data.get("name", "")
-        email = request.data.get("email", "")
+        external_user_id = identity.get("external_user_id") or ""
+        user_hash = identity.get("user_hash") or ""
+        name = identity.get("name") or ""
+        email = identity.get("email") or ""
 
         # Try to resume existing session
         if session_id:
             try:
                 session = WidgetSession.objects.get(id=session_id, organization=org)
-            except (WidgetSession.DoesNotExist, ValueError):
+            except (WidgetSession.DoesNotExist, ValidationError):
                 session = None
 
             # Identity mismatch (e.g. a different user logged into the same
@@ -672,12 +773,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 session = None
 
             if session is not None:
-                session.last_seen_at = timezone.now()
-                if name and not session.name:
-                    session.name = name
-                if email and not session.email:
-                    session.email = email
-                session.save()
+                _record_session_resume(session, name, email)
+                _link_session_contact(request, org, session, identity)
                 return Response(WidgetSessionSerializer(session).data)
 
         # HMAC-identified user: find-or-create by external_user_id
@@ -702,12 +799,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 },
             )
             if not created:
-                session.last_seen_at = timezone.now()
-                if name and not session.name:
-                    session.name = name
-                if email and not session.email:
-                    session.email = email
-                session.save()
+                _record_session_resume(session, name, email)
+            _link_session_contact(request, org, session, identity)
             resp_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
             return Response(WidgetSessionSerializer(session).data, status=resp_status)
 
@@ -718,6 +811,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             email=email,
             user_agent=request.META.get("HTTP_USER_AGENT", ""),
         )
+        _link_session_contact(request, org, session, identity)
         return Response(
             WidgetSessionSerializer(session).data,
             status=status.HTTP_201_CREATED,
@@ -775,6 +869,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 description=body,
                 source=Ticket.Source.WIDGET,
                 widget_session=session,
+                contact_id=session.contact_id,
                 requester_name=session.name,
                 requester_email=session.email,
                 external_user_id=session.external_user_id,
@@ -882,6 +977,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 description=body,
                 source=Ticket.Source.WIDGET,
                 widget_session=session,
+                contact_id=session.contact_id,
                 requester_name=session.name,
                 requester_email=session.email,
                 external_user_id=session.external_user_id,
