@@ -67,6 +67,10 @@ from .tasks import (
 
 logger = logging.getLogger(__name__)
 
+# In ``Ticket.context_metadata``: written anonymously, then moved to the session of
+# a login. Its sender never counts as verified.
+PRE_LOGIN_ANONYMOUS_KEY = "pre_login_anonymous"
+
 
 def _get_widget_org(request):
     """Validate X-Widget-Token header and return the Organization.
@@ -230,41 +234,84 @@ def _update_session(request, org, identity) -> Response:
     return Response(WidgetSessionSerializer(session).data)
 
 
-def _create_or_resume_session(request, org, identity) -> Response:
-    """POST: create a new session or resume an existing one."""
-    session_id = request.data.get("session_id")
+def _stored_session(org, session_id):
+    """Return the session the widget stored, or None if it isn't one of this org."""
     if not isinstance(session_id, str):
-        session_id = None  # str() on a deeply nested list overflows the stack.
+        return None  # str() on a deeply nested list overflows the stack.
+    try:
+        return WidgetSession.objects.get(id=session_id, organization=org)
+    except (WidgetSession.DoesNotExist, ValidationError):
+        return None
+
+
+def _move_conversation_to_identified_session(org, anonymous, identified) -> None:
+    """Continue an anonymous session's conversations on the session of a login.
+
+    Those tickets were written before anyone proved who they are, so they're marked
+    as such for ``sender_verified``. Moved, there's nothing left to do on a retry.
+
+    Not caught, unlike a contact that can't be linked: the widget has to keep the
+    anonymous session's id for its next init, the only way to retry this.
+    """
+    with transaction.atomic():
+        WidgetSession.objects.select_for_update(no_key=True).get(pk=anonymous.pk)
+        tickets = list(
+            Ticket.objects.select_for_update(no_key=True).filter(
+                organization=org, widget_session=anonymous
+            )
+        )
+        for ticket in tickets:
+            ticket.widget_session = identified
+            ticket.external_user_id = identified.external_user_id
+            ticket.contact_id = identified.contact_id or ticket.contact_id
+            metadata = ticket.context_metadata
+            ticket.context_metadata = {
+                **(metadata if isinstance(metadata, dict) else {}),
+                PRE_LOGIN_ANONYMOUS_KEY: True,
+            }
+        Ticket.objects.bulk_update(
+            tickets,
+            ["widget_session", "external_user_id", "contact", "context_metadata"],
+            batch_size=500,
+        )
+        TicketMessage.objects.filter(
+            widget_session=anonymous, ticket__organization=org
+        ).update(widget_session=identified)
+
+
+def _create_or_resume_session(request, org, identity) -> Response:
+    """POST: create a new session or resume an existing one.
+
+    Only a valid ``user_hash`` gives access to an identified session. The session
+    the widget stored then decides what happens:
+
+    - Anonymous, no valid hash: it goes on, whatever the id sent.
+    - Anonymous, valid hash: a login. The identified session replaces it, and takes
+      its conversations.
+    - Identified, valid hash: the user's own session, or the session of whoever
+      logged in since on that browser.
+    - Identified, hash absent: a logout. A new anonymous session starts, and the
+      stored one isn't touched, so neither is its contact.
+    - Identified, wrong hash: refused, as without a stored session.
+    """
+    stored = _stored_session(org, request.data.get("session_id"))
     external_user_id = identity.get("external_user_id") or ""
     user_hash = identity.get("user_hash") or ""
     name = identity.get("name") or ""
     email = identity.get("email") or ""
     claims = _contact_claims(identity)
 
-    # Try to resume existing session
-    if session_id:
-        try:
-            session = WidgetSession.objects.get(id=session_id, organization=org)
-        except (WidgetSession.DoesNotExist, ValidationError):
-            session = None
-
-        # Identity mismatch (e.g. a different user logged into the same
-        # browser): drop the stored session_id and fall through so the
-        # HMAC branch finds-or-creates the legitimate session for this
-        # user. Anonymous sessions (no external_user_id) can still be
-        # claimed by an identified user on the next branch.
-        if (
-            session is not None
-            and session.external_user_id
-            and external_user_id
-            and session.external_user_id != external_user_id
-        ):
-            session = None
-
-        if session is not None:
-            _record_session_resume(session, name, email)
-            _link_session_contact(org, session, **claims)
-            return Response(WidgetSessionSerializer(session).data)
+    is_login = False
+    if stored is not None and not stored.external_user_id:
+        is_login = bool(
+            external_user_id
+            and user_hash
+            and org.verify_user_hash(external_user_id, user_hash)
+        )
+        if not is_login:
+            _record_session_resume(stored, name, email)
+            _link_session_contact(org, stored, **claims)
+            return Response(WidgetSessionSerializer(stored).data)
 
     # HMAC-identified user: find-or-create by external_user_id
     if external_user_id and user_hash:
@@ -290,6 +337,8 @@ def _create_or_resume_session(request, org, identity) -> Response:
         if not created:
             _record_session_resume(session, name, email)
         _link_session_contact(org, session, **claims)
+        if is_login:
+            _move_conversation_to_identified_session(org, stored, session)
         resp_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(WidgetSessionSerializer(session).data, status=resp_status)
 

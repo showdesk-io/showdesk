@@ -560,7 +560,7 @@ class TestRealClientPayloads:
 
     def test_null_fields_when_resuming(self, api_client, org):
         session = WidgetSession.objects.create(
-            organization=org, external_user_id="u1", name="A", email="a@x.io"
+            organization=org, name="A", email="a@x.io"
         )
         res = _post(api_client, org, session_id=str(session.id), name=None, email=None)
         assert res.status_code == 200
