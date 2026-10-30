@@ -1,5 +1,6 @@
 """Views for ticket-related models."""
 
+import hashlib
 import logging
 
 from django.core.exceptions import ValidationError
@@ -70,8 +71,13 @@ logger = logging.getLogger(__name__)
 # In ``Ticket.context_metadata``: written anonymously, then moved to the session of
 # a login. Its sender never counts as verified.
 PRE_LOGIN_ANONYMOUS_KEY = "pre_login_anonymous"
-# Next to it: the id of the anonymous session it came from, to trace the move.
-PRE_LOGIN_SESSION_ID_KEY = "pre_login_session_id"
+# Next to it: the digest of the anonymous session it came from, to trace the move.
+PRE_LOGIN_SESSION_HASH_KEY = "pre_login_session_hash"
+
+
+def _session_digest(session_id) -> str:
+    """Return what may be stored or logged of a session id, itself a bearer token."""
+    return hashlib.sha256(str(session_id).encode()).hexdigest()
 
 
 def _get_widget_org(request):
@@ -277,6 +283,7 @@ def _move_conversation_to_identified_session(org, anonymous, identified) -> None
     Not caught, unlike a contact that can't be linked: the widget has to keep the
     anonymous session's id for its next init, the only way to retry this.
     """
+    origin_hash = _session_digest(anonymous.pk)
     with transaction.atomic():
         WidgetSession.objects.select_for_update(no_key=True).get(pk=anonymous.pk)
         tickets = list(
@@ -292,7 +299,7 @@ def _move_conversation_to_identified_session(org, anonymous, identified) -> None
             ticket.context_metadata = {
                 **(metadata if isinstance(metadata, dict) else {}),
                 PRE_LOGIN_ANONYMOUS_KEY: True,
-                PRE_LOGIN_SESSION_ID_KEY: str(anonymous.pk),
+                PRE_LOGIN_SESSION_HASH_KEY: origin_hash,
             }
         Ticket.objects.bulk_update(
             tickets,
@@ -303,13 +310,13 @@ def _move_conversation_to_identified_session(org, anonymous, identified) -> None
             widget_session=anonymous, ticket__organization=org
         ).update(widget_session=identified)
     if tickets or moved_messages:
-        # Only ids and counts: this log must not carry personal data.
+        # Only digests and counts: no personal data, and no usable session id.
         logger.info(
             "Moved %d ticket(s) and %d message(s) from widget session %s to %s at login",
             len(tickets),
             moved_messages,
-            anonymous.pk,
-            identified.pk,
+            origin_hash,
+            _session_digest(identified.pk),
         )
 
 

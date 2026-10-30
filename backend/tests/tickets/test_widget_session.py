@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 import logging
 from unittest import mock
 
@@ -12,7 +13,12 @@ from rest_framework.test import APIClient
 
 from apps.contacts.models import Contact
 from apps.tickets.models import Ticket, TicketMessage, WidgetSession
-from tests.factories import ContactFactory, OrganizationFactory, TicketFactory
+from tests.factories import (
+    ContactFactory,
+    OrganizationFactory,
+    TicketFactory,
+    UserFactory,
+)
 
 URL = "/api/v1/tickets/widget_session/"
 
@@ -23,6 +29,10 @@ def _hash(secret: str, external_user_id: str) -> str:
         external_user_id.encode(),
         hashlib.sha256,
     ).hexdigest()
+
+
+def _digest(session_id) -> str:
+    return hashlib.sha256(str(session_id).encode()).hexdigest()
 
 
 @pytest.mark.django_db
@@ -190,7 +200,7 @@ class TestLogin:
         assert ticket.context_metadata == {
             "locale": "fr",
             "pre_login_anonymous": True,
-            "pre_login_session_id": str(self.anon.id),
+            "pre_login_session_hash": _digest(self.anon.id),
         }
 
     @pytest.mark.parametrize("metadata", [[], "text", 1])
@@ -201,7 +211,7 @@ class TestLogin:
         ticket.refresh_from_db()
         assert ticket.context_metadata == {
             "pre_login_anonymous": True,
-            "pre_login_session_id": str(self.anon.id),
+            "pre_login_session_hash": _digest(self.anon.id),
         }
 
     def test_a_ticket_opened_after_the_login_isnt_marked(self):
@@ -227,11 +237,26 @@ class TestLogin:
         assert len(moves) == 1
         assert "1 ticket(s)" in moves[0]
         assert "1 message(s)" in moves[0]
-        assert str(self.anon.id) in moves[0]
-        assert session_id in moves[0]
+        assert str(self.anon.id) not in caplog.text
+        assert session_id not in caplog.text
+        assert _digest(self.anon.id) in moves[0]
+        assert _digest(session_id) in moves[0]
         assert "ann@x.io" not in caplog.text
         assert "Ann Doe" not in caplog.text
         assert "u1" not in moves[0]
+
+    def test_agents_cant_read_the_origin_session_id(self):
+        """A session id is a bearer token: the ticket API must not hand it out."""
+        ticket = self._ticket()
+        self._login()
+        agent = APIClient()
+        agent.force_authenticate(UserFactory(organization=self.org, role="agent"))
+        res = agent.get(f"/api/v1/tickets/{ticket.id}/")
+        assert res.status_code == 200
+        assert str(self.anon.id) not in json.dumps(res.data, default=str)
+        assert res.data["context_metadata"]["pre_login_session_hash"] == _digest(
+            self.anon.id
+        )
 
     def test_a_login_moving_nothing_logs_nothing(self, caplog):
         with caplog.at_level(logging.INFO, logger="apps.tickets.views"):
@@ -359,7 +384,7 @@ class TestLogin:
         assert own.context_metadata == {}
         assert moved.context_metadata == {
             "pre_login_anonymous": True,
-            "pre_login_session_id": str(self.anon.id),
+            "pre_login_session_hash": _digest(self.anon.id),
         }
 
     def test_is_idempotent(self):
