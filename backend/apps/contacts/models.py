@@ -7,6 +7,8 @@ from django.db.models import Q
 
 from apps.core.models import TimestampedModel
 
+from .attributes import validate_options
+
 
 def _normalize(value: str) -> str:
     """Canonical form of an email or domain, as stored and compared."""
@@ -173,7 +175,6 @@ class CustomAttributeDef(TimestampedModel):
     type = models.CharField(max_length=10, choices=Type.choices)
     description = models.TextField(blank=True)
     options = models.JSONField(default=list, blank=True)
-    is_required = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
     position = models.PositiveIntegerField(default=0)
 
@@ -183,6 +184,15 @@ class CustomAttributeDef(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.label} ({self.key})"
+
+    def clean(self) -> None:
+        super().clean()
+        if self.options is None:  # An emptied field of the admin form.
+            self.options = []
+        try:
+            validate_options(self.type, self.options)
+        except ValidationError as exc:
+            raise ValidationError({"options": exc.messages}) from exc
 
 
 class ContactAttributeDef(CustomAttributeDef):

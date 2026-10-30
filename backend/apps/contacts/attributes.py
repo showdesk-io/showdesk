@@ -98,6 +98,27 @@ def is_storable(value: Any) -> bool:
     return True
 
 
+def validate_options(type_: str, options: Any) -> None:
+    """Raise ``ValidationError`` unless ``options`` suit a definition of this type.
+
+    An enum needs a non-empty list of unique, non-empty strings. Anything else takes
+    no options: a value there would be silently ignored when validating attributes.
+    """
+    if type_ != "enum":
+        if options != []:
+            raise ValidationError("Only a list (enum) attribute takes options.")
+        return
+    if not isinstance(options, list) or not options:
+        raise ValidationError("A list attribute needs a non-empty list of options.")
+    if any(
+        not isinstance(option, str) or not option.strip() or not is_storable(option)
+        for option in options
+    ):
+        raise ValidationError("Each option has to be a non-empty string.")
+    if len(set(options)) != len(options):
+        raise ValidationError("The options have to be unique.")
+
+
 def clean_attributes(definitions, values: Any) -> dict[str, Any]:
     """Return the subset of ``values`` that matches active ``definitions``.
 

@@ -364,7 +364,6 @@ class CustomAttributeDef(TimestampedModel):
     type = models.CharField(max_length=10, choices=Type.choices)
     description = models.TextField(blank=True)
     options = models.JSONField(default=list, blank=True)
-    is_required = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
     position = models.PositiveIntegerField(default=0)
 
@@ -2382,7 +2381,7 @@ Behaviour (one test each on `/api/v1/contact-attributes/`, plus a smoke test on 
 - creation beyond `MAX_PER_ORGANIZATION` non-archived definitions → 400;
 - DELETE → 405; archive with `PATCH {"is_archived": true}`.
 
-**Step 3: Implement** an `AttributeDefSerializer` base (`fields = ["id", "key", "label", "type", "description", "options", "is_required", "is_archived", "position"]`, validation above; the limit check counts `self.Meta.model.objects.filter(organization=org, is_archived=False)`), two subclasses binding `ContactAttributeDef` / `CompanyAttributeDef`, and:
+**Step 3: Implement** an `AttributeDefSerializer` base (`fields = ["id", "key", "label", "type", "description", "options", "is_archived", "position"]`, validation above; the limit check counts `self.Meta.model.objects.filter(organization=org, is_archived=False)`), two subclasses binding `ContactAttributeDef` / `CompanyAttributeDef`, and:
 
 ```python
 class AttributeDefViewSet(OrgScopedMixin, viewsets.ModelViewSet):
@@ -2404,6 +2403,8 @@ class AttributeDefViewSet(OrgScopedMixin, viewsets.ModelViewSet):
 ```
 
 with `ContactAttributeDefViewSet` / `CompanyAttributeDefViewSet` setting `model` and `serializer_class`. Register `contact-attributes`, `company-attributes`.
+
+**As built, where it differs from the above:** `type` is immutable too, `key` can't hold a double underscore; options are refused on other types and checked by `CustomAttributeDef.clean` for the Django admin; the limit also applies when un-archiving; `IsOrganizationAdminOrReadOnly` replaces `require_org_admin` in `perform_*`, which ran after validation; duplicate keys are a 400 at the constraint too; PATCH writes only what changed; no query-string filters. `is_required` was removed (migration 0005): nothing enforced it.
 
 **Step 4:** PASS. **Step 5: Commit** — `feat(backend): custom attribute definition API`
 

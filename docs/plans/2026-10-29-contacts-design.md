@@ -66,10 +66,10 @@ Company
   constraints: partial unique (organization, external_id), (organization, domain)
 
 ContactAttributeDef / CompanyAttributeDef   (abstract CustomAttributeDef)
-  organization, key (slug, immutable), label, type
-  (string|number|boolean|date|enum|url), description, options (enum),
-  is_required, is_archived, position
-  unique (organization, key); max 50 per entity per organization
+  organization, key (snake_case, immutable), label, type (immutable)
+  (string|number|boolean|date|enum|url), description, options (enum only),
+  is_archived, position
+  unique (organization, key); max 50 non-archived per entity per organization
 
 ContactNote
   contact, author (FK User), body
@@ -289,8 +289,9 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   `external_id` is read-only, as on a Contact: it's what signed widget payloads upsert a
   Company on. `domain` is format-checked and unique per organization; editing it doesn't
   relink existing Contacts. DELETE is admin only and leaves the Contacts without a Company.
-- `/api/v1/contact-attributes/`, `/api/v1/company-attributes/` — CRUD of
-  definitions (admin), archive instead of delete.
+- `/api/v1/contact-attributes/`, `/api/v1/company-attributes/` — agents read, admins
+  create and PATCH definitions; archive instead of delete (DELETE is a 405). `key` and
+  `type` can't change. Removing an enum option leaves stored values alone.
 
 Widget init (`POST` session endpoint) accepts the extended payload
 (`traits`, `company`, `email_hash`, `company_hash`). Only a malformed `external_user_id`

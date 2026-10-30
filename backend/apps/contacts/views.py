@@ -23,12 +23,19 @@ from apps.core.permissions import get_active_org
 from apps.tickets.models import Ticket
 
 from .attributes import is_storable
-from .models import Company, Contact
-from .permissions import IsOrganizationStaff, require_org_admin
+from .models import Company, CompanyAttributeDef, Contact, ContactAttributeDef
+from .permissions import (
+    IsOrganizationAdminOrReadOnly,
+    IsOrganizationStaff,
+    require_org_admin,
+)
 from .serializers import (
     DOMAIN_TAKEN,
     EMAIL_TAKEN,
+    KEY_TAKEN,
+    CompanyAttributeDefSerializer,
     CompanySerializer,
+    ContactAttributeDefSerializer,
     ContactNoteSerializer,
     ContactSerializer,
     ContactTicketSerializer,
@@ -393,3 +400,39 @@ class CompanyViewSet(OrgScopedMixin, viewsets.ModelViewSet):
             )
         )
         return Response(ContactTicketSerializer(tickets, many=True).data)
+
+
+class AttributeDefViewSet(OrgScopedMixin, viewsets.ModelViewSet):
+    """Definitions of custom attributes: archived, never deleted."""
+
+    http_method_names = ["get", "post", "patch", "head", "options"]
+    permission_classes = [
+        IsAuthenticated,
+        IsOrganizationStaff,
+        IsOrganizationAdminOrReadOnly,
+    ]
+    pagination_class = None
+    filter_backends = []
+    model = None
+
+    def get_queryset(self):
+        return self.model.objects.filter(organization=get_active_org(self.request))
+
+    def perform_create(self, serializer):
+        try:
+            with transaction.atomic():
+                super().perform_create(serializer)
+        except IntegrityError as exc:
+            if "_attr_key" in str(exc):
+                raise ValidationError({"key": [KEY_TAKEN]}) from exc
+            raise
+
+
+class ContactAttributeDefViewSet(AttributeDefViewSet):
+    model = ContactAttributeDef
+    serializer_class = ContactAttributeDefSerializer
+
+
+class CompanyAttributeDefViewSet(AttributeDefViewSet):
+    model = CompanyAttributeDef
+    serializer_class = CompanyAttributeDefSerializer

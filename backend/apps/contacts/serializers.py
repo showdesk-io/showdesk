@@ -1,23 +1,29 @@
 """Serializers of the contacts API."""
 
+import re
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import DomainNameValidator
 from rest_framework import serializers
 
 from apps.tickets.serializers import TicketListSerializer
 
-from .attributes import clean_attributes
+from .attributes import clean_attributes, validate_options
 from .models import (
     Company,
     CompanyAttributeDef,
     Contact,
     ContactAttributeDef,
     ContactNote,
+    CustomAttributeDef,
 )
 from .summary import CompanySummarySerializer
 
 EMAIL_TAKEN = "Another contact already uses this value."
 DOMAIN_TAKEN = "Another company already uses this domain."
+KEY_TAKEN = "Another attribute already uses this key."
+
+_ATTRIBUTE_DEF_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 _domain_validator = DomainNameValidator()
 
@@ -232,6 +238,90 @@ class CompanySerializer(serializers.ModelSerializer):
                 instance, validated_data["attributes"]
             )
         return _write_changes(instance, validated_data)
+
+
+class AttributeDefSerializer(serializers.ModelSerializer):
+    """A definition, in the organization given by ``context["organization"]``.
+
+    ``key`` and ``type`` are immutable: stored values are found by the one and were
+    validated against the other. ``key`` can't hold a double underscore, so that
+    ``attr.<key>`` can filter on it. The limit isn't enforced against a concurrent
+    write: it's a safeguard, not a security boundary.
+    """
+
+    # Not trimmed: " plan" would be accepted as a key other than the one sent.
+    key = serializers.CharField(max_length=64, trim_whitespace=False)
+
+    class Meta:
+        fields = [
+            "id",
+            "key",
+            "label",
+            "type",
+            "description",
+            "options",
+            "is_archived",
+            "position",
+        ]
+        read_only_fields = ["id"]
+
+    def validate_key(self, value: str) -> str:
+        if self.instance is not None:
+            if value != self.instance.key:
+                raise serializers.ValidationError("The key can't be changed.")
+            return value
+        if "__" in value or not _ATTRIBUTE_DEF_KEY.fullmatch(value):
+            raise serializers.ValidationError(
+                "Use lowercase letters, digits and single underscores, "
+                "starting with a letter."
+            )
+        return value
+
+    def validate_type(self, value: str) -> str:
+        if self.instance is not None and value != self.instance.type:
+            raise serializers.ValidationError("The type can't be changed.")
+        return value
+
+    def _is_activated_by(self, attrs) -> bool:
+        if self.instance is None:
+            return not attrs.get("is_archived", False)
+        return self.instance.is_archived and attrs.get("is_archived") is False
+
+    def validate(self, attrs):
+        definitions = self.Meta.model.objects.filter(
+            organization=self.context["organization"]
+        )
+        if self.instance is None and definitions.filter(key=attrs["key"]).exists():
+            raise serializers.ValidationError({"key": KEY_TAKEN})
+        if self.instance is None or "options" in attrs:
+            type_ = self.instance.type if self.instance else attrs["type"]
+            try:
+                validate_options(type_, attrs.get("options", []))
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError({"options": exc.messages}) from exc
+        if (
+            self._is_activated_by(attrs)
+            and definitions.filter(is_archived=False).count()
+            >= CustomAttributeDef.MAX_PER_ORGANIZATION
+        ):
+            raise serializers.ValidationError(
+                f"At most {CustomAttributeDef.MAX_PER_ORGANIZATION} attributes can be "
+                "active. Archive one first."
+            )
+        return attrs
+
+    def update(self, instance, validated_data):
+        return _write_changes(instance, validated_data)
+
+
+class ContactAttributeDefSerializer(AttributeDefSerializer):
+    class Meta(AttributeDefSerializer.Meta):
+        model = ContactAttributeDef
+
+
+class CompanyAttributeDefSerializer(AttributeDefSerializer):
+    class Meta(AttributeDefSerializer.Meta):
+        model = CompanyAttributeDef
 
 
 class ContactNoteSerializer(serializers.ModelSerializer):
