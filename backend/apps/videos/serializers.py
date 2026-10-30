@@ -2,12 +2,16 @@
 
 from rest_framework import serializers
 
+from apps.core.serializers import OrgScopedPrimaryKeyRelatedField
+from apps.tickets.models import Ticket
+
 from .models import VideoRecording
 
 
 class VideoRecordingSerializer(serializers.ModelSerializer):
     """Serializer for the VideoRecording model."""
 
+    ticket = OrgScopedPrimaryKeyRelatedField(queryset=Ticket.objects.all())
     is_playable = serializers.BooleanField(read_only=True)
 
     class Meta:
@@ -42,6 +46,7 @@ class VideoRecordingSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "recorded_by",
             "status",
             "duration_seconds",
             "file_size",
@@ -61,6 +66,8 @@ class VideoRecordingSerializer(serializers.ModelSerializer):
 
 class VideoUploadSerializer(serializers.ModelSerializer):
     """Serializer for uploading a video from the widget."""
+
+    ticket = OrgScopedPrimaryKeyRelatedField(queryset=Ticket.objects.all())
 
     # Max 500 MB per video (configurable via settings)
     MAX_FILE_SIZE = 500 * 1024 * 1024

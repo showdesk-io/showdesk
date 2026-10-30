@@ -4,6 +4,11 @@ import re
 
 from rest_framework import serializers
 
+from apps.core.serializers import (
+    OrgScopedPrimaryKeyRelatedField,
+    read_only_organization_field,
+)
+
 from .models import (
     Organization,
     OrganizationDomain,
@@ -99,7 +104,7 @@ class UserSerializer(serializers.ModelSerializer):
             "is_superuser",
             "date_joined",
         ]
-        read_only_fields = ["id", "is_superuser", "date_joined"]
+        read_only_fields = ["id", "organization", "is_superuser", "date_joined"]
 
 
 class InviteAgentSerializer(serializers.Serializer):
@@ -317,13 +322,17 @@ class OrgJoinRequestSerializer(serializers.ModelSerializer):
 class TeamSerializer(serializers.ModelSerializer):
     """Serializer for the Team model."""
 
+    organization = read_only_organization_field()
     members = UserSerializer(many=True, read_only=True)
-    member_ids = serializers.PrimaryKeyRelatedField(
+    member_ids = OrgScopedPrimaryKeyRelatedField(
         many=True,
         queryset=User.objects.all(),
         source="members",
         write_only=True,
         required=False,
+    )
+    lead = OrgScopedPrimaryKeyRelatedField(
+        queryset=User.objects.all(), required=False, allow_null=True
     )
 
     class Meta:

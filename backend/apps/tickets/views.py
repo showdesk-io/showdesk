@@ -11,7 +11,12 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import get_active_org, has_feature
+from apps.core.permissions import (
+    LOOKUP_ERRORS,
+    get_active_org,
+    has_feature,
+    require_active_org,
+)
 from apps.core.throttling import (
     WidgetMessageThrottle,
     WidgetSessionThrottle,
@@ -42,11 +47,13 @@ from .serializers import (
     SavedViewSerializer,
     SLAPolicySerializer,
     TagSerializer,
+    TicketAssignSerializer,
     TicketAttachmentSerializer,
     TicketCreateFromWidgetSerializer,
     TicketListSerializer,
     TicketMessageSerializer,
     TicketSerializer,
+    TicketSetTagsSerializer,
     WidgetConversationListSerializer,
     WidgetMessageCreateSerializer,
     WidgetMessageSerializer,
@@ -154,7 +161,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Set organization and reference on creation."""
-        org = get_active_org(self.request)
+        org = require_active_org(self.request)
         ticket = serializer.save(
             organization=org,
             reference=org.next_ticket_reference(),
@@ -332,7 +339,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 "content_type": uploaded_file.content_type
                 or "application/octet-stream",
                 "file_size": uploaded_file.size,
-            }
+            },
+            context={"organization": organization},
         )
         serializer.is_valid(raise_exception=True)
         serializer.save(uploaded_by=None)
@@ -408,14 +416,18 @@ class TicketViewSet(viewsets.ModelViewSet):
     def assign(self, request, pk=None):
         """Assign a ticket to an agent or team."""
         ticket = self.get_object()
-        agent_id = request.data.get("agent_id")
-        team_id = request.data.get("team_id")
+        serializer = TicketAssignSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
+        serializer.is_valid(raise_exception=True)
+        agent = serializer.validated_data.get("agent_id")
+        team = serializer.validated_data.get("team_id")
 
-        if agent_id:
-            ticket.assigned_agent_id = agent_id
-        if team_id:
-            ticket.assigned_team_id = team_id
-        if not ticket.first_response_at and agent_id:
+        if agent:
+            ticket.assigned_agent = agent
+        if team:
+            ticket.assigned_team = team
+        if not ticket.first_response_at and agent:
             ticket.first_response_at = timezone.now()
 
         ticket.status = Ticket.Status.IN_PROGRESS
@@ -426,7 +438,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             notify_ticket_update(ticket)
         except Exception:
             logger.exception("WebSocket notification failed for %s", ticket.reference)
-        if agent_id:
+        if agent:
             send_ticket_assigned_email.delay(str(ticket.id))
 
         return Response(TicketSerializer(ticket).data)
@@ -483,14 +495,11 @@ class TicketViewSet(viewsets.ModelViewSet):
     def set_tags(self, request, pk=None):
         """Set tags on a ticket (replaces existing tags)."""
         ticket = self.get_object()
-        tag_ids = request.data.get("tag_ids", [])
-
-        # Validate that tags belong to the same org
-        tags = Tag.objects.filter(
-            id__in=tag_ids,
-            organization=ticket.organization,
+        serializer = TicketSetTagsSerializer(
+            data=request.data, context=self.get_serializer_context()
         )
-        ticket.tags.set(tags)
+        serializer.is_valid(raise_exception=True)
+        ticket.tags.set(serializer.validated_data.get("tag_ids", []))
 
         try:
             notify_ticket_update(ticket)
@@ -550,12 +559,15 @@ class TicketViewSet(viewsets.ModelViewSet):
         if new_agent_id:
             from apps.organizations.models import User
 
-            agent_in_org = User.objects.filter(
-                id=new_agent_id,
-                organization=org,
-                role__in=[User.Role.AGENT, User.Role.ADMIN],
-                is_active=True,
-            ).exists()
+            try:
+                agent_in_org = User.objects.filter(
+                    id=new_agent_id,
+                    organization=org,
+                    role__in=[User.Role.AGENT, User.Role.ADMIN],
+                    is_active=True,
+                ).exists()
+            except LOOKUP_ERRORS:
+                agent_in_org = False
             if not agent_in_org:
                 return Response(
                     {"error": "Assigned agent must belong to the active organization."},
@@ -565,7 +577,13 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Org-scoped queryset already filters out anything outside the
         # active org, so a hostile or stale id list is a no-op rather
         # than a leak.
-        tickets = list(self.get_queryset().filter(id__in=ids))
+        try:
+            tickets = list(self.get_queryset().filter(id__in=ids))
+        except LOOKUP_ERRORS:
+            return Response(
+                {"error": "'ids' must be an array of ticket ids."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if not tickets:
             return Response({"updated": 0, "ids": []})
 
@@ -913,7 +931,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 "content_type": uploaded_file.content_type
                 or "application/octet-stream",
                 "file_size": uploaded_file.size,
-            }
+            },
+            context={"organization": org},
         )
         att_serializer.is_valid(raise_exception=True)
         att_serializer.save(uploaded_by=None)
@@ -1207,7 +1226,7 @@ class TagViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Set organization from the active org."""
-        serializer.save(organization=get_active_org(self.request))
+        serializer.save(organization=require_active_org(self.request))
 
 
 class PriorityLevelViewSet(viewsets.ModelViewSet):
@@ -1225,7 +1244,7 @@ class PriorityLevelViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Set organization from the active org."""
-        serializer.save(organization=get_active_org(self.request))
+        serializer.save(organization=require_active_org(self.request))
 
 
 class SLAPolicyViewSet(viewsets.ModelViewSet):
@@ -1261,7 +1280,7 @@ class SLAPolicyViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         self._require_admin()
-        serializer.save(organization=get_active_org(self.request))
+        serializer.save(organization=require_active_org(self.request))
 
     def perform_update(self, serializer) -> None:
         self._require_admin()
@@ -1297,7 +1316,7 @@ class SavedViewViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:
         """Set organization and creator."""
         serializer.save(
-            organization=get_active_org(self.request),
+            organization=require_active_org(self.request),
             created_by=self.request.user,
         )
 
@@ -1345,7 +1364,7 @@ class CannedResponseViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:
         """Set organization and creator."""
         serializer.save(
-            organization=get_active_org(self.request),
+            organization=require_active_org(self.request),
             created_by=self.request.user,
         )
 

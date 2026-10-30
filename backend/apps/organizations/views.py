@@ -12,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.core.email import send_branded_email
-from apps.core.permissions import IsPlatformAdmin, get_active_org
+from apps.core.permissions import IsPlatformAdmin, get_active_org, require_active_org
 
 from . import services
 from .models import (
@@ -136,6 +136,10 @@ class UserViewSet(viewsets.ModelViewSet):
             else:
                 qs = qs.filter(role=role)
         return qs
+
+    def perform_create(self, serializer) -> None:
+        """Create the user in the active organization."""
+        serializer.save(organization=require_active_org(self.request))
 
     @action(detail=False, methods=["get"])
     def me(self, request):
@@ -407,7 +411,7 @@ class TeamViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Set organization on creation."""
-        serializer.save(organization=get_active_org(self.request))
+        serializer.save(organization=require_active_org(self.request))
 
 
 class PlatformOrganizationViewSet(viewsets.ModelViewSet):

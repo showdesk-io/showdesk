@@ -5,7 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import get_active_org
+from apps.core.permissions import get_active_org, require_active_org
 
 from .models import Article, Category
 from .serializers import ArticleSerializer, CategorySerializer
@@ -24,6 +24,10 @@ class CategoryViewSet(viewsets.ModelViewSet):
             return Category.objects.filter(organization=org)
         return Category.objects.none()
 
+    def perform_create(self, serializer) -> None:
+        """Set organization from the active org."""
+        serializer.save(organization=require_active_org(self.request))
+
 
 class ArticleViewSet(viewsets.ModelViewSet):
     """ViewSet for managing knowledge base articles."""
@@ -39,6 +43,13 @@ class ArticleViewSet(viewsets.ModelViewSet):
         if org:
             return Article.objects.filter(organization=org)
         return Article.objects.none()
+
+    def perform_create(self, serializer) -> None:
+        """Set organization and author."""
+        serializer.save(
+            organization=require_active_org(self.request),
+            author=self.request.user,
+        )
 
     @action(detail=True, methods=["post"], permission_classes=[AllowAny])
     def helpful(self, request, pk=None):

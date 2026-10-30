@@ -21,6 +21,18 @@ def _reset_throttle_cache():
 
 
 @pytest.fixture
+def local_media(settings, tmp_path):
+    """Store uploads on the local disk, as the default storage needs S3."""
+    settings.STORAGES = {
+        **settings.STORAGES,
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+            "OPTIONS": {"location": str(tmp_path)},
+        },
+    }
+
+
+@pytest.fixture
 def api_client() -> APIClient:
     """Return an unauthenticated API client."""
     return APIClient()

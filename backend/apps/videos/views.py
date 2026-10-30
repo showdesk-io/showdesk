@@ -7,9 +7,9 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.core.permissions import get_active_org
 from apps.core.throttling import WidgetUploadThrottle
 from apps.organizations.models import Organization
-from apps.tickets.models import Ticket
 
 from .models import VideoRecording
 from .serializers import VideoRecordingSerializer, VideoUploadSerializer
@@ -29,12 +29,14 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """Filter videos by user's organization tickets."""
-        from apps.core.permissions import get_active_org
-
         org = get_active_org(self.request)
         if org:
             return VideoRecording.objects.filter(ticket__organization=org)
         return VideoRecording.objects.none()
+
+    def perform_create(self, serializer) -> None:
+        """Record who uploaded the video."""
+        serializer.save(recorded_by=self.request.user)
 
     @action(
         detail=False,
@@ -64,10 +66,8 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        serializer = VideoUploadSerializer(data=request.data)
-        # Another organization's ticket reads as one that doesn't exist.
-        serializer.fields["ticket"].queryset = Ticket.objects.filter(
-            organization=organization
+        serializer = VideoUploadSerializer(
+            data=request.data, context={"organization": organization}
         )
         serializer.is_valid(raise_exception=True)
 

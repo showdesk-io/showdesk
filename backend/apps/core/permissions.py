@@ -1,6 +1,13 @@
 """Reusable permission classes and helpers for the Showdesk platform."""
 
+from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import BasePermission
+
+# What ``Model.objects.get(id=<client value>)`` raises when no row matches: a
+# malformed UUID doesn't raise DoesNotExist but Django's ValidationError.
+LOOKUP_ERRORS = (ObjectDoesNotExist, DjangoValidationError, ValueError, TypeError)
 
 
 class IsPlatformAdmin(BasePermission):
@@ -51,6 +58,15 @@ def get_active_org(request):
 
             try:
                 return Organization.objects.get(id=org_id)
-            except (Organization.DoesNotExist, ValueError):
+            except LOOKUP_ERRORS:
                 pass
-    return request.user.organization
+    # Anonymous users reach this through AllowAny routes on scoped viewsets.
+    return getattr(request.user, "organization", None)
+
+
+def require_active_org(request):
+    """Return the active organization, or refuse the request with a 400."""
+    org = get_active_org(request)
+    if org is None:
+        raise ValidationError({"error": "No active organization."})
+    return org
