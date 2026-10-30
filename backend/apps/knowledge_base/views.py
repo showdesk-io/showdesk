@@ -1,10 +1,12 @@
 """Views for knowledge base models."""
 
+from django_filters import rest_framework as django_filters
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.core.filters import active_org_rows
 from apps.core.permissions import IsOrgStaff, get_active_org, require_active_org
 
 from .models import Article, Category
@@ -29,12 +31,22 @@ class CategoryViewSet(viewsets.ModelViewSet):
         serializer.save(organization=require_active_org(self.request))
 
 
+class ArticleFilter(django_filters.FilterSet):
+    """Article filters. Ids only resolve in the active organization."""
+
+    category = django_filters.ModelChoiceFilter(queryset=active_org_rows(Category))
+
+    class Meta:
+        model = Article
+        fields = ("category", "status")
+
+
 class ArticleViewSet(viewsets.ModelViewSet):
     """ViewSet for managing knowledge base articles."""
 
     serializer_class = ArticleSerializer
     permission_classes = [IsAuthenticated, IsOrgStaff]
-    filterset_fields = ["category", "status"]
+    filterset_class = ArticleFilter
     search_fields = ["title", "body"]
 
     def get_queryset(self):

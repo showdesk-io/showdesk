@@ -606,3 +606,57 @@ def test_the_guard_sees_an_unscoped_relation() -> None:
         f"{__name__}.Unscoped.many",
         f"{__name__}.Unscoped.one",
     ]
+
+
+class TestFiltersStayInTheOrganization:
+    """An id of another organization looks like an unknown one in a filter too."""
+
+    @pytest.mark.parametrize(
+        ("path", "param", "row"),
+        [
+            ("tickets", "assigned_agent", lambda o: o.user),
+            ("tickets", "assigned_team", lambda o: o.team),
+            ("tickets", "tags", lambda o: o.tag),
+            ("kb/articles", "category", lambda o: o.category),
+        ],
+        ids=["agent", "team", "tags", "category"],
+    )
+    def test_ids(self, authenticated_client, own, foreign, path, param, row) -> None:
+        def status_of(value):
+            return authenticated_client.get(
+                f"/api/v1/{path}/", {param: str(value)}
+            ).status_code
+
+        assert status_of(row(own).id) == 200
+        assert status_of(row(foreign).id) == 400
+        assert status_of(uuid.uuid4()) == 400
+
+    def test_the_filter_still_filters(self, authenticated_client, own) -> None:
+        own.ticket.assigned_agent = own.user
+        own.ticket.save()
+        TicketFactory(organization=own.org, requester=None)
+        res = authenticated_client.get(
+            "/api/v1/tickets/", {"assigned_agent": str(own.user.id)}
+        )
+        assert [row["id"] for row in res.data["results"]] == [str(own.ticket.id)]
+
+    def test_a_deactivated_agent_can_still_be_filtered_on(
+        self, authenticated_client, own
+    ) -> None:
+        own.user.is_active = False
+        own.user.save()
+        res = authenticated_client.get(
+            "/api/v1/tickets/", {"assigned_agent": str(own.user.id)}
+        )
+        assert res.status_code == 200
+
+    def test_an_impersonating_superuser_filters_in_the_impersonated_org(
+        self, own, foreign
+    ) -> None:
+        superuser = UserFactory(organization=None, is_superuser=True, is_staff=True)
+        client = APIClient()
+        client.force_authenticate(user=superuser)
+        client.credentials(HTTP_X_SHOWDESK_ORG=str(own.org.id))
+        for agent, expected in ((own.user, 200), (foreign.user, 400)):
+            res = client.get("/api/v1/tickets/", {"assigned_agent": str(agent.id)})
+            assert res.status_code == expected

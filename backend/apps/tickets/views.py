@@ -4,6 +4,7 @@ import logging
 
 from django.db import models
 from django.utils import timezone
+from django_filters import rest_framework as django_filters
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
@@ -11,6 +12,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.core.filters import active_org_rows
 from apps.core.permissions import (
     LOOKUP_ERRORS,
     IsOrgAdmin,
@@ -32,7 +34,7 @@ from apps.notifications.signals import (
     notify_new_ticket,
     notify_ticket_update,
 )
-from apps.organizations.models import Organization
+from apps.organizations.models import Organization, Team, User
 
 from .models import (
     CannedResponse,
@@ -124,6 +126,26 @@ def _get_widget_session(request, organization):
     return session, None
 
 
+class TicketFilter(django_filters.FilterSet):
+    """Ticket filters. Ids only resolve in the active organization."""
+
+    assigned_agent = django_filters.ModelChoiceFilter(queryset=active_org_rows(User))
+    assigned_team = django_filters.ModelChoiceFilter(queryset=active_org_rows(Team))
+    tags = django_filters.ModelMultipleChoiceFilter(queryset=active_org_rows(Tag))
+
+    class Meta:
+        model = Ticket
+        fields = (
+            "status",
+            "priority",
+            "assigned_agent",
+            "assigned_team",
+            "source",
+            "tags",
+            "external_user_id",
+        )
+
+
 class TicketViewSet(viewsets.ModelViewSet):
     """ViewSet for managing tickets.
 
@@ -137,15 +159,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         filters.SearchFilter,
         filters.OrderingFilter,
     ]
-    filterset_fields = [
-        "status",
-        "priority",
-        "assigned_agent",
-        "assigned_team",
-        "source",
-        "tags",
-        "external_user_id",
-    ]
+    filterset_class = TicketFilter
     search_fields = ["title", "description", "reference", "requester_email"]
     ordering_fields = ["created_at", "updated_at", "priority", "status"]
 
@@ -560,8 +574,6 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         org = get_active_org(request)
         if new_agent_id:
-            from apps.organizations.models import User
-
             try:
                 agent_in_org = User.objects.filter(
                     id=new_agent_id,
@@ -1283,8 +1295,6 @@ class SLAPolicyViewSet(viewsets.ModelViewSet):
 
     def _require_admin(self) -> None:
         from rest_framework.exceptions import PermissionDenied
-
-        from apps.organizations.models import User
 
         user = self.request.user
         if user.role != User.Role.ADMIN and not user.is_superuser:
