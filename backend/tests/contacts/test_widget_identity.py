@@ -10,6 +10,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import DatabaseError, IntegrityError, OperationalError, connection
 from django.db.models import QuerySet
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 
 from apps.contacts.models import Company, CompanyAttributeDef, Contact
 from apps.tickets.models import Ticket, WidgetSession
@@ -973,3 +974,134 @@ def test_session_race_returns_the_winners_session(api_client, org):
     assert res.status_code == 200
     assert res.data["session_id"] == str(winner.id)
     assert WidgetSession.objects.filter(organization=org).count() == 1
+
+
+class TestEmailOnResume:
+    def _resume(self, api_client, org, session, **body):
+        identity = (
+            {
+                "external_user_id": session.external_user_id,
+                "user_hash": _sign("s3cret", session.external_user_id),
+            }
+            if session.external_user_id
+            else {}
+        )
+        res = _post(api_client, org, session_id=str(session.id), **identity, **body)
+        assert res.status_code == 200
+        assert res.data["session_id"] == str(session.id)
+        session.refresh_from_db()
+        return res
+
+    def _proven(self, org, **kwargs):
+        return WidgetSession.objects.create(
+            organization=org,
+            email="old@x.io",
+            email_verified_at=timezone.now(),
+            **kwargs,
+        )
+
+    @pytest.mark.parametrize("external_user_id", ["", "u1"])
+    def test_signed_different_email_replaces_it_and_is_proven_again(
+        self, api_client, org, external_user_id
+    ):
+        session = self._proven(org, external_user_id=external_user_id)
+        before = session.email_verified_at
+        self._resume(
+            api_client,
+            org,
+            session,
+            email="new@x.io",
+            email_hash=_sign("s3cret", "email:new@x.io"),
+        )
+        assert session.email == "new@x.io"
+        assert session.email_verified_at > before
+        assert session.contact.email == "new@x.io"
+        assert session.contact.email_verified_at is not None
+
+    def test_signed_email_isnt_proof_for_a_contact_holding_another(
+        self, api_client, org
+    ):
+        contact = ContactFactory(
+            organization=org,
+            external_id="u1",
+            email="old@x.io",
+            email_verified_at=timezone.now(),
+        )
+        session = self._proven(org, external_user_id="u1", contact=contact)
+        self._resume(
+            api_client,
+            org,
+            session,
+            email="new@x.io",
+            email_hash=_sign("s3cret", "email:new@x.io"),
+        )
+        contact.refresh_from_db()
+        assert session.email == "new@x.io"
+        assert session.email_verified_at is None
+        assert contact.email == "old@x.io"
+
+    def test_unsigned_different_email_is_the_latest_on_an_identified_session(
+        self, api_client, org
+    ):
+        session = self._proven(org, external_user_id="u1")
+        for email in ("second@x.io", "third@x.io"):
+            self._resume(api_client, org, session, email=email)
+            assert session.email == email
+            assert session.email_verified_at is None
+            assert session.contact.declared_email == email
+            assert session.contact.email == ""
+
+    def test_forged_hash_on_an_identified_session_is_just_unsigned(
+        self, api_client, org
+    ):
+        session = self._proven(org, external_user_id="u1")
+        self._resume(api_client, org, session, email="new@x.io", email_hash="forged")
+        assert session.email == "new@x.io"
+        assert session.email_verified_at is None
+
+    @pytest.mark.parametrize("email_hash", [None, "forged", ["x"]])
+    def test_anonymous_session_keeps_its_first_email_unless_signed(
+        self, api_client, org, email_hash
+    ):
+        session = self._proven(org)
+        before = session.email_verified_at
+        self._resume(api_client, org, session, email="new@x.io", email_hash=email_hash)
+        assert session.email == "old@x.io"
+        assert session.email_verified_at == before
+
+    @pytest.mark.parametrize("external_user_id", ["", "u1"])
+    @pytest.mark.parametrize("email", ["old@x.io", "OLD@x.io", " old@x.io "])
+    def test_same_email_changes_nothing(self, api_client, org, external_user_id, email):
+        session = self._proven(org, external_user_id=external_user_id)
+        before = session.email_verified_at
+        with CaptureQueriesContext(connection) as queries:
+            self._resume(api_client, org, session, email=email)
+        assert session.email == "old@x.io"
+        assert session.email_verified_at == before
+        assert not any('"email"' in sql for sql in _session_updates(queries))
+
+    @pytest.mark.parametrize("external_user_id", ["", "u1"])
+    def test_absent_email_changes_nothing(self, api_client, org, external_user_id):
+        session = self._proven(org, external_user_id=external_user_id)
+        before = session.email_verified_at
+        self._resume(api_client, org, session, email=None)
+        assert session.email == "old@x.io"
+        assert session.email_verified_at == before
+
+    def test_filling_a_blank_email_clears_a_stale_proof(self, api_client, org):
+        session = WidgetSession.objects.create(
+            organization=org, email_verified_at=timezone.now()
+        )
+        self._resume(api_client, org, session, email="new@x.io")
+        assert session.email == "new@x.io"
+        assert session.email_verified_at is None
+
+    def test_changing_the_email_writes_only_what_changed(self, api_client, org):
+        session = self._proven(org, external_user_id="u1", name="A")
+        with CaptureQueriesContext(connection) as queries:
+            self._resume(api_client, org, session, email="new@x.io", name="B")
+        updates = _session_updates(queries)
+        assert any('"email"' in sql for sql in updates)
+        assert any('"email_verified_at"' in sql for sql in updates)
+        assert not any('"name"' in sql for sql in updates)
+        assert not any('"external_user_id"' in sql for sql in updates)

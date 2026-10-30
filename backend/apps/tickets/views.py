@@ -124,8 +124,15 @@ def _get_widget_session(request, organization):
     return session, None
 
 
-def _record_session_resume(session, name: str, email: str) -> None:
-    """Fill the session's blank name and email, and record the visit.
+def _record_session_resume(
+    org, session, name: str, email: str, email_hash: str | None
+) -> None:
+    """Fill the session's blank name, update its email, and record the visit.
+
+    A different email replaces the session's on an identified session, where the
+    latest declared value wins, or if the host app signed it. An anonymous session
+    otherwise keeps its first email. The proof was about the previous email: the
+    service proves the new one again, if it can.
 
     Writes only what changes: saving a value read before a concurrent
     anonymization would restore the personal data it just wiped.
@@ -134,9 +141,20 @@ def _record_session_resume(session, name: str, email: str) -> None:
     if name and not session.name:
         session.name = name
         fields.append("name")
-    if email and not session.email:
+    if (
+        email
+        and email.lower() != session.email.strip().lower()
+        and (
+            not session.email
+            or session.external_user_id
+            or org.verify_email_hash(email, email_hash)
+        )
+    ):
         session.email = email
         fields.append("email")
+        if session.email_verified_at:
+            session.email_verified_at = None
+            fields.append("email_verified_at")
     session.save(update_fields=fields)
 
 
@@ -309,7 +327,7 @@ def _create_or_resume_session(request, org, identity) -> Response:
             and org.verify_user_hash(external_user_id, user_hash)
         )
         if not is_login:
-            _record_session_resume(stored, name, email)
+            _record_session_resume(org, stored, name, email, claims["email_hash"])
             _link_session_contact(org, stored, **claims)
             return Response(WidgetSessionSerializer(stored).data)
 
@@ -335,7 +353,7 @@ def _create_or_resume_session(request, org, identity) -> Response:
             },
         )
         if not created:
-            _record_session_resume(session, name, email)
+            _record_session_resume(org, session, name, email, claims["email_hash"])
         _link_session_contact(org, session, **claims)
         if is_login:
             _move_conversation_to_identified_session(org, stored, session)
