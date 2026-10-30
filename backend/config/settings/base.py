@@ -186,8 +186,10 @@ CORS_ALLOW_HEADERS = [
 # default per-process cache would give each worker its own counters.
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "BACKEND": "apps.core.cache.FailOpenRedisCache",
         "LOCATION": config("REDIS_URL", default="redis://localhost:6379/0"),
+        # An unreachable Redis must cost a request little: see FailOpenRedisCache.
+        "OPTIONS": {"socket_connect_timeout": 1, "socket_timeout": 1},
     },
 }
 
