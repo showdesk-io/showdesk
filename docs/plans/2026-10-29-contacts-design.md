@@ -313,7 +313,8 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   organization, those with no Contact that are on one of its sessions (an agent cleared
   the Contact) or carry its external id (`widget_submit` takes one unsigned, and links
   nothing): title and description replaced (the widget copies the first message there),
-  requester name and email set to the anonymized ones, external_user_id, context_url and
+  requester name and email set to the anonymized ones, an end-user `requester` removed
+  (one who's staff stays), external_user_id, context_url and
   context_user_agent cleared, `context_metadata` reduced to a whitelist (which also removes
   the `pre_login_*` trace), where only strings of 100 characters at most without `@` stay,
   `widget_session` unlinked. On those tickets, the contact's messages (sender type `user`,
@@ -439,12 +440,17 @@ address.
   an old secret loses the widget on its identified pages, not only their history.
 - Anonymization leaves personal data in places it can't judge: agent replies and internal
   notes on the tickets (free text that may quote the contact), agents' own attachments and
-  recordings (a screenshot of the contact's account, say), and the `requester` user of a
-  ticket, an account the Contact doesn't own, even when the Contact was created from that
-  account's email: its name and email stay readable on the ticket. It also keeps, on the tickets, the OS, browser
+  recordings (a screenshot of the contact's account, say), and a `requester` who's staff
+  filing a ticket for the contact. It also keeps, on the tickets, the OS, browser
   and screen resolution, and the `language`, `timezone` and other whitelisted values of
   `context_metadata`, the names of their tags, the Contact's seen dates, and whatever text
   an agent searched for in a `SavedView`, which can be the contact's name or address.
+- Anonymization takes an end-user `requester` off the contact's tickets, so that
+  `requester_detail` stops showing it and a later back-fill can't recreate a contact from
+  it, but it leaves the end-user account itself for an admin to remove: an account isn't
+  the Contact's to erase, and it can have other tickets, of other contacts. Until then its
+  name and email stay in the users list and on those other tickets. A requester from
+  outside the organization who's an agent or admin stays too: role alone decides it here.
 - A widget request already past its session lookup when an anonymization commits can
   still write what it holds: a new ticket on the anonymized Contact with the old requester
   details, or one more message on a scrubbed ticket. The window is one request, and

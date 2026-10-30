@@ -27,6 +27,7 @@ from apps.contacts.models import Contact
 from apps.contacts.services import resolve_contact_for_widget_session
 from apps.contacts.tasks import export_contact_data
 from apps.core.email import send_branded_email
+from apps.organizations.models import User
 from apps.tickets.models import Ticket, TicketAttachment, TicketMessage, WidgetSession
 from apps.videos.models import VideoRecording
 from tests.factories import (
@@ -218,16 +219,99 @@ def test_anonymize_replaces_only_the_contacts_messages(organization, agent):
     assert theirs.body == "kept"
 
 
-def test_anonymize_leaves_the_requester_user_alone(organization):
-    """Open issue in the design: an account isn't the Contact's to erase."""
-    requester = EndUserFactory(organization=organization)
-    contact = ContactFactory(organization=organization)
-    ticket = TicketFactory(
-        organization=organization, contact=contact, requester=requester
+def _ticket_of(contact, requester):
+    return TicketFactory(
+        organization=contact.organization,
+        contact=contact,
+        requester=requester,
+        requester_email=contact.email,
     )
+
+
+def test_anonymize_removes_an_end_user_requester(authenticated_client, organization):
+    """Otherwise ``requester_detail`` keeps showing the account's name and email."""
+    account = EndUserFactory(
+        organization=organization,
+        first_name="Jane",
+        last_name="Doe",
+        email="jane@x.io",
+    )
+    contact = ContactFactory(organization=organization, email="jane@x.io")
+    ticket = _ticket_of(contact, account)
+    someone_elses = TicketFactory(organization=organization, requester=account)
+
     anonymize_contact(contact)
+
+    ticket.refresh_from_db()
+    assert ticket.requester is None
+    res = authenticated_client.get(f"/api/v1/tickets/{ticket.id}/")
+    assert res.status_code == 200
+    assert res.data["requester"] is None
+    assert res.data["requester_detail"] is None
+    assert "jane" not in json.dumps(res.json(), default=str).lower()
+    someone_elses.refresh_from_db()
+    assert someone_elses.requester == account
+
+
+def test_anonymize_leaves_the_end_user_account_for_an_admin_to_remove(organization):
+    """Design, section 8: the account isn't the Contact's to erase."""
+    account = EndUserFactory(
+        organization=organization,
+        first_name="Jane",
+        last_name="Doe",
+        email="jane@x.io",
+    )
+    contact = ContactFactory(organization=organization, email="jane@x.io")
+    _ticket_of(contact, account)
+    before = User.objects.filter(pk=account.pk).values().get()
+
+    anonymize_contact(contact)
+
+    assert User.objects.filter(pk=account.pk).values().get() == before
+
+
+@pytest.mark.parametrize(
+    "staff",
+    [
+        {"role": "agent"},
+        {"role": "admin"},
+        {"role": "end_user", "is_superuser": True},
+    ],
+    ids=["agent", "admin", "superuser"],
+)
+def test_anonymize_keeps_a_staff_requester(organization, staff):
+    """An agent filing for a customer is no account of the contact's."""
+    requester = UserFactory(organization=organization, **staff)
+    contact = ContactFactory(organization=organization)
+    ticket = _ticket_of(contact, requester)
+
+    anonymize_contact(contact)
+
     ticket.refresh_from_db()
     assert ticket.requester == requester
+
+
+def test_anonymizing_again_repairs_a_requester_and_otherwise_changes_nothing(
+    organization,
+):
+    account = EndUserFactory(organization=organization)
+    contact = ContactFactory(organization=organization)
+    ticket = _ticket_of(contact, account)
+    anonymize_contact(contact)
+    ticket.refresh_from_db()
+    updated_at = ticket.updated_at
+
+    anonymize_contact(contact)
+
+    ticket.refresh_from_db()
+    assert ticket.updated_at == updated_at
+
+    Ticket.objects.filter(pk=ticket.pk).update(requester=account)
+    anonymize_contact(contact)
+
+    ticket.refresh_from_db()
+    assert ticket.requester is None
+    assert ticket.updated_at > updated_at
 
 
 def test_anonymize_is_idempotent(organization, agent):

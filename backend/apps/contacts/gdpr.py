@@ -118,8 +118,27 @@ def _kept_metadata(metadata) -> dict:
     }
 
 
+def _kept_requester_id(ticket: Ticket):
+    """Keep staff filing a ticket for a contact, but not an end user's account.
+
+    ``requester_detail`` would show its name and email. A superuser's role means
+    nothing: it defaults to end user. The account itself stays, as it isn't the
+    contact's to erase. Read before the scrub, ``_the_requester`` still finds its
+    messages and uploads.
+    """
+    requester = ticket.requester
+    if (
+        requester
+        and requester.role == User.Role.END_USER
+        and not requester.is_superuser
+    ):
+        return None
+    return ticket.requester_id
+
+
 def _scrubbed_ticket(contact: Contact, ticket: Ticket) -> dict:
     return {
+        "requester_id": _kept_requester_id(ticket),
         # Widget endpoints look a ticket up by session: this stops an open tab,
         # including one on a session since moved to another contact, adding to it.
         "widget_session_id": None,
@@ -232,7 +251,7 @@ def anonymize_contact(contact: Contact) -> Contact | None:
             contact,
             list(contact.sessions.values_list("pk", flat=True)),
             contact.external_id,
-        )
+        ).select_related("requester")
     )
     ticket_ids = [ticket.pk for ticket in tickets]
     _scrub_contact(contact)

@@ -14,6 +14,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.contacts.backfill import _analyze, backfill, clean_email
+from apps.contacts.gdpr import anonymize_contact
 from apps.contacts.models import Contact
 from apps.contacts.services import resolve_contact_for_widget_session
 from apps.organizations.models import User
@@ -800,6 +801,24 @@ class TestRequesterAccount:
         kwargs.setdefault("first_name", "Jane")
         kwargs.setdefault("last_name", "Doe")
         return EndUserFactory(organization=org, **kwargs)
+
+    @pytest.mark.parametrize(
+        "cleared", [{"contact": None}, {"contact": None, "requester_email": ""}]
+    )
+    def test_not_from_the_former_requester_of_an_anonymized_ticket(self, cleared):
+        org = OrganizationFactory()
+        account = self._customer(org)
+        contact = ContactFactory(organization=org, email=account.email)
+        ticket = _ticket(org, contact=contact, requester=account)
+        anonymize_contact(contact)
+        # An agent clears the contact: the ticket is back among those it would link.
+        Ticket.objects.filter(pk=ticket.pk).update(**cleared)
+
+        _run()
+
+        ticket.refresh_from_db()
+        assert ticket.contact is None
+        assert list(Contact.objects.all()) == [contact]
 
     def test_links_to_a_declared_contact_with_the_account_name(self):
         org = OrganizationFactory()
