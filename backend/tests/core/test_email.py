@@ -400,3 +400,100 @@ def test_anonymized_requesters_reply_still_reaches_agents(mail_ticket):
     send_ticket_reply_email(message.id)
 
     assert [message.to for message in mail.outbox] == [[agent.email]]
+
+
+@pytest.fixture
+def blank_requester_ticket(mail_ticket):
+    agent, ticket = mail_ticket
+    ticket.requester_email = ""
+    ticket.save()
+    return agent, ticket
+
+
+def _reply_recipients(agent, ticket):
+    message = TicketMessageFactory(ticket=ticket, author=agent, body="Hello")
+    send_ticket_reply_email(message.id)
+    return [message.to for message in mail.outbox]
+
+
+@pytest.mark.parametrize(
+    ("fields", "address"),
+    [
+        ({"email": "held@x.io"}, "held@x.io"),
+        ({"declared_email": "said@x.io"}, "said@x.io"),
+        ({"email": "held@x.io", "declared_email": "said@x.io"}, "held@x.io"),
+    ],
+)
+def test_agent_reply_falls_back_on_the_address_of_the_contact(
+    blank_requester_ticket, fields, address
+):
+    agent, ticket = blank_requester_ticket
+    ticket.contact = ContactFactory(
+        **{"email": "", "external_id": "u1", **fields},
+        organization=ticket.organization,
+    )
+    ticket.save()
+
+    assert _reply_recipients(agent, ticket) == [[address]]
+
+
+def test_agent_reply_prefers_the_address_of_the_ticket(mail_ticket):
+    agent, ticket = mail_ticket
+    ticket.contact = ContactFactory(organization=ticket.organization, email="held@x.io")
+    ticket.save()
+
+    assert _reply_recipients(agent, ticket) == [["end@example.com"]]
+
+
+def test_agent_reply_isnt_emailed_without_any_address(blank_requester_ticket):
+    agent, ticket = blank_requester_ticket
+    ticket.contact = ContactFactory(
+        organization=ticket.organization, email="", external_id="u1"
+    )
+    ticket.save()
+
+    assert _reply_recipients(agent, ticket) == []
+
+
+def test_agent_reply_isnt_emailed_without_a_contact(blank_requester_ticket):
+    agent, ticket = blank_requester_ticket
+
+    assert _reply_recipients(agent, ticket) == []
+
+
+def test_agent_reply_doesnt_fall_back_on_an_anonymized_contact(blank_requester_ticket):
+    agent, ticket = blank_requester_ticket
+    ticket.contact = ContactFactory(
+        organization=ticket.organization,
+        email="anonymized-1@example.invalid",
+        declared_email="stale@x.io",
+        is_anonymized=True,
+    )
+    ticket.save()
+
+    assert _reply_recipients(agent, ticket) == []
+
+
+def test_agent_reply_doesnt_fall_back_on_who_logged_in_after_it_was_written(
+    blank_requester_ticket,
+):
+    """On a shared computer, whoever logs in isn't necessarily who wrote the ticket."""
+    agent, ticket = blank_requester_ticket
+    ticket.contact = ContactFactory(organization=ticket.organization, email="held@x.io")
+    ticket.context_metadata = {"pre_login_anonymous": True}
+    ticket.save()
+
+    assert _reply_recipients(agent, ticket) == []
+
+
+def test_unsubscribing_doesnt_stop_a_reply_whichever_address_it_goes_to(
+    blank_requester_ticket,
+):
+    """A reply to their own ticket is essential, and nothing enforces it yet anyway."""
+    agent, ticket = blank_requester_ticket
+    ticket.contact = ContactFactory(
+        organization=ticket.organization, email="held@x.io", is_unsubscribed=True
+    )
+    ticket.save()
+
+    assert _reply_recipients(agent, ticket) == [["held@x.io"]]

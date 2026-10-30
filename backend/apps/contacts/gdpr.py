@@ -12,7 +12,7 @@ from django.db import transaction
 from django.db.models import F, Prefetch, Q
 from django.utils import timezone
 
-from apps.organizations.models import User
+from apps.organizations.models import User, is_end_user_account
 from apps.tickets.models import Ticket, TicketAttachment, TicketMessage
 from apps.videos.models import VideoRecording
 
@@ -121,17 +121,12 @@ def _kept_metadata(metadata) -> dict:
 def _kept_requester_id(ticket: Ticket):
     """Keep staff filing a ticket for a contact, but not an end user's account.
 
-    ``requester_detail`` would show its name and email. A superuser's role means
-    nothing: it defaults to end user. The account itself stays, as it isn't the
-    contact's to erase. Read before the scrub, ``_the_requester`` still finds its
-    messages and uploads.
+    ``requester_detail`` would show its name and email. The account itself stays, as
+    it isn't the contact's to erase. Read before the scrub, ``_the_requester`` still
+    finds its messages and uploads.
     """
     requester = ticket.requester
-    if (
-        requester
-        and requester.role == User.Role.END_USER
-        and not requester.is_superuser
-    ):
+    if requester and is_end_user_account(requester.role, requester.is_superuser):
         return None
     return ticket.requester_id
 
@@ -139,6 +134,10 @@ def _kept_requester_id(ticket: Ticket):
 def _scrubbed_ticket(contact: Contact, ticket: Ticket) -> dict:
     return {
         "requester_id": _kept_requester_id(ticket),
+        # A ticket caught by its external id can be on an email-only contact, which
+        # would go on naming that address next to the scrubbed ticket. One an agent
+        # cleared stays cleared.
+        "contact_id": contact.pk if ticket.contact_id else None,
         # Widget endpoints look a ticket up by session: this stops an open tab,
         # including one on a session since moved to another contact, adding to it.
         "widget_session_id": None,
@@ -185,17 +184,18 @@ def _scrub_messages(ticket_ids) -> None:
 
 
 def _tickets_of(contact: Contact, session_ids, external_id: str):
-    """Return the contact's tickets, and those it wrote that no longer say so.
+    """Return the contact's tickets, and those it wrote that don't say so.
 
-    An agent can clear a ticket's contact, and ``widget_submit`` takes an external id
-    with no contact, unsigned. To be read before the sessions are unlinked.
+    An agent can clear a ticket's contact. And ``widget_submit`` takes an external id
+    unsigned and links by email alone: a ticket with this contact's id can be on no
+    contact, or on an email-only one. It's scrubbed whichever: it would still match
+    the id's history otherwise. To be read before the sessions are unlinked.
     """
-    unlinked = Q(widget_session__in=session_ids)
+    others = Q(contact__isnull=True, widget_session__in=session_ids)
     if external_id:
-        unlinked |= Q(external_user_id=external_id)
+        others |= Q(external_user_id=external_id)
     return Ticket.objects.filter(
-        Q(contact=contact)
-        | (Q(contact__isnull=True, organization_id=contact.organization_id) & unlinked)
+        Q(contact=contact) | (Q(organization_id=contact.organization_id) & others)
     )
 
 

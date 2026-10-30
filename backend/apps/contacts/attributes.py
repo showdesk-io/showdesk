@@ -82,20 +82,34 @@ def _coerce(type_: str, value: Any, options: Any) -> Any:
 
 
 def is_storable(value: Any) -> bool:
-    """Tell whether Postgres accepts ``value`` inside a ``jsonb`` column.
+    """Tell whether Postgres accepts ``value`` inside a ``jsonb`` column, at any depth.
 
-    ``jsonb`` rejects NUL characters and lone surrogates, both of which
-    survive JSON parsing.
+    ``jsonb`` rejects NUL characters and lone surrogates, both of which survive JSON
+    parsing. Not recursive, as a request sets the depth.
     """
-    if not isinstance(value, str):
-        return True
-    if "\x00" in value:
-        return False
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError:
-        return False
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+        elif isinstance(item, str):
+            if "\x00" in item:
+                return False
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                return False
     return True
+
+
+def merged_attributes(stored: Any, cleaned: dict[str, Any]) -> Any:
+    """Return ``stored`` updated with ``cleaned``. Nothing cleaned changes nothing."""
+    if not cleaned:
+        return stored
+    return {**(stored if isinstance(stored, dict) else {}), **cleaned}
 
 
 def validate_options(type_: str, options: Any) -> None:

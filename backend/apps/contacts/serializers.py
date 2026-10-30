@@ -8,7 +8,7 @@ from rest_framework import serializers
 
 from apps.core.serializers import OrgScopedPrimaryKeyRelatedField
 
-from .attributes import clean_attributes, validate_options
+from .attributes import clean_attributes, merged_attributes, validate_options
 from .models import (
     Company,
     CompanyAttributeDef,
@@ -36,12 +36,6 @@ def _clean_attributes(definitions, value):
         return clean_attributes(definitions, value, strict=True)
     except DjangoValidationError as exc:
         raise serializers.ValidationError(exc.message_dict) from exc
-
-
-def _merged_attributes(instance, values) -> dict:
-    """Return ``values`` on top of what ``instance`` stores, whatever its shape."""
-    stored = instance.attributes
-    return {**(stored if isinstance(stored, dict) else {}), **values}
 
 
 def _write_changes(instance, validated_data):
@@ -154,8 +148,8 @@ class ContactSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         if "attributes" in validated_data:
-            validated_data["attributes"] = _merged_attributes(
-                instance, validated_data["attributes"]
+            validated_data["attributes"] = merged_attributes(
+                instance.attributes, validated_data["attributes"]
             )
         if "email" in validated_data and validated_data["email"] != instance.email:
             validated_data["email_verified_at"] = None  # The proof was of the old one.
@@ -231,8 +225,8 @@ class CompanySerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         if "attributes" in validated_data:
-            validated_data["attributes"] = _merged_attributes(
-                instance, validated_data["attributes"]
+            validated_data["attributes"] = merged_attributes(
+                instance.attributes, validated_data["attributes"]
             )
         return _write_changes(instance, validated_data)
 

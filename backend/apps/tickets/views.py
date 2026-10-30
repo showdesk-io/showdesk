@@ -13,6 +13,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.contacts.attributes import is_storable
 from apps.contacts.services import (
     delete_contact_if_left_empty,
     resolve_contact_for_email,
@@ -92,6 +93,15 @@ logger = logging.getLogger(__name__)
 # Next to ``PRE_LOGIN_ANONYMOUS_KEY``: the digest of the anonymous session it came
 # from, to trace the move.
 PRE_LOGIN_SESSION_HASH_KEY = "pre_login_session_hash"
+
+# The ``context`` of a widget message that have a field of their own on a ticket.
+_CONTEXT_FIELDS = {
+    "url": "context_url",
+    "user_agent": "context_user_agent",
+    "os": "context_os",
+    "browser": "context_browser",
+    "screen_resolution": "context_screen_resolution",
+}
 
 
 def _session_digest(session_id) -> str:
@@ -267,23 +277,38 @@ def _update_session(request, org, identity) -> Response:
         session.email = email
         fields.append("email")
     session.save(update_fields=fields)
-    # Backfill on linked tickets with blank requester info. Not on those a login moved
-    # here: their requester is whoever wrote them, not necessarily this user.
-    if session.name or session.email:
-        update_fields = {}
-        if session.name:
-            update_fields["requester_name"] = session.name
-        if session.email:
-            update_fields["requester_email"] = session.email
-        Ticket.objects.filter(
-            organization=org,
-            widget_session=session,
-            requester_name="",
-        ).exclude(context_metadata__has_key=PRE_LOGIN_ANONYMOUS_KEY).update(
-            **update_fields
-        )
+    # Backfill on linked tickets, each field where it's blank. Not on those a login
+    # moved here: their requester is whoever wrote them, not necessarily this user.
+    tickets = Ticket.objects.filter(organization=org, widget_session=session).exclude(
+        context_metadata__has_key=PRE_LOGIN_ANONYMOUS_KEY
+    )
+    if session.name:
+        tickets.filter(requester_name="").update(requester_name=session.name)
+    if session.email:
+        tickets.filter(requester_email="").update(requester_email=session.email)
     _link_session_contact(org, session, **_contact_claims(identity))
     return Response(WidgetSessionSerializer(session).data)
+
+
+def _ticket_context(context) -> dict:
+    """Return a ticket's fields from the ``context`` of a widget message.
+
+    A page can send anything: a field only takes a string it can store, cut to fit, and
+    the metadata leaves out what it can't store.
+    """
+    if not isinstance(context, dict):
+        return {}
+    fields = {}
+    for key, field in _CONTEXT_FIELDS.items():
+        value = context.get(key)
+        if isinstance(value, str) and is_storable(value):
+            fields[field] = value[: Ticket._meta.get_field(field).max_length]
+    fields["context_metadata"] = {
+        key: value
+        for key, value in context.items()
+        if key not in _CONTEXT_FIELDS and is_storable(key) and is_storable(value)
+    }
+    return fields
 
 
 def _stored_session(org, session_id):
@@ -1118,23 +1143,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 requester_name=session.name,
                 requester_email=session.email,
                 external_user_id=session.external_user_id,
-                context_url=context_data.get("url", ""),
-                context_user_agent=context_data.get("user_agent", ""),
-                context_os=context_data.get("os", ""),
-                context_browser=context_data.get("browser", ""),
-                context_screen_resolution=context_data.get("screen_resolution", ""),
-                context_metadata={
-                    k: v
-                    for k, v in context_data.items()
-                    if k
-                    not in (
-                        "url",
-                        "user_agent",
-                        "os",
-                        "browser",
-                        "screen_resolution",
-                    )
-                },
+                **_ticket_context(context_data),
             )
             try:
                 notify_new_ticket(ticket)

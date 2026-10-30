@@ -15,6 +15,7 @@ from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import DatabaseError, transaction
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.contacts import gdpr
 from apps.contacts.gdpr import (
@@ -1513,7 +1514,7 @@ def test_anonymize_leaves_another_contacts_ticket_on_the_same_session(organizati
 
 
 def test_anonymize_scrubs_unlinked_tickets_naming_its_external_id(organization):
-    """``widget_submit`` takes any external id, unsigned, and links nothing."""
+    """``widget_submit`` takes any external id, unsigned, and links by email alone."""
     contact = ContactFactory(organization=organization, external_id="u1")
     named = TicketFactory(
         organization=organization,
@@ -1521,13 +1522,6 @@ def test_anonymize_scrubs_unlinked_tickets_naming_its_external_id(organization):
         requester=None,
         external_user_id="u1",
         title="Alice's invoice",
-    )
-    linked_elsewhere = TicketFactory(
-        organization=organization,
-        contact=ContactFactory(organization=organization),
-        requester=None,
-        external_user_id="u1",
-        title="Kept",
     )
     other_org = TicketFactory(
         organization=OrganizationFactory(),
@@ -1539,12 +1533,10 @@ def test_anonymize_scrubs_unlinked_tickets_naming_its_external_id(organization):
 
     anonymize_contact(contact)
 
-    for ticket in (named, linked_elsewhere, other_org):
+    for ticket in (named, other_org):
         ticket.refresh_from_db()
     assert named.title == REMOVED_TITLE
     assert named.external_user_id == ""
-    assert linked_elsewhere.title == "Kept"
-    assert linked_elsewhere.external_user_id == "u1"
     assert other_org.title == "Kept"
 
 
@@ -1698,3 +1690,235 @@ def test_a_row_added_while_collecting_uploads_keeps_its_file(organization, media
     attachment, video = late
     assert TicketAttachment.objects.filter(pk=attachment.pk).exists()
     assert VideoRecording.objects.filter(pk=video.pk).exists()
+
+
+# Anonymization: a ticket on another contact, by the external id
+
+
+def _submitted_for_u1(api_client, organization, **fields) -> Ticket:
+    """File what ``widget_submit`` accepts unsigned: it links by email, not by id."""
+    res = api_client.post(
+        "/api/v1/tickets/widget_submit/",
+        {
+            "title": "Vi's invoice",
+            "description": "My card number is 4242",
+            "requester_email": "vi@x.io",
+            "requester_name": "Vi",
+            "external_user_id": "u1",
+            **fields,
+        },
+        format="json",
+        HTTP_X_WIDGET_TOKEN=str(organization.api_token),
+    )
+    assert res.status_code == 201
+    return Ticket.objects.get(id=res.data["id"])
+
+
+def test_anonymize_catches_a_ticket_on_another_contact_by_its_external_id(api_client):
+    organization = OrganizationFactory(widget_secret="s3cret")
+    contact = ContactFactory(organization=organization, external_id="u1", name="Vi")
+    ticket = _submitted_for_u1(api_client, organization)
+    email_only = ticket.contact
+    assert (email_only.email, email_only.external_id) == ("vi@x.io", "")
+    message = TicketMessageFactory(
+        ticket=ticket,
+        author=None,
+        sender_type=TicketMessage.SenderType.USER,
+        body="My card number is 4242",
+    )
+
+    anonymize_contact(contact)
+
+    contact.refresh_from_db()
+    ticket.refresh_from_db()
+    message.refresh_from_db()
+    assert (ticket.title, ticket.description) == (REMOVED_TITLE, REMOVED_BODY)
+    assert ticket.requester_email == contact.email
+    assert ticket.requester_name == contact.name
+    assert ticket.external_user_id == ""
+    assert message.body == REMOVED_BODY
+    # On the email-only contact it would still name that address to agents, and an
+    # agent's reply would try the anonymized one.
+    assert ticket.contact == contact
+    email_only.refresh_from_db()
+    assert email_only.email == "vi@x.io"  # Nothing proves it was the same person.
+
+
+def test_anonymize_removes_that_ticket_from_the_history_of_the_external_id(api_client):
+    organization = OrganizationFactory(widget_secret="s3cret")
+    contact = ContactFactory(organization=organization, external_id="u1")
+    ticket = _submitted_for_u1(api_client, organization)
+
+    anonymize_contact(contact)
+
+    headers = {"HTTP_X_WIDGET_TOKEN": str(organization.api_token)}
+    signature = hmac.new(b"s3cret", b"u1", hashlib.sha256).hexdigest()
+    signed = api_client.post(
+        SESSION_URL,
+        {"external_user_id": "u1", "user_hash": signature},
+        format="json",
+        **headers,
+    )
+    history = api_client.get(
+        "/api/v1/tickets/widget_history/",
+        HTTP_X_WIDGET_SESSION=signed.data["session_id"],
+        **headers,
+    )
+    assert history.status_code == 200
+    assert str(ticket.id) not in {row["id"] for row in history.data}
+
+
+def test_anonymizing_again_leaves_a_ticket_caught_by_external_id_alone(
+    api_client, organization
+):
+    contact = ContactFactory(organization=organization, external_id="u1")
+    ticket = _submitted_for_u1(api_client, organization)
+    anonymize_contact(contact)
+    ticket.refresh_from_db()
+    before = ticket.updated_at
+
+    anonymize_contact(contact)
+
+    ticket.refresh_from_db()
+    assert ticket.updated_at == before
+
+
+def test_anonymize_keeps_a_cleared_ticket_without_a_contact(organization):
+    contact = ContactFactory(organization=organization, external_id="u1")
+    ticket = TicketFactory(
+        organization=organization, contact=None, requester=None, external_user_id="u1"
+    )
+
+    anonymize_contact(contact)
+
+    ticket.refresh_from_db()
+    assert ticket.contact is None
+    assert ticket.external_user_id == ""
+
+
+def test_anonymize_leaves_the_tickets_of_other_ids_and_organizations(
+    api_client, organization
+):
+    contact = ContactFactory(organization=organization, external_id="u1")
+    email_only = ContactFactory(organization=organization, email="vi@x.io")
+    someone_else = TicketFactory(
+        organization=organization,
+        contact=email_only,
+        requester=None,
+        external_user_id="u2",
+        title="Someone else's",
+    )
+    no_id = TicketFactory(
+        organization=organization,
+        contact=email_only,
+        requester=None,
+        title="No id at all",
+    )
+    elsewhere = TicketFactory(
+        organization=OrganizationFactory(),
+        contact=None,
+        requester=None,
+        external_user_id="u1",
+        title="Another organization's",
+    )
+
+    anonymize_contact(contact)
+
+    for ticket, title, external_id in (
+        (someone_else, "Someone else's", "u2"),
+        (no_id, "No id at all", ""),
+        (elsewhere, "Another organization's", "u1"),
+    ):
+        ticket.refresh_from_db()
+        assert ticket.title == title
+        assert ticket.external_user_id == external_id
+    assert no_id.contact == email_only
+
+
+# A login that gives no email, and a host that keeps signing an anonymized user
+
+
+def test_a_login_without_an_email_drops_it_from_the_contact_but_not_the_ticket(
+    api_client, settings
+):
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    organization = OrganizationFactory(widget_secret="s3cret")
+    headers = {"HTTP_X_WIDGET_TOKEN": str(organization.api_token)}
+    created = api_client.post(
+        SESSION_URL, {"email": "vi@x.io", "name": "Vi"}, format="json", **headers
+    )
+    session_id = created.data["session_id"]
+    sent = api_client.post(
+        "/api/v1/tickets/widget_message/",
+        {"body": "Help"},
+        format="json",
+        HTTP_X_WIDGET_SESSION=session_id,
+        **headers,
+    )
+    assert Contact.objects.filter(email="vi@x.io").exists()
+
+    signature = hmac.new(b"s3cret", b"u1", hashlib.sha256).hexdigest()
+    login = api_client.post(
+        SESSION_URL,
+        {"external_user_id": "u1", "user_hash": signature, "session_id": session_id},
+        format="json",
+        **headers,
+    )
+    assert login.data["session_id"] != session_id
+
+    assert not Contact.objects.filter(email="vi@x.io").exists()
+    identified = Contact.objects.get(external_id="u1")
+    assert (identified.email, identified.declared_email) == ("", "")
+    ticket = Ticket.objects.get(id=sent.data["ticket_id"])
+    assert ticket.contact == identified
+    assert ticket.requester_email == "vi@x.io"
+
+    mail.outbox.clear()
+    agent = UserFactory(organization=organization)
+    client = APIClient()
+    client.force_authenticate(agent)
+    reply = client.post(
+        "/api/v1/messages/",
+        {"ticket": str(ticket.id), "body": "Hello"},
+        format="json",
+    )
+    assert reply.status_code == 201
+    assert [["vi@x.io"]] == [m.to for m in mail.outbox if "Re:" in m.subject]
+
+
+def test_signing_an_anonymized_user_again_makes_a_new_contact_with_no_history(
+    api_client,
+):
+    organization = OrganizationFactory(widget_secret="s3cret")
+    contact = ContactFactory(organization=organization, external_id="u1")
+    session = WidgetSession.objects.create(
+        organization=organization, contact=contact, external_user_id="u1"
+    )
+    TicketFactory(
+        organization=organization,
+        contact=contact,
+        requester=None,
+        widget_session=session,
+        external_user_id="u1",
+    )
+    anonymize_contact(contact)
+
+    headers = {"HTTP_X_WIDGET_TOKEN": str(organization.api_token)}
+    signature = hmac.new(b"s3cret", b"u1", hashlib.sha256).hexdigest()
+    signed = api_client.post(
+        SESSION_URL,
+        {"external_user_id": "u1", "user_hash": signature},
+        format="json",
+        **headers,
+    )
+
+    assert signed.status_code == 201
+    new_contact = Contact.objects.get(organization=organization, external_id="u1")
+    assert new_contact != contact
+    assert not new_contact.tickets.exists()
+    history = api_client.get(
+        "/api/v1/tickets/widget_history/",
+        HTTP_X_WIDGET_SESSION=signed.data["session_id"],
+        **headers,
+    )
+    assert history.data == []

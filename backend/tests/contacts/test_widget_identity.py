@@ -11,6 +11,7 @@ from django.db import DatabaseError, IntegrityError, OperationalError, connectio
 from django.db.models import QuerySet
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.contacts.models import Company, CompanyAttributeDef, Contact
 from apps.tickets.models import Ticket, WidgetSession
@@ -19,6 +20,7 @@ from tests.factories import (
     ContactFactory,
     OrganizationFactory,
     TicketFactory,
+    UserFactory,
 )
 
 pytestmark = pytest.mark.django_db
@@ -1092,3 +1094,151 @@ class TestEmailOnResume:
         assert any('"email_verified_at"' in sql for sql in updates)
         assert not any('"name"' in sql for sql in updates)
         assert not any('"external_user_id"' in sql for sql in updates)
+
+
+class TestRequesterBackfillOnPatch:
+    def _message(self, api_client, org, session_id, **body):
+        res = api_client.post(
+            "/api/v1/tickets/widget_message/",
+            {"body": "Help", **body},
+            format="json",
+            HTTP_X_WIDGET_TOKEN=str(org.api_token),
+            HTTP_X_WIDGET_SESSION=str(session_id),
+        )
+        assert res.status_code == 201
+        return Ticket.objects.get(id=res.data["ticket_id"])
+
+    def test_an_email_reaches_a_ticket_that_has_a_name(self, api_client, org):
+        session_id = _post(api_client, org, name="Vi").data["session_id"]
+        ticket = self._message(api_client, org, session_id)
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "")
+
+        res = _patch(api_client, org, session_id, email="vi@x.io")
+
+        assert res.status_code == 200
+        ticket.refresh_from_db()
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "vi@x.io")
+        assert ticket.contact.email == "vi@x.io"
+
+    def test_an_agent_reply_then_emails_the_visitor(
+        self, api_client, org, settings, mailoutbox
+    ):
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        session_id = _post(api_client, org, name="Vi").data["session_id"]
+        ticket = self._message(api_client, org, session_id)
+        _patch(api_client, org, session_id, email="vi@x.io")
+        mailoutbox.clear()
+
+        agent_client = APIClient()
+        agent_client.force_authenticate(UserFactory(organization=org))
+        res = agent_client.post(
+            "/api/v1/messages/",
+            {"ticket": str(ticket.id), "body": "Hello"},
+            format="json",
+        )
+
+        assert res.status_code == 201
+        assert [message.to for message in mailoutbox] == [["vi@x.io"]]
+
+    def test_a_name_reaches_a_ticket_that_has_an_email(self, api_client, org):
+        session_id = _post(api_client, org, email="vi@x.io").data["session_id"]
+        ticket = self._message(api_client, org, session_id)
+        assert (ticket.requester_name, ticket.requester_email) == ("", "vi@x.io")
+
+        _patch(api_client, org, session_id, name="Vi")
+
+        ticket.refresh_from_db()
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "vi@x.io")
+
+    def test_both_reach_a_ticket_that_has_neither(self, api_client, org):
+        session_id = _post(api_client, org).data["session_id"]
+        ticket = self._message(api_client, org, session_id)
+
+        _patch(api_client, org, session_id, name="Vi", email="vi@x.io")
+
+        ticket.refresh_from_db()
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "vi@x.io")
+
+    def test_what_a_ticket_holds_isnt_replaced(self, api_client, org):
+        session_id = _post(api_client, org, name="Vi", email="vi@x.io").data[
+            "session_id"
+        ]
+        ticket = self._message(api_client, org, session_id)
+
+        _patch(api_client, org, session_id, name="Violet", email="violet@x.io")
+
+        ticket.refresh_from_db()
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "vi@x.io")
+
+    def test_a_ticket_moved_by_a_login_isnt_filled(self, api_client, org):
+        session_id = _post(api_client, org, name="Vi").data["session_id"]
+        session = WidgetSession.objects.get(id=session_id)
+        moved = TicketFactory(
+            organization=org,
+            widget_session=session,
+            requester=None,
+            requester_name="",
+            requester_email="",
+            context_metadata={"pre_login_anonymous": True},
+        )
+
+        _patch(api_client, org, session_id, name="Violet", email="vi@x.io")
+
+        moved.refresh_from_db()
+        assert (moved.requester_name, moved.requester_email) == ("", "")
+
+    def test_a_ticket_of_another_session_or_organization_isnt_filled(
+        self, api_client, org
+    ):
+        session_id = _post(api_client, org, name="Vi").data["session_id"]
+        session = WidgetSession.objects.get(id=session_id)
+        other_session = TicketFactory(
+            organization=org,
+            widget_session=WidgetSession.objects.create(organization=org),
+            requester=None,
+            requester_name="",
+            requester_email="",
+        )
+        other_org = TicketFactory(
+            organization=OrganizationFactory(),
+            widget_session=session,
+            requester=None,
+            requester_name="",
+            requester_email="",
+        )
+
+        _patch(api_client, org, session_id, email="vi@x.io")
+
+        for ticket in (other_session, other_org):
+            ticket.refresh_from_db()
+            assert ticket.requester_email == ""
+
+    def test_the_first_message_takes_the_email_the_session_holds(self, api_client, org):
+        session_id = _post(api_client, org, name="Vi", email="vi@x.io").data[
+            "session_id"
+        ]
+
+        ticket = self._message(api_client, org, session_id)
+
+        assert ticket.requester_email == "vi@x.io"
+        assert ticket.requester_name == "Vi"
+
+    def test_the_first_attachment_takes_the_email_the_session_holds(
+        self, api_client, org, local_media
+    ):
+        session_id = _post(api_client, org, name="Vi", email="vi@x.io").data[
+            "session_id"
+        ]
+
+        res = api_client.post(
+            "/api/v1/tickets/widget_message_attachment/",
+            {"file": SimpleUploadedFile("a.png", b"x", content_type="image/png")},
+            format="multipart",
+            HTTP_X_WIDGET_TOKEN=str(org.api_token),
+            HTTP_X_WIDGET_SESSION=str(session_id),
+        )
+
+        assert res.status_code == 201
+        assert Ticket.objects.get(id=res.data["ticket_id"]).requester_email == (
+            "vi@x.io"
+        )

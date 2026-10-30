@@ -873,6 +873,96 @@ class TestRequesterAccount:
         assert ticket.contact is None
         assert not Contact.objects.exists()
 
+    @pytest.mark.parametrize("factory", [UserFactory, AdminFactory])
+    def test_the_own_email_of_an_agent_or_admin_makes_no_contact(self, factory):
+        org = OrganizationFactory()
+        staff = factory(organization=org, email="staff@x.io")
+        ticket = _ticket(org, requester=staff, requester_email="Staff@X.io")
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact is None
+        assert not Contact.objects.exists()
+
+    def test_an_agent_filing_for_a_customer_still_makes_a_contact(self):
+        org = OrganizationFactory()
+        staff = UserFactory(organization=org, email="staff@x.io")
+        ticket = _ticket(org, requester=staff, requester_email="cid@x.io")
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact.email == "cid@x.io"
+
+    @pytest.mark.parametrize("own_email", [False, True])
+    def test_a_superuser_counts_as_staff_whatever_the_role(self, own_email):
+        org = OrganizationFactory()
+        superuser = EndUserFactory(
+            organization=org, email="root@x.io", is_superuser=True
+        )
+        ticket = _ticket(
+            org,
+            requester=superuser,
+            requester_email="root@x.io" if own_email else "",
+        )
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact is None
+        assert not Contact.objects.exists()
+
+    def test_a_session_doesnt_take_the_email_an_agent_filed_with(self):
+        org = OrganizationFactory()
+        staff = UserFactory(organization=org, email="staff@x.io")
+        session = _session(org)
+        ticket = _ticket(
+            org, widget_session=session, requester=staff, requester_email="staff@x.io"
+        )
+
+        _run()
+
+        _reload(session, ticket)
+        assert session.email == ""
+        assert session.contact is None
+        assert ticket.contact is None
+        assert not Contact.objects.exists()
+
+    def test_a_session_skips_the_email_of_an_agent_for_an_older_usable_one(self):
+        org = OrganizationFactory()
+        staff = UserFactory(organization=org, email="staff@x.io")
+        session = _session(org)
+        older = _ticket(org, widget_session=session, requester_email="cid@x.io")
+        _dated(older, created_at=timezone.now() - timedelta(days=1))
+        _ticket(
+            org, widget_session=session, requester=staff, requester_email="staff@x.io"
+        )
+
+        _run()
+
+        _reload(session)
+        assert session.email == "cid@x.io"
+
+    def test_an_identified_contact_declares_no_email_of_an_agent(self):
+        org = OrganizationFactory()
+        _session(org, external_user_id="u1")
+        staff = UserFactory(organization=org, email="staff@x.io")
+        ticket = _ticket(
+            org,
+            requester=staff,
+            requester_email="staff@x.io",
+            requester_name="Staff",
+            external_user_id="u1",
+        )
+
+        _run()
+
+        _reload(ticket)
+        assert ticket.contact.external_id == "u1"
+        assert ticket.contact.declared_email == ""
+        assert ticket.contact.name == ""
+
     def test_an_account_of_another_organization_doesnt_become_a_contact(self):
         org = OrganizationFactory()
         ticket = _ticket(org, requester=self._customer(OrganizationFactory()))

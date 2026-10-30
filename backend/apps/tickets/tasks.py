@@ -59,6 +59,29 @@ def _requester_can_be_emailed(ticket) -> bool:
     return not ticket.requester_email.lower().endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")
 
 
+def _reply_address(ticket) -> str:
+    """Return where an agent's reply goes, or "" if nowhere.
+
+    The ticket's address, or else what its contact holds: a resume doesn't fill in a
+    ticket, and an agent can link one. Not the contact of a ticket a login moved there,
+    who isn't necessarily who wrote it. ``is_unsubscribed`` doesn't come into it: it's
+    about non-essential email, and a reply to their own ticket isn't.
+    """
+    from apps.tickets.models import PRE_LOGIN_ANONYMOUS_KEY
+
+    if ticket.requester_email:
+        return ticket.requester_email if _requester_can_be_emailed(ticket) else ""
+    contact = ticket.contact
+    metadata = ticket.context_metadata
+    if (
+        contact is None
+        or contact.is_anonymized
+        or (isinstance(metadata, dict) and PRE_LOGIN_ANONYMOUS_KEY in metadata)
+    ):
+        return ""
+    return contact.email or contact.declared_email
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_ticket_created_email(self, ticket_id: str) -> None:
     """Notify agents when a new ticket is created.
@@ -163,10 +186,11 @@ def send_ticket_reply_email(self, message_id: str) -> None:
     is_agent_reply = author and author.role in (User.Role.AGENT, User.Role.ADMIN)
 
     if is_agent_reply:
-        if not _requester_can_be_emailed(ticket):
+        address = _reply_address(ticket)
+        if not address:
             logger.info("No requester to email for ticket %s.", ticket.reference)
             return
-        recipients = [ticket.requester_email]
+        recipients = [address]
         author_label = (author.first_name or "").strip() or (
             author.email.split("@")[0] if author.email else "Support"
         )

@@ -593,3 +593,102 @@ class TestLogout:
         )
         assert res.status_code == 200
         assert res.data["session_id"] == str(self.session.id)
+
+
+@pytest.mark.django_db
+class TestWidgetMessageContext:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.client = APIClient()
+        self.org = OrganizationFactory()
+        self.session = WidgetSession.objects.create(organization=self.org)
+
+    def _ticket(self, context) -> Ticket:
+        res = self.client.post(
+            "/api/v1/tickets/widget_message/",
+            # Dumped here: the test client's renderer can't encode a lone surrogate.
+            json.dumps({"body": "Help", "context": context}),
+            content_type="application/json",
+            HTTP_X_WIDGET_TOKEN=self.org.api_token,
+            HTTP_X_WIDGET_SESSION=str(self.session.id),
+        )
+        assert res.status_code == 201, res.content
+        return Ticket.objects.get(id=res.data["ticket_id"])
+
+    def test_keeps_what_it_can_store(self):
+        ticket = self._ticket(
+            {
+                "url": "https://app.example/page",
+                "user_agent": "Mozilla/5.0",
+                "os": "macOS",
+                "browser": "Firefox",
+                "screen_resolution": "1920x1080",
+                "language": "fr",
+                "viewport": {"width": 800},
+            }
+        )
+        assert ticket.context_url == "https://app.example/page"
+        assert ticket.context_user_agent == "Mozilla/5.0"
+        assert ticket.context_os == "macOS"
+        assert ticket.context_browser == "Firefox"
+        assert ticket.context_screen_resolution == "1920x1080"
+        assert ticket.context_metadata == {
+            "language": "fr",
+            "viewport": {"width": 800},
+        }
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, 1, 1.5, True, [], ["macOS"], {"name": "macOS"}, "ma\x00cOS", "\ud800"],
+    )
+    @pytest.mark.parametrize(
+        ("key", "field"),
+        [
+            ("url", "context_url"),
+            ("user_agent", "context_user_agent"),
+            ("os", "context_os"),
+            ("browser", "context_browser"),
+            ("screen_resolution", "context_screen_resolution"),
+        ],
+    )
+    def test_ignores_what_it_cant_store(self, key, field, value):
+        ticket = self._ticket({key: value})
+        assert getattr(ticket, field) == ""
+        assert key not in ticket.context_metadata
+
+    @pytest.mark.parametrize(
+        ("key", "field", "limit"),
+        [
+            ("url", "context_url", 2048),
+            ("os", "context_os", 100),
+            ("browser", "context_browser", 100),
+            ("screen_resolution", "context_screen_resolution", 20),
+        ],
+    )
+    def test_truncates_what_is_too_long(self, key, field, limit):
+        ticket = self._ticket({key: "x" * (limit + 1)})
+        assert getattr(ticket, field) == "x" * limit
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "a\x00b",
+            "\ud800",
+            ["a\x00b"],
+            {"nested": {"deep": "a\x00b"}},
+            {"a\x00b": 1},
+        ],
+    )
+    def test_metadata_leaves_out_what_it_cant_store(self, value):
+        ticket = self._ticket({"bad": value, "good": "kept"})
+        assert ticket.context_metadata == {"good": "kept"}
+
+    def test_metadata_leaves_out_a_key_it_cant_store(self):
+        ticket = self._ticket({"a\x00b": 1, "good": "kept"})
+        assert ticket.context_metadata == {"good": "kept"}
+
+    @pytest.mark.parametrize("context", [[], ["os"], "macOS", 1, True])
+    def test_a_context_that_isnt_an_object_counts_as_none(self, context):
+        ticket = self._ticket(context)
+        assert ticket.context_os == ""
+        assert ticket.context_metadata == {}

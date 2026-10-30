@@ -79,6 +79,14 @@ def is_public_email_domain(domain: str) -> bool:
     return domain.lower() in PUBLIC_EMAIL_DOMAINS
 
 
+def is_end_user_account(role: str | None, is_superuser: bool | None) -> bool:
+    """Tell if an account counts as an end user, from those two of its columns.
+
+    A superuser never does: its role defaults to end user and means nothing.
+    """
+    return role == User.Role.END_USER and not is_superuser
+
+
 # Pricing tiers as per the business plan -- per workspace, not per seat
 # (`docs/plans/...` in showdesk.io). Mapped to a default feature set
 # below; per-org overrides on ``Organization.feature_flag_overrides``

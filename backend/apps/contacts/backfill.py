@@ -3,7 +3,8 @@
 Plain function called from a migration, so it takes the app registry. Historical
 models have no custom ``save()``, so emails are normalized here. It keeps its own
 copy of the rules it needs: a migration must keep doing what it did when it was
-written, whatever ``services.py`` becomes. ``manage.py backfill_contacts`` runs it
+written, whatever ``services.py`` becomes. The one rule shared is who counts as an end
+user (``is_end_user_account``), on plain values. ``manage.py backfill_contacts`` runs it
 again after a deploy, for the rows that pods still running the old code wrote.
 
 The rules follow the identity service, for data nothing was proven about:
@@ -18,8 +19,10 @@ The rules follow the identity service, for data nothing was proven about:
 - Otherwise a usable email gets an email-only contact, shared by everyone giving it.
 - A ticket with no session of its organization and no identity of its own goes by its
   requester, when that's an end-user account not belonging to another organization.
-  Its email counts as declared, like any other here, and an agent or admin never
-  becomes a contact. The account names a new contact only if it holds the same email.
+  Its email counts as declared, like any other here. The account names a new contact
+  only if it holds the same email.
+- An agent, admin or superuser never becomes a contact: not by account, and a ticket
+  whose email is the one of the staff member who filed it says nothing about anyone.
 - A session decides for its tickets, so they end on the same contact whatever their
   own values are. An anonymous session without a usable email takes the most recent
   usable email of its tickets, and stores it: the service identifies it by its own
@@ -64,13 +67,12 @@ from django.db.models import (
     When,
 )
 
+from apps.organizations.models import is_end_user_account
+
 BATCH_SIZE = 1000
 
 _EMAIL_MAX = 254
 _NAME_MAX = 255
-
-# ``organizations.models.User.Role.END_USER``, as of this migration.
-_END_USER = "end_user"
 
 # ``organizations.models.RESERVED_EXTERNAL_ID_PREFIXES``, as of this migration.
 _RESERVED_PREFIXES = ("email:", "company\n")
@@ -128,8 +130,23 @@ def _ticket_identity(
     return _identity("", email)
 
 
-def _is_customer(org_id, role: str | None, account_org_id) -> bool:
-    return role == _END_USER and account_org_id in (None, org_id)
+def _is_customer(
+    org_id, role: str | None, is_superuser: bool | None, account_org_id
+) -> bool:
+    return is_end_user_account(role, is_superuser) and account_org_id in (None, org_id)
+
+
+def _is_own_staff_email(
+    email: str, account_email: str | None, role: str | None, is_superuser: bool | None
+) -> bool:
+    """Tell if a ticket's email is only that of the staff member who filed it."""
+    email = clean_email(email)
+    return (
+        bool(email)
+        and role is not None
+        and not is_end_user_account(role, is_superuser)
+        and email == clean_email(account_email)
+    )
 
 
 def _lookup(Contact, keys) -> dict[tuple, tuple]:
@@ -226,11 +243,21 @@ def _emails_from_tickets(Ticket, session_ids: list) -> dict:
         )
         .exclude(requester_email="")
         .order_by("widget_session_id", "-created_at")
-        .values_list("widget_session_id", "requester_email")
+        .values_list(
+            "widget_session_id",
+            "requester_email",
+            "requester__email",
+            "requester__role",
+            "requester__is_superuser",
+        )
     )
     emails: dict = {}
-    for session_id, email in rows.iterator(chunk_size=BATCH_SIZE):
-        if session_id not in emails and (email := clean_email(email)):
+    for session_id, email, *account in rows.iterator(chunk_size=BATCH_SIZE):
+        if (
+            session_id not in emails
+            and not _is_own_staff_email(email, *account)
+            and (email := clean_email(email))
+        ):
             emails[session_id] = email
     return emails
 
@@ -307,6 +334,7 @@ def _link_tickets_without_session(Contact, Ticket, created: set, vouched: set) -
             "widget_session__email",
             "requester__email",
             "requester__role",
+            "requester__is_superuser",
             "requester__organization_id",
         )
     )
@@ -322,17 +350,20 @@ def _link_tickets_without_session(Contact, Ticket, created: set, vouched: set) -
             session_email,
             account_email,
             role,
+            is_superuser,
             account_org_id,
         ) in batch:
             has_session = session_org_id == org_id
             # Its session has a usable email and no contact: that one is anonymized.
             if has_session and clean_email(session_email):
                 continue
+            if _is_own_staff_email(email, account_email, role, is_superuser):
+                email = ""
             identity = _ticket_identity(org_id, external_id, email, vouched)
             if (
                 identity is None
                 and not has_session
-                and _is_customer(org_id, role, account_org_id)
+                and _is_customer(org_id, role, is_superuser, account_org_id)
             ):
                 identity = _identity("", account_email)
             identities[pk] = identity
@@ -350,7 +381,8 @@ def _fill_new_contacts(
     Rows come latest first: the first usable value of a contact is the one it keeps.
     A session's name wins over a ticket's, and a session's email was declared already.
     A ticket without a name gives its requester's, if that account holds the contact's
-    email: an account says nothing of another address, or of an identified contact.
+    email: an account says nothing of another address, or of an identified contact. A
+    ticket with the email of the staff member who filed it gives neither.
     """
     fields = ("name", "declared_email", "first_seen_at", "last_seen_at")
     contacts = Contact.objects.filter(pk__in=contact_ids).only(
@@ -386,6 +418,7 @@ def _fill_new_contacts(
             "requester_email",
             "requester__email",
             "requester__role",
+            "requester__is_superuser",
             "requester__organization_id",
             "requester__first_name",
             "requester__last_name",
@@ -400,20 +433,23 @@ def _fill_new_contacts(
         email,
         account_email,
         role,
+        is_superuser,
         account_org_id,
         first_name,
         last_name,
     ) in tickets.iterator(chunk_size=BATCH_SIZE):
         contact = contacts[contact_id]
         seen(contact, created_at, created_at)
-        if not (external_id and (org_id, external_id) not in vouched):
+        if not (external_id and (org_id, external_id) not in vouched) and not (
+            _is_own_staff_email(email, account_email, role, is_superuser)
+        ):
             contact.name = contact.name or name.strip()
             if contact.external_id and not contact.declared_email:
                 contact.declared_email = clean_email(email)
         if (
             not contact.name
             and contact.email
-            and _is_customer(org_id, role, account_org_id)
+            and _is_customer(org_id, role, is_superuser, account_org_id)
             and clean_email(account_email) == contact.email
         ):
             contact.name = f"{first_name} {last_name}".strip()[:_NAME_MAX]

@@ -14,6 +14,7 @@ from rest_framework.test import APIClient
 
 from apps.contacts.gdpr import anonymize_contact
 from apps.contacts.models import Contact
+from apps.contacts.services import resolve_contact_for_ticket
 from apps.notifications.signals import (
     notify_message_deleted,
     notify_new_message,
@@ -584,6 +585,44 @@ class TestCreateResolvesTheContact:
         assert requested.contact is None
         assert named.contact is None
         assert not Contact.objects.exists()
+
+    def test_not_from_a_superuser_whatever_the_role(
+        self, authenticated_client, organization
+    ):
+        superuser = EndUserFactory(organization=organization, is_superuser=True)
+        _, by_account = self._post(authenticated_client, requester=str(superuser.id))
+        _, by_address = self._post(
+            authenticated_client,
+            requester=str(superuser.id),
+            requester_email=superuser.email,
+        )
+        _, named = self._post(authenticated_client, requester_email=superuser.email)
+        assert by_account.contact is None
+        assert by_address.contact is None
+        assert named.contact is None
+        assert not Contact.objects.exists()
+
+    def test_not_from_the_own_address_of_staff_elsewhere(
+        self, authenticated_client, organization
+    ):
+        """Staff of another organization or none: the account's own email says it."""
+        ticket = TicketFactory(
+            organization=organization,
+            requester=UserFactory(organization=None, email="root@x.io"),
+            requester_email="root@x.io",
+        )
+
+        assert resolve_contact_for_ticket(ticket) is None
+        assert not Contact.objects.exists()
+
+    def test_a_superuser_can_file_for_a_customer(self, organization):
+        ticket = TicketFactory(
+            organization=organization,
+            requester=EndUserFactory(organization=organization, is_superuser=True),
+            requester_email="c@x.io",
+        )
+
+        assert resolve_contact_for_ticket(ticket).email == "c@x.io"
 
     def test_an_agent_can_file_for_a_customer(self, authenticated_client, agent):
         _, ticket = self._post(

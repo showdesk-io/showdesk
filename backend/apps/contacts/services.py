@@ -55,10 +55,11 @@ from apps.organizations.models import (
     RESERVED_EXTERNAL_ID_PREFIXES,
     User,
     extract_email_domain,
+    is_end_user_account,
     is_public_email_domain,
 )
 
-from .attributes import clean_attributes, is_storable
+from .attributes import clean_attributes, is_storable, merged_attributes
 from .models import Company, CompanyAttributeDef, Contact, ContactAttributeDef
 
 _EMAIL_MAX = Contact._meta.get_field("email").max_length
@@ -159,13 +160,6 @@ def _save_changes(instance: models.Model, changed: set[str]) -> None:
     instance.save(update_fields=fields)
 
 
-def _merged_attributes(stored: Any, cleaned: dict[str, Any]) -> Any:
-    """Return ``stored`` updated with ``cleaned``. Nothing cleaned changes nothing."""
-    if not cleaned:
-        return stored
-    return {**(stored if isinstance(stored, dict) else {}), **cleaned}
-
-
 def _email_taken(organization, email: str) -> bool:
     return Contact.objects.filter(organization=organization, email=email).exists()
 
@@ -229,22 +223,26 @@ def resolve_contact_for_ticket(ticket) -> Contact | None:
 
     It goes by the ticket's email, or else its requester's when that's an end-user
     account not belonging to another organization. Either way it's only declared. An
-    agent or admin of the organization never becomes a contact, by account or address.
+    agent, admin or superuser never becomes a contact: by account, by the email of the
+    account filing the ticket, or by the address of one in the organization.
     """
     organization_id = ticket.organization_id
-    account = ticket.requester
-    if account is not None and (
-        account.role != User.Role.END_USER
-        or account.organization_id not in (None, organization_id)
-    ):
-        account = None
     email = _clean_email(ticket.requester_email)
+    account = ticket.requester
+    if account is not None and not is_end_user_account(
+        account.role, account.is_superuser
+    ):
+        if email == _clean_email(account.email):
+            return None
+        account = None
+    if account is not None and account.organization_id not in (None, organization_id):
+        account = None
     account_email = _clean_email(account.email) if account else ""
     email = email or account_email
     if (
         not email
         or User.objects.filter(organization_id=organization_id, email__iexact=email)
-        .exclude(role=User.Role.END_USER)
+        .exclude(role=User.Role.END_USER, is_superuser=False)
         .exists()
     ):
         return None
@@ -423,7 +421,7 @@ def _resolve_session_once(
         _set(
             contact,
             changed,
-            attributes=_merged_attributes(
+            attributes=merged_attributes(
                 contact.attributes, clean_attributes(defs, traits)
             ),
         )
