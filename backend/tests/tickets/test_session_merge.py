@@ -21,10 +21,15 @@ def _drop_constraint():
         cursor.execute("DROP INDEX unique_widget_session_external_user_per_org")
 
 
-def _session(org, age_days: int = 0, **kwargs) -> WidgetSession:
+def _session(org, age_days: int = 0, seen_days: int | None = None, **kwargs):
+    """Create a session, last seen ``seen_days`` ago (by default when it was created)."""
     session = WidgetSession.objects.create(organization=org, **kwargs)
-    created_at = timezone.now() - timedelta(days=age_days)
-    WidgetSession.objects.filter(pk=session.pk).update(created_at=created_at)
+    now = timezone.now()
+    WidgetSession.objects.filter(pk=session.pk).update(
+        created_at=now - timedelta(days=age_days),
+        last_seen_at=now - timedelta(days=age_days if seen_days is None else seen_days),
+    )
+    session.refresh_from_db()
     return session
 
 
@@ -55,7 +60,54 @@ class TestMergeDuplicateSessions:
         assert other_ticket.widget_session == oldest
         assert message.widget_session == oldest
 
-    def test_kept_session_takes_what_it_lacks_from_the_most_recent(self):
+    def test_kept_session_takes_the_values_of_the_most_recently_seen(self):
+        org = OrganizationFactory()
+        oldest = _session(
+            org, age_days=3, external_user_id="u1", name="A", email="a@x.io"
+        )
+        proven_at = timezone.now()
+        newest = _session(
+            org,
+            age_days=1,
+            external_user_id="u1",
+            name="B",
+            email="b@x.io",
+            email_verified_at=proven_at,
+        )
+        merge_duplicate_sessions(django_apps, None)
+        oldest.refresh_from_db()
+        assert (oldest.name, oldest.email) == ("B", "b@x.io")
+        assert oldest.email_verified_at == proven_at
+        assert oldest.last_seen_at == newest.last_seen_at
+
+    def test_recency_is_about_being_seen_not_being_created(self):
+        org = OrganizationFactory()
+        proven_at = timezone.now()
+        oldest = _session(
+            org,
+            age_days=3,
+            seen_days=1,
+            external_user_id="u1",
+            name="A",
+            email="a@x.io",
+            email_verified_at=proven_at,
+        )
+        seen_at = oldest.last_seen_at
+        _session(
+            org,
+            age_days=2,
+            seen_days=2,
+            external_user_id="u1",
+            name="B",
+            email="b@x.io",
+        )
+        merge_duplicate_sessions(django_apps, None)
+        oldest.refresh_from_db()
+        assert (oldest.name, oldest.email) == ("A", "a@x.io")
+        assert oldest.email_verified_at == proven_at
+        assert oldest.last_seen_at == seen_at
+
+    def test_blank_values_of_the_most_recently_seen_dont_win(self):
         org = OrganizationFactory()
         contact = ContactFactory(organization=org)
         proven_at = timezone.now()
@@ -69,30 +121,28 @@ class TestMergeDuplicateSessions:
             contact=contact,
             email_verified_at=proven_at,
         )
-        _session(org, age_days=1, external_user_id="u1", name="New")
+        newest = _session(org, age_days=1, external_user_id="u1", name="  ")
         merge_duplicate_sessions(django_apps, None)
         oldest.refresh_from_db()
-        assert oldest.name == "New"
+        assert oldest.name == "Old"
         assert oldest.email == "old@x.io"
         assert oldest.email_verified_at == proven_at
         assert oldest.contact == contact
+        assert oldest.last_seen_at == newest.last_seen_at
 
-    def test_kept_session_keeps_its_own_values_and_its_proof_applies_to_them(self):
+    def test_a_proof_doesnt_outlive_the_email_it_was_about(self):
         org = OrganizationFactory()
         oldest = _session(
-            org, age_days=3, external_user_id="u1", name="A", email="a@x.io"
-        )
-        _session(
             org,
-            age_days=1,
+            age_days=3,
             external_user_id="u1",
-            name="B",
-            email="b@x.io",
+            email="a@x.io",
             email_verified_at=timezone.now(),
         )
+        _session(org, age_days=1, external_user_id="u1", email="b@x.io")
         merge_duplicate_sessions(django_apps, None)
         oldest.refresh_from_db()
-        assert (oldest.name, oldest.email) == ("A", "a@x.io")
+        assert oldest.email == "b@x.io"
         assert oldest.email_verified_at is None
 
     def test_leaves_everything_else_alone(self):

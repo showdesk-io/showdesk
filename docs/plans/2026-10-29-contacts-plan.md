@@ -1743,7 +1743,7 @@ In `widget_submit`, after `serializer.save(...)`:
 
 The function takes `(apps, schema_editor)` so it can be unit-tested with the real registry.
 
-The back-fill follows `tickets/0011_one_widget_session_per_external_user`, which merges duplicate sessions (`apps/tickets/session_merge.py`: the oldest stays, the others' tickets and messages move to it) and then adds the partial unique constraint on `(organization, external_user_id)`. It must depend on that migration, so it only sees merged sessions. That migration runs `SET CONSTRAINTS ALL IMMEDIATE` between the merge and the constraint: otherwise Postgres refuses to build the index on a table with pending deferred foreign key checks.
+The back-fill follows `tickets/0011_one_widget_session_per_external_user`, which merges duplicate sessions (`apps/tickets/session_merge.py`: the oldest stays, the others' tickets and messages move to it, and it takes the name, email with its proof, contact and `last_seen_at` of the most recently seen session having them) and then adds the partial unique constraint on `(organization, external_user_id)`. It must depend on that migration, so it only sees merged sessions. That migration runs `SET CONSTRAINTS ALL IMMEDIATE` between the merge and the constraint: otherwise Postgres refuses to build the index on a table with pending deferred foreign key checks.
 
 An email that normalizes to nothing is no email: `for_email` would otherwise match an arbitrary blank-email contact (typically an identified one), so such a row is skipped and stays without a contact.
 
