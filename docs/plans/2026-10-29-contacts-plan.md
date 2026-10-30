@@ -2833,4 +2833,5 @@ Table: label, key (monospace), type, options, archived toggle. Admin-only form: 
 5. Manual smoke with `make dev`: Contacts page, create a contact, a widget session with `data-user-*` attributes creates/updates a contact, the ticket card links to it.
 6. Use superpowers:requesting-code-review; address findings.
 7. Push `feat/contacts`; open a PR → `develop` titled `feat: contacts and companies` with summary, migration note (back-fill runs during the deploy migrate step), test instructions for the development environment, the `CONTRIBUTING.md` checklist, and the Claude Code attribution line.
-8. `docker stop showdesk-test-pg showdesk-test-redis`.
+8. Post-deploy, in the release notes: pods still running the old code keep writing rows without a contact after the back-fill migration. Once none is left, run `python manage.py backfill_contacts` once. It runs the same idempotent function, on the rows still unlinked and only there. Don't run it later: it would also link again a ticket whose contact an agent cleared.
+9. `docker stop showdesk-test-pg showdesk-test-redis`.

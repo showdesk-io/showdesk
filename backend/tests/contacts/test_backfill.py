@@ -1,11 +1,13 @@
 """Back-fill of contacts from existing widget sessions and tickets."""
 
 from datetime import timedelta
+from io import StringIO
 from unittest import mock
 
 import pytest
 from django.apps import apps as django_apps
-from django.db import connection
+from django.core.management import call_command
+from django.db import OperationalError, connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -841,6 +843,47 @@ def test_batches_cover_every_row(monkeypatch):
     _reload(*sessions, *tickets)
     assert all(row.contact_id for row in [*sessions, *tickets])
     assert Contact.objects.filter(organization=org).count() == 10
+
+
+@pytest.mark.django_db
+class TestCommand:
+    def _call(self):
+        out = StringIO()
+        call_command("backfill_contacts", stdout=out)
+        return out.getvalue()
+
+    def test_links_what_old_pods_wrote_after_the_migration(self):
+        org = OrganizationFactory()
+        session = _session(org, external_user_id="u1", email="a@x.io")
+        _run()
+        session.refresh_from_db()
+        later = _ticket(org, widget_session=session)
+        standalone = _ticket(org, requester_email="b@x.io")
+        assert "1 contact" in self._call()
+        _reload(later, standalone)
+        assert later.contact == session.contact
+        assert standalone.contact.email == "b@x.io"
+
+    def test_is_idempotent_and_writes_no_existing_contact(self):
+        org = OrganizationFactory()
+        _ticket(org, requester_email="a@x.io")
+        self._call()
+        snapshot = list(Contact.objects.order_by("pk").values())
+        assert "0 contact" in self._call()
+        assert list(Contact.objects.order_by("pk").values()) == snapshot
+
+    def test_a_failure_leaves_nothing_behind(self):
+        org = OrganizationFactory()
+        _ticket(org, requester_email="a@x.io")
+        with (
+            mock.patch(
+                "apps.contacts.backfill._fill_new_contacts",
+                side_effect=OperationalError,
+            ),
+            pytest.raises(OperationalError),
+        ):
+            self._call()
+        assert not Contact.objects.filter(organization=org).exists()
 
 
 @pytest.mark.django_db(transaction=True)
