@@ -255,7 +255,8 @@ showing the channel.
 - **Signed email** (`email_hash`, delivered with Contacts): the session is
   verified on init.
 - **One-time code**: when a session has a declared but unproven email and the
-  matching Contact has tickets outside this session, the widget offers
+  Contact owning it in `Contact.email` has tickets outside this session, the
+  widget offers
   "You have N email conversations — get a code to see them". Six-digit code
   via the existing `OTPCode` (expiry, attempt limit, throttling).
 - Proof is stored **per session** (`WidgetSession.email_verified_at`); a
@@ -263,6 +264,12 @@ showing the channel.
 - Widget history = session tickets ∪ `external_user_id` tickets (unchanged) ∪
   the Contact's tickets **if** the session is email-verified or identified by
   HMAC on that Contact.
+- History through an HMAC-identified Contact relies on `Contact.email` being
+  proven only (or set by an agent): an identified session's unproven email goes to
+  `Contact.declared_email`, so forging somebody's address can never attach their
+  email-born tickets to the forger's Contact. `declared_email` is never used to
+  match a Contact, to send mail or to open history. The rule is in the Contacts
+  design, §3.
 
 ---
 

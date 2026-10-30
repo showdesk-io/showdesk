@@ -4,7 +4,7 @@
 
 **Goal:** Add org-scoped `Contact` / `Company` records (with custom attributes, notes, GDPR export/anonymize) and link every widget session and ticket to a Contact, as specified in `docs/plans/2026-10-29-contacts-design.md`.
 
-**Architecture:** New Django app `apps.contacts` (models, one identity service module, DRF viewsets, one Celery task). Existing widget endpoints in `apps/tickets/views.py` call the identity service; a data migration back-fills contacts. Frontend gets API modules, React Query hooks, Contacts/Companies pages, a ticket sidebar card and two settings tabs. The widget forwards an optional `email_hash`, `traits` and `company`.
+**Architecture:** New Django app `apps.contacts` (models, one identity service module, DRF viewsets, one Celery task). Existing widget endpoints in `apps/tickets/views.py` call the identity service; a data migration back-fills contacts. Frontend gets API modules, React Query hooks, Contacts/Companies pages, a ticket sidebar card and two settings tabs. The widget forwards an optional `email_hash`, `company_hash`, `traits` and `company`.
 
 **Tech Stack:** Django 6.1, DRF, django-filter, Celery, pytest + factory_boy; React 19, TypeScript, React Query, React Router 8, Tailwind 4, Vitest; widget in vanilla TS.
 
@@ -657,6 +657,8 @@ def clean_attributes(definitions, values: dict[str, Any]) -> dict[str, Any]:
 
 Rules from design §3. The service never merges two existing contacts.
 
+> **Superseded after the identity review.** The snippets below are the first version. `backend/apps/contacts/services.py` and its tests are authoritative: `declared_email`, `company_verified`, row locks, `update_fields`. Later tasks are written against that version: `resolve_contact_for_widget_session(session, *, email_verified, traits, company, company_verified)`.
+
 **Step 1: Failing tests**
 
 ```python
@@ -957,11 +959,13 @@ def resolve_contact_for_widget_session(
 
 ---
 
-### Task 6: `email_hash` verification on Organization
+### Task 6: `email_hash` and `company_hash` verification on Organization
 
 **Files:**
 - Modify: `backend/apps/organizations/models.py` (next to `verify_user_hash`, ~line 278)
 - Test: `backend/tests/organizations/test_models.py` (append)
+
+Each hash signs a prefixed message, so hashes aren't interchangeable with `user_hash` or with each other: `HMAC(secret, "email:" + lowercase(email))` and `HMAC(secret, "company:" + id)`.
 
 **Step 1: Failing tests**
 
@@ -970,10 +974,14 @@ import hashlib
 import hmac
 
 
+def _sign(message: bytes) -> str:
+    return hmac.new(b"s3cret", message, hashlib.sha256).hexdigest()
+
+
 @pytest.mark.django_db
 def test_verify_email_hash_is_case_insensitive():
     org = OrganizationFactory(widget_secret="s3cret")
-    good = hmac.new(b"s3cret", b"alice@startup.com", hashlib.sha256).hexdigest()
+    good = _sign(b"email:alice@startup.com")
     assert org.verify_email_hash("Alice@Startup.com", good)
     assert not org.verify_email_hash("bob@startup.com", good)
     assert not org.verify_email_hash("alice@startup.com", "")
@@ -983,6 +991,26 @@ def test_verify_email_hash_is_case_insensitive():
 def test_verify_email_hash_without_secret():
     org = OrganizationFactory(widget_secret="")
     assert not org.verify_email_hash("a@b.io", "anything")
+
+
+@pytest.mark.django_db
+def test_verify_company_hash():
+    org = OrganizationFactory(widget_secret="s3cret")
+    good = _sign(b"company:c1")
+    assert org.verify_company_hash("c1", good)
+    assert not org.verify_company_hash("c2", good)
+    assert not org.verify_company_hash("c1", "")
+    assert not OrganizationFactory(widget_secret="").verify_company_hash("c1", good)
+
+
+@pytest.mark.django_db
+def test_hashes_are_not_interchangeable():
+    org = OrganizationFactory(widget_secret="s3cret")
+    assert not org.verify_email_hash("a@b.io", _sign(b"a@b.io"))
+    assert not org.verify_company_hash("c1", _sign(b"c1"))
+    assert not org.verify_company_hash("c1", _sign(b"email:c1"))
+    assert not org.verify_email_hash("c1", _sign(b"company:c1"))
+    assert not org.verify_user_hash("a@b.io", _sign(b"email:a@b.io"))
 ```
 
 **Step 2:** FAIL (`AttributeError`).
@@ -991,13 +1019,19 @@ def test_verify_email_hash_without_secret():
 
 ```python
     def verify_email_hash(self, email: str, email_hash: str) -> bool:
-        """Verify HMAC-SHA256(widget_secret, lowercase email) from the host app."""
+        """Verify HMAC-SHA256(widget_secret, "email:" + lowercase email)."""
         if not self.widget_secret or not email or not email_hash:
             return False
-        return self.verify_user_hash(email.strip().lower(), email_hash)
+        return self.verify_user_hash(f"email:{email.strip().lower()}", email_hash)
+
+    def verify_company_hash(self, company_id: str, company_hash: str) -> bool:
+        """Verify HMAC-SHA256(widget_secret, "company:" + company id)."""
+        if not self.widget_secret or not company_id or not company_hash:
+            return False
+        return self.verify_user_hash(f"company:{company_id}", company_hash)
 ```
 
-**Step 4:** PASS. **Step 5: Commit** — `feat(backend): verify host-signed widget emails`
+**Step 4:** PASS. **Step 5: Commit** — `feat(backend): verify host-signed widget emails and companies`
 
 ---
 
@@ -1014,12 +1048,14 @@ Read `tests/tickets/test_widget_session.py`, `test_widget_identity.py` and `test
 ```python
 import hashlib
 import hmac
+from unittest import mock
 
 import pytest
+from django.db import IntegrityError
 
 from apps.contacts.models import Contact
 from apps.tickets.models import Ticket, WidgetSession
-from tests.factories import ContactFactory, OrganizationFactory
+from tests.factories import CompanyFactory, ContactFactory, OrganizationFactory
 
 pytestmark = pytest.mark.django_db
 URL = "/api/v1/tickets/widget_session/"
@@ -1047,6 +1083,8 @@ def test_identified_session_creates_contact(api_client, org):
     assert res.status_code == 201
     session = WidgetSession.objects.get(id=res.data["session_id"])
     assert session.contact.external_id == "u1"
+    assert session.contact.email == ""
+    assert session.contact.declared_email == "alice@startup.com"
     assert session.contact.email_verified_at is None
 
 
@@ -1054,11 +1092,17 @@ def test_signed_email_verifies_contact(api_client, org):
     res = _post(
         api_client, org,
         external_user_id="u1", user_hash=_sign("s3cret", "u1"),
-        email="alice@startup.com", email_hash=_sign("s3cret", "alice@startup.com"),
+        email="alice@startup.com", email_hash=_sign("s3cret", "email:alice@startup.com"),
     )
     session = WidgetSession.objects.get(id=res.data["session_id"])
     assert session.email_verified_at is not None
+    assert session.contact.email == "alice@startup.com"
     assert session.contact.email_verified_at is not None
+
+
+def test_user_hash_of_the_email_does_not_prove_it(api_client, org):
+    res = _post(api_client, org, email="alice@startup.com", email_hash=_sign("s3cret", "alice@startup.com"))
+    assert WidgetSession.objects.get(id=res.data["session_id"]).email_verified_at is None
 
 
 def test_forged_email_hash_is_ignored_not_rejected(api_client, org):
@@ -1075,6 +1119,77 @@ def test_company_is_stored_for_identified(api_client, org):
     )
     contact = WidgetSession.objects.get(id=res.data["session_id"]).contact
     assert contact.company.name == "Startup Inc"
+    assert contact.company.domain == ""  # Unsigned, and no proven email.
+
+
+def test_signed_company_is_upserted_and_forged_hash_is_not(api_client, org):
+    company = CompanyFactory(organization=org, external_id="c1", name="Old")
+    identity = {"external_user_id": "u2", "user_hash": _sign("s3cret", "u2")}
+    payload = {"id": "c1", "name": "New"}
+    _post(api_client, org, **identity, company=payload, company_hash="forged")
+    company.refresh_from_db()
+    assert company.name == "Old"
+    _post(
+        api_client, org, **identity,
+        company=payload, company_hash=_sign("s3cret", "company:c1"),
+    )
+    company.refresh_from_db()
+    assert company.name == "New"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"email": ["a@x.io"]},
+        {"email": "not-an-email"},
+        {"email": "x" * 250 + "@x.io"},
+        {"name": {"a": 1}},
+        {"name": "n" * 256},
+        {"external_user_id": 42, "user_hash": "x"},
+        {"external_user_id": "x" * 256, "user_hash": "x"},
+        {"user_hash": ["x"]},
+        {"email_hash": 1},
+        {"email_hash": "é"},
+        {"company_hash": {"a": 1}},
+        {"company_hash": "x" * 129},
+    ],
+)
+def test_malformed_identity_is_refused_before_touching_the_session(api_client, org, body):
+    session = WidgetSession.objects.create(organization=org, email="a@x.io", name="A")
+    res = api_client.patch(
+        URL, body, format="json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token), HTTP_X_WIDGET_SESSION=str(session.id),
+    )
+    assert res.status_code == 400
+    session.refresh_from_db()
+    assert (session.email, session.name) == ("a@x.io", "A")
+    assert _post(api_client, org, **body).status_code == 400
+    assert WidgetSession.objects.filter(organization=org).count() == 1
+
+
+def test_patch_changing_the_email_clears_its_verification(api_client, org):
+    res = _post(
+        api_client, org,
+        email="alice@x.io", email_hash=_sign("s3cret", "email:alice@x.io"),
+    )
+    session_id = res.data["session_id"]
+    api_client.patch(
+        URL, {"email": "ALICE@x.io"}, format="json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token), HTTP_X_WIDGET_SESSION=session_id,
+    )
+    assert WidgetSession.objects.get(id=session_id).email_verified_at is not None
+    api_client.patch(
+        URL, {"email": "other@x.io"}, format="json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token), HTTP_X_WIDGET_SESSION=session_id,
+    )
+    assert WidgetSession.objects.get(id=session_id).email_verified_at is None
+
+
+def test_second_integrity_error_never_breaks_widget_init(api_client, org):
+    with mock.patch(
+        "apps.tickets.views.resolve_contact_for_widget_session", side_effect=IntegrityError
+    ):
+        assert _post(api_client, org, email="a@x.io").status_code == 201
 
 
 def test_patch_email_links_contact(api_client, org):
@@ -1125,28 +1240,89 @@ from apps.contacts.services import (
 )
 ```
 
+Identity fields are validated before the session is touched: a non-string (DRF's `CharField` would coerce numbers), a value too long for its column, an invalid email format or a non-ASCII hash (`hmac.compare_digest` raises `TypeError` on one) is a 400 and nothing is written. `external_user_id` isn't trimmed, since the HMAC covers its exact value. Put this serializer in `apps/tickets/serializers.py`:
+
+```python
+class StrictCharField(serializers.CharField):
+    """A CharField that refuses non-strings instead of coercing numbers."""
+
+    def to_internal_value(self, data):
+        if not isinstance(data, str):
+            self.fail("invalid")
+        return super().to_internal_value(data)
+
+
+class WidgetHashField(StrictCharField):
+    def __init__(self, **kwargs):
+        super().__init__(
+            required=False, allow_blank=True, max_length=128, trim_whitespace=False, **kwargs
+        )
+
+    def to_internal_value(self, data):
+        value = super().to_internal_value(data)
+        if not value.isascii():
+            self.fail("invalid")
+        return value
+
+
+class WidgetIdentitySerializer(serializers.Serializer):
+    name = StrictCharField(required=False, allow_blank=True, max_length=255)
+    email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
+    external_user_id = StrictCharField(
+        required=False, allow_blank=True, max_length=255, trim_whitespace=False
+    )
+    user_hash = WidgetHashField()
+    email_hash = WidgetHashField()
+    company_hash = WidgetHashField()
+```
+
+At the very start of `widget_session` (POST and PATCH), run `WidgetIdentitySerializer(data=request.data).is_valid(raise_exception=True)`.
+
+In the PATCH branch, when the email actually changes (compare lowercased, stripped values), also set `session.email_verified_at = None` and add it to the session's `update_fields`: the proof was about the previous email.
+
 Helper next to `_get_widget_session`:
 
 ```python
+def _company_hash_is_valid(org, company, company_hash) -> bool:
+    company_id = company.get("id") if isinstance(company, dict) else None
+    # Same values the service accepts as an id, without str() on a huge integer.
+    if type(company_id) is int and abs(company_id) < 2**63:
+        company_id = str(company_id)
+    return (
+        isinstance(company_id, str)
+        and bool(company_hash)
+        and org.verify_company_hash(company_id, company_hash)
+    )
+
+
 def _link_session_contact(request, org, session) -> None:
     """Resolve the session's contact from the widget init payload.
 
-    ``email_hash`` is optional: an invalid one is ignored (the email stays
-    merely declared) so a misconfigured host app never breaks the widget.
+    ``email_hash`` and ``company_hash`` are optional: an invalid one is ignored
+    (the value stays unsigned) so a misconfigured host app never breaks the
+    widget. For the same reason a conflict the service's retry couldn't settle
+    is logged, and the session goes on without a contact until the next init.
     """
     email_hash = request.data.get("email_hash", "")
     email_verified = bool(
         session.email and email_hash and org.verify_email_hash(session.email, email_hash)
     )
-    traits = request.data.get("traits")
     company = request.data.get("company")
-    resolve_contact_for_widget_session(
-        session,
-        email_verified=email_verified,
-        traits=traits if isinstance(traits, dict) else None,
-        company=company if isinstance(company, dict) else None,
-    )
+    try:
+        resolve_contact_for_widget_session(
+            session,
+            email_verified=email_verified,
+            traits=request.data.get("traits"),
+            company=company,
+            company_verified=_company_hash_is_valid(
+                org, company, request.data.get("company_hash", "")
+            ),
+        )
+    except IntegrityError:
+        logger.exception("Could not link widget session %s to a contact", session.pk)
 ```
+
+Import `IntegrityError` from `django.db` in `views.py`.
 
 In `widget_session`:
 - PATCH: after `session.save(...)` call `_link_session_contact(request, org, session)`.
@@ -1171,10 +1347,12 @@ In `widget_submit`, after `serializer.save(...)`:
 ### Task 8: Back-fill migration
 
 **Files:**
-- Create: `backend/apps/contacts/backfill.py`, `backend/apps/contacts/migrations/0003_backfill_contacts.py`
+- Create: `backend/apps/contacts/backfill.py`, `backend/apps/contacts/migrations/0004_backfill_contacts.py` (`0003_contact_declared_email` is the schema migration added by the identity review)
 - Test: `backend/tests/contacts/test_backfill.py`
 
 The function takes `(apps, schema_editor)` so it can be unit-tested with the real registry.
+
+Nothing in existing data is proven: emails of identified sessions and tickets go to `declared_email`, never to `email`, and nothing is marked verified. Otherwise the back-fill would hand out exactly the squatting the service now refuses.
 
 **Step 1: Failing tests**
 
@@ -1203,9 +1381,20 @@ def test_backfill_groups_by_external_id_then_email():
     for obj in (s1, t1, t2, t3):
         obj.refresh_from_db()
     assert s1.contact == t1.contact
-    assert (s1.contact.external_id, s1.contact.email) == ("u1", "a@x.io")
+    contact = s1.contact
+    assert (contact.external_id, contact.email, contact.declared_email) == ("u1", "", "a@x.io")
+    assert contact.email_verified_at is None
     assert t2.contact == t3.contact
+    assert t2.contact.email == "b@x.io"
     assert t2.contact.email_verified_at is None
+
+
+def test_backfill_ticket_of_an_external_id_declares_its_email():
+    org = OrganizationFactory()
+    ticket = TicketFactory(organization=org, external_user_id="u1", requester_email="A@x.io")
+    backfill(django_apps, None)
+    ticket.refresh_from_db()
+    assert (ticket.contact.email, ticket.contact.declared_email) == ("", "a@x.io")
 
 
 def test_backfill_is_idempotent():
@@ -1216,14 +1405,31 @@ def test_backfill_is_idempotent():
     assert Contact.objects.filter(organization=org).count() == 1
 
 
-def test_backfill_does_not_reuse_email_owned_by_other_external_id():
+def test_backfill_two_external_ids_can_declare_the_same_email():
     org = OrganizationFactory()
     WidgetSession.objects.create(organization=org, external_user_id="u1", email="d@x.io")
     WidgetSession.objects.create(organization=org, external_user_id="u2", email="d@x.io")
     backfill(django_apps, None)
-    emails = sorted(Contact.objects.filter(organization=org).values_list("email", flat=True))
-    assert emails == ["", "d@x.io"]
-```
+    contacts = Contact.objects.filter(organization=org)
+    assert sorted(contacts.values_list("email", "declared_email")) == [
+        ("", "d@x.io"),
+        ("", "d@x.io"),
+    ]
+
+
+def test_backfill_email_of_an_anonymous_session_stays_on_an_email_only_contact():
+    org = OrganizationFactory()
+    identified = WidgetSession.objects.create(
+        organization=org, external_user_id="u1", email="e@x.io"
+    )
+    anonymous = WidgetSession.objects.create(organization=org, email="e@x.io")
+    backfill(django_apps, None)
+    identified.refresh_from_db()
+    anonymous.refresh_from_db()
+    assert anonymous.contact != identified.contact
+    assert (anonymous.contact.email, anonymous.contact.external_id) == ("e@x.io", "")
+    assert anonymous.contact.email_verified_at is None
+
 
 **Step 2:** FAIL.
 
@@ -1250,13 +1456,10 @@ def backfill(apps, schema_editor) -> None:
         ).first()
         if contact:
             return contact
-        taken = bool(email) and Contact.objects.filter(
-            organization_id=org_id, email=email
-        ).exists()
         return Contact.objects.create(
             organization_id=org_id,
             external_id=external_id,
-            email="" if taken else email,
+            declared_email=email,
             name=name,
         )
 
@@ -1311,7 +1514,7 @@ from apps.contacts.backfill import backfill
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("contacts", "0002_<generated>"),
+        ("contacts", "0003_contact_declared_email"),
         ("tickets", "0010_<generated>"),
     ]
     operations = [migrations.RunPython(backfill, migrations.RunPython.noop)]
@@ -1328,11 +1531,13 @@ class Migration(migrations.Migration):
 - Modify: `backend/config/api_urls.py`
 - Test: `backend/tests/contacts/test_contacts_api.py`
 
-Endpoints: `GET/POST /api/v1/contacts/`, `GET/PATCH/DELETE /api/v1/contacts/{id}/` (DELETE admin only), `GET /contacts/{id}/tickets/`, `GET/POST /contacts/{id}/notes/`. Query params: `search` (name, email, external_id), `company`, `email_verified=true|false`, `last_seen_after`, `last_seen_before` (ISO datetimes; invalid values ignored), `attr.<key>=<value>`, `page`, `page_size` (≤ 100).
+Endpoints: `GET/POST /api/v1/contacts/`, `GET/PATCH/DELETE /api/v1/contacts/{id}/` (DELETE admin only), `GET /contacts/{id}/tickets/`, `GET/POST /contacts/{id}/notes/`. Query params: `search` (name, email, declared_email, external_id), `company`, `email_verified=true|false`, `last_seen_after`, `last_seen_before` (ISO datetimes; invalid values ignored), `attr.<key>=<value>`, `page`, `page_size` (≤ 100).
 
 **Step 1: Failing tests**
 
 ```python
+from datetime import timedelta
+
 import pytest
 from django.utils import timezone
 
@@ -1413,6 +1618,31 @@ def test_email_verified_is_read_only(authenticated_client, organization):
     assert contact.email_verified_at is None
 
 
+def test_declared_email_is_read_only_and_searchable(authenticated_client, organization):
+    contact = ContactFactory(organization=organization, email="", declared_email="d@x.io")
+    res = authenticated_client.patch(
+        f"{URL}{contact.id}/", {"declared_email": "other@x.io"}, format="json"
+    )
+    assert res.data["declared_email"] == "d@x.io"
+    contact.refresh_from_db()
+    assert contact.declared_email == "d@x.io"
+    rows = authenticated_client.get(URL, {"search": "d@x.io"}).data["results"]
+    assert [c["id"] for c in rows] == [str(contact.id)]
+
+
+def test_ordering_keeps_never_seen_contacts_last(authenticated_client, organization):
+    now = timezone.now()
+    never = ContactFactory(organization=organization, last_seen_at=None)
+    old = ContactFactory(organization=organization, last_seen_at=now - timedelta(days=1))
+    new = ContactFactory(organization=organization, last_seen_at=now)
+    for ordering, expected in (
+        ("-last_seen_at", [new, old, never]),
+        ("last_seen_at", [old, new, never]),
+    ):
+        rows = authenticated_client.get(URL, {"ordering": ordering}).data["results"]
+        assert [c["id"] for c in rows] == [str(c.id) for c in expected]
+
+
 def test_changing_email_clears_verification(authenticated_client, organization):
     contact = ContactFactory(organization=organization, email_verified_at=timezone.now())
     authenticated_client.patch(f"{URL}{contact.id}/", {"email": "other@x.io"}, format="json")
@@ -1481,7 +1711,7 @@ class ContactSummarySerializer(serializers.ModelSerializer):
     class Meta:
         model = Contact
         fields = [
-            "id", "display_name", "name", "email", "email_verified",
+            "id", "display_name", "name", "email", "email_verified", "declared_email",
             "avatar_url", "company_detail",
         ]
 
@@ -1512,14 +1742,14 @@ class ContactSerializer(serializers.ModelSerializer):
         model = Contact
         fields = [
             "id", "display_name", "name", "email", "email_verified",
-            "email_verified_at", "external_id", "phone", "avatar_url", "job_title",
+            "email_verified_at", "declared_email", "external_id", "phone", "avatar_url", "job_title",
             "locale", "timezone", "company", "company_detail", "first_seen_at",
             "last_seen_at", "last_contacted_at", "is_unsubscribed", "is_anonymized",
             "attributes", "tickets_count", "open_tickets_count", "created_at",
             "updated_at",
         ]
         read_only_fields = [
-            "id", "email_verified_at", "first_seen_at", "last_seen_at",
+            "id", "email_verified_at", "declared_email", "first_seen_at", "last_seen_at",
             "last_contacted_at", "is_anonymized", "created_at", "updated_at",
         ]
 
@@ -1577,10 +1807,11 @@ class ContactTicketSerializer(TicketListSerializer):
 `views.py`:
 
 ```python
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q
 from django.utils.dateparse import parse_datetime
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -1606,6 +1837,26 @@ def _parse_dt(value):
         return parse_datetime(value or "")
     except ValueError:
         return None
+
+
+class NullsLastOrderingFilter(OrderingFilter):
+    """``?ordering=`` in either direction, with NULLs last (Postgres puts them
+    first on DESC, which would list never-seen contacts on top of the list).
+    """
+
+    def filter_queryset(self, request, queryset, view):
+        ordering = self.get_ordering(request, queryset, view)
+        if not ordering:
+            return queryset
+        return queryset.order_by(
+            *(
+                F(field[1:]).desc(nulls_last=True)
+                if field.startswith("-")
+                else F(field).asc(nulls_last=True)
+                for field in ordering
+            ),
+            "id",
+        )
 
 
 def attribute_filters(params) -> dict:
@@ -1636,7 +1887,8 @@ class OrgScopedMixin:
 class ContactViewSet(OrgScopedMixin, viewsets.ModelViewSet):
     serializer_class = ContactSerializer
     pagination_class = DirectoryPagination
-    search_fields = ["name", "email", "external_id"]
+    filter_backends = [SearchFilter, NullsLastOrderingFilter]
+    search_fields = ["name", "email", "declared_email", "external_id"]
     ordering_fields = ["name", "email", "last_seen_at", "created_at"]
 
     def get_queryset(self):
@@ -1693,11 +1945,11 @@ An invalid `company` UUID must not 500: validate with `uuid.UUID(...)` and ignor
 - Modify: `backend/apps/contacts/serializers.py`, `views.py`, `backend/config/api_urls.py`
 - Test: `backend/tests/contacts/test_companies_api.py`
 
-**Step 1: Failing tests** (follow `test_contacts_api.py`): scoped list with `contacts_count` and `open_tickets_count`; search by name/domain; create lowercases domain, duplicate domain → 400; attributes validated against `CompanyAttributeDef` and merged on PATCH; `GET /companies/{id}/contacts/` lists its contacts; `GET /companies/{id}/tickets/` lists tickets of all its contacts; DELETE admin-only; other org → 404.
+**Step 1: Failing tests** (follow `test_contacts_api.py`): scoped list with `contacts_count` and `open_tickets_count`; search by name/domain; create lowercases domain, duplicate domain → 400, malformed domain (`"not a domain"`, `"https://x.io/"`) → 400; attributes validated against `CompanyAttributeDef` and merged on PATCH; `GET /companies/{id}/contacts/` lists its contacts; `GET /companies/{id}/tickets/` lists tickets of all its contacts; DELETE admin-only; other org → 404.
 
 **Step 2:** FAIL.
 
-**Step 3: Implement** `CompanySerializer` (all model fields + read-only `contacts_count`, `open_tickets_count`; `validate_domain` lowercases; `validate` enforces per-org uniqueness of `domain` and `external_id`; `validate_attributes` with `CompanyAttributeDef`) and:
+**Step 3: Implement** `CompanySerializer` (all model fields + read-only `contacts_count`, `open_tickets_count`; `validate_domain` strips, lowercases and format-checks with `django.core.validators.DomainNameValidator` (blank stays allowed); `validate` enforces per-org uniqueness of `domain` and `external_id`; `validate_attributes` with `CompanyAttributeDef`) and:
 
 ```python
 class CompanyViewSet(OrgScopedMixin, viewsets.ModelViewSet):
@@ -1804,7 +2056,8 @@ pytestmark = pytest.mark.django_db
 def test_anonymize_scrubs_contact_and_user_messages(organization, agent):
     contact = ContactFactory(
         organization=organization, name="Alice", email="alice@x.io",
-        external_id="u1", phone="+33", attributes={"plan": "pro"},
+        declared_email="other@x.io", external_id="u1", phone="+33",
+        attributes={"plan": "pro"},
     )
     session = WidgetSession.objects.create(
         organization=organization, contact=contact, email="alice@x.io",
@@ -1828,6 +2081,7 @@ def test_anonymize_scrubs_contact_and_user_messages(organization, agent):
     assert contact.is_anonymized
     assert contact.email.endswith("@example.invalid")
     assert (contact.name, contact.phone, contact.external_id) == ("Anonymized contact", "", "")
+    assert contact.declared_email == ""
     assert contact.attributes == {}
     assert (session.email, session.name, session.external_user_id) == ("", "", "")
     assert ticket.requester_email == contact.email
@@ -1860,6 +2114,8 @@ from django.db import transaction
 
 from apps.tickets.models import TicketMessage
 
+from .models import Contact
+
 REMOVED_BODY = "[Content removed at the contact's request]"
 KEPT_CONTEXT_KEYS = {"browser", "os", "language", "timezone", "screen_resolution"}
 
@@ -1867,7 +2123,12 @@ KEPT_CONTEXT_KEYS = {"browser", "os", "language", "timezone", "screen_resolution
 @transaction.atomic
 def anonymize_contact(contact) -> None:
     """Irreversibly strip personal data while keeping ticket structure."""
+    # Same row lock as the identity service, which checks ``is_anonymized`` under
+    # it: without this, a widget session resolving at the same time could save
+    # the personal data back over the anonymized row. Work on the row just read.
+    contact = Contact.objects.select_for_update().get(pk=contact.pk)
     contact.email = f"anonymized-{uuid.uuid4().hex}@example.invalid"
+    contact.declared_email = ""
     contact.name = "Anonymized contact"
     contact.phone = ""
     contact.external_id = ""
@@ -1908,6 +2169,8 @@ Action on `ContactViewSet`:
         return Response(self.get_serializer(self.get_queryset().get(pk=contact.pk)).data)
 ```
 
+Add a `transaction=True` test next to `tests/contacts/test_services_concurrency.py`: while a second connection holds the contact's row, `anonymize_contact` blocks, and afterwards the row is anonymized.
+
 **Step 4:** PASS. **Step 5: Commit** — `feat(backend): anonymize contacts (GDPR art. 17)`
 
 ---
@@ -1923,7 +2186,7 @@ Action on `ContactViewSet`:
 
 **Step 1: Failing tests**
 - `send_branded_email(..., attachments=[("a.zip", b"PK", "application/zip")])` → `mail.outbox[0].attachments == [("a.zip", b"PK", "application/zip")]`.
-- `build_contact_export(contact)` returns ZIP bytes with `contact.json` (profile, attributes, notes), `tickets.json` (tickets + public replies + attachment metadata; an internal note's body must be absent), `tickets.csv` (header `reference,title,status,created_at,resolved_at`).
+- `build_contact_export(contact)` returns ZIP bytes with `contact.json` (profile including `declared_email`, attributes, notes), `tickets.json` (tickets + public replies + attachment metadata; an internal note's body must be absent), `tickets.csv` (header `reference,title,status,created_at,resolved_at`).
 - `POST /contacts/{id}/export/` as admin with `settings.CELERY_TASK_ALWAYS_EAGER = True` → 202, one email to the admin, subject `Contact export ready`, one zip attachment; as agent → 403.
 
 **Step 3: Implement**
@@ -1971,15 +2234,20 @@ Action: `require_org_admin`, `export_contact_data.delay(str(contact.id), str(req
 - Modify: `backend/apps/tickets/serializers.py` (`TicketSerializer` ~180, `TicketListSerializer` ~246), `backend/apps/tickets/views.py` (`TicketViewSet.get_queryset` ~148)
 - Test: `backend/tests/contacts/test_ticket_contact.py`
 
-**Step 1: Failing tests** — `GET /api/v1/tickets/{id}/` returns `contact` and `contact_detail` (`id, display_name, email, email_verified, company_detail`); list rows include `contact_detail`; `PATCH {"contact": <other org contact id>}` → 400.
+**Step 1: Failing tests** — `GET /api/v1/tickets/{id}/` returns `contact`, `contact_detail` (`id, display_name, email, email_verified, declared_email, company_detail`) and `sender_verified`; list rows include `contact_detail` and `sender_verified`; `PATCH {"contact": <other org contact id>}` → 400; `sender_verified`:
+- is read-only;
+- is true for a ticket of a session with `email_verified_at` set, and of a HMAC-identified session (`external_user_id` set), when the session's contact is the ticket's contact;
+- is false for a ticket of an unverified anonymous session, for a session linked to another contact, for no contact, and for a `widget_submit` ticket whose `requester_email` is a verified contact's address.
 
-**Step 3: Implement** — import `ContactSummarySerializer` from `apps.contacts.summary`; add `contact_detail = ContactSummarySerializer(source="contact", read_only=True)` and `"contact", "contact_detail"` to both `fields`; `validate_contact` rejects contacts of another organization (compare with `self.instance.organization_id`, or the active org passed in context on create); add `"contact__company"` to the queryset's `select_related`.
+`contact_detail.email_verified` only says the *contact* proved its email. A forged ticket can link to a verified contact (`widget_submit` and inbound email resolve from a declared address), so agents need `sender_verified` to know whether *this ticket's sender* proved anything.
+
+**Step 3: Implement** — import `ContactSummarySerializer` from `apps.contacts.summary`; add `contact_detail = ContactSummarySerializer(source="contact", read_only=True)`, `sender_verified = serializers.SerializerMethodField()` and `"contact", "contact_detail", "sender_verified"` to both `fields`; `get_sender_verified` returns `bool(session and ticket.contact_id and session.contact_id == ticket.contact_id and (session.email_verified_at or session.external_user_id))` with `session = ticket.widget_session` (the email channel adds the conversation link as a third way); `validate_contact` rejects contacts of another organization (compare with `self.instance.organization_id`, or the active org passed in context on create); add `"contact__company"` and `"widget_session"` to the queryset's `select_related`.
 
 **Step 4:** full suite PASS. **Step 5: Commit** — `feat(backend): expose contact on tickets`
 
 ---
 
-### Task 15: Widget forwards `email_hash`, `traits`, `company`
+### Task 15: Widget forwards `email_hash`, `company_hash`, `traits`, `company`
 
 **Files:**
 - Modify: `widget/src/types.ts`, `widget/src/widget.ts` (`buildUserFromDataAttrs` ~73), `widget/src/api/chat-api.ts` (`createOrResumeSession` ~25)
@@ -1994,7 +2262,7 @@ export interface ShowdeskUserIdentity {
   email?: string;
   /** HMAC-SHA256(widget_secret, id) — computed server-side, enables ticket history. */
   hash?: string;
-  /** HMAC-SHA256(widget_secret, lowercase email) — optional, proves the email. */
+  /** HMAC-SHA256(widget_secret, "email:" + lowercase email) — optional, proves the email. */
   emailHash?: string;
   /** Custom contact attributes (defined in Settings → Contact attributes). */
   traits?: Record<string, unknown>;
@@ -2005,6 +2273,8 @@ export interface ShowdeskCompany {
   name: string;
   domain?: string;
   traits?: Record<string, unknown>;
+  /** HMAC-SHA256(widget_secret, "company:" + id) — optional, lets the payload update the company. */
+  hash?: string;
 }
 ```
 
@@ -2013,12 +2283,16 @@ Add `company?: ShowdeskCompany;` to `ShowdeskConfig`; read `el.dataset["userEmai
 ```ts
   if (config.user?.emailHash) body.email_hash = config.user.emailHash;
   if (config.user?.traits) body.traits = config.user.traits;
-  if (config.company) body.company = config.company;
+  if (config.company) {
+    const { hash, ...company } = config.company;
+    body.company = company;
+    if (hash) body.company_hash = hash;
+  }
 ```
 
-Docs: `data-user-email-hash`, `init({ user: { emailHash, traits }, company })`, a server-side snippet computing both HMACs, and the note that `traits` / `company` are honoured only for HMAC-identified users.
+Docs: `data-user-email-hash`, `init({ user: { emailHash, traits }, company: { …, hash } })`, a server-side snippet computing the three HMACs with their prefixes (`user_hash` over the id, `email_hash` over `"email:" + lowercase(email)`, `company.hash` over `"company:" + id`), the note that `traits` / `company` are honoured only for HMAC-identified users, and what each signature unlocks: without `emailHash` an email stays declared; without `company.hash` a company can be created or linked once, never updated, and a contact is never moved.
 
-**Commit** — `feat(widget): send signed email, traits and company`
+**Commit** — `feat(widget): send signed email, signed company and traits`
 
 ---
 
@@ -2030,7 +2304,7 @@ Docs: `data-user-email-hash`, `init({ user: { emailHash, traits }, company })`, 
 - Create: `frontend/src/hooks/useContacts.ts`, `useCompanies.ts`, `useAttributeDefs.ts`
 - Test: `frontend/src/api/__tests__/contacts.test.ts` (or next to existing hook tests in `frontend/src/hooks/__tests__/`)
 
-Types: `Contact`, `ContactSummary`, `Company`, `CompanySummary`, `ContactNote`, `AttributeDef` (`type: "string" | "number" | "boolean" | "date" | "enum" | "url"`); add `contact: string | null; contact_detail: ContactSummary | null;` to both ticket types.
+Types: `Contact`, `ContactSummary`, `Company`, `CompanySummary`, `ContactNote`, `AttributeDef` (`type: "string" | "number" | "boolean" | "date" | "enum" | "url"`); `declared_email: string` on `Contact` and `ContactSummary`; add `contact: string | null; contact_detail: ContactSummary | null; sender_verified: boolean;` to both ticket types.
 
 API (mirror `api/tags.ts`): `fetchContacts(params)` → `PaginatedResponse<Contact>` with `search, company, email_verified, page, page_size` and `attrs: Record<string, string>` mapped to `attr.<key>`; `fetchContact`, `createContact`, `updateContact`, `deleteContact`, `fetchContactTickets`, `fetchContactNotes`, `createContactNote`, `exportContact`, `anonymizeContact`; companies: list/get/create/update/delete, `fetchCompanyContacts`, `fetchCompanyTickets`; `fetchAttributeDefs(entity)`, `createAttributeDef(entity, data)`, `updateAttributeDef(entity, id, data)`.
 
@@ -2051,7 +2325,7 @@ Run `npm test -- contacts` → FAIL, then PASS. **Commit** — `feat(frontend): 
 
 Behaviour:
 - Tabs "Contacts | Companies" driven by the route.
-- Contacts table: avatar (initials fallback), name, email + `UnverifiedBadge` when the email is set and not verified, company, last seen (relative), open tickets; row click → `/contacts/:id`.
+- Contacts table: avatar (initials fallback), name, email + `UnverifiedBadge` when the email is set and not verified, `declared_email` when set (always with `UnverifiedBadge`), company, last seen (relative), open tickets; row click → `/contacts/:id`.
 - Debounced (300 ms) search, company select (`useCompanies({ page_size: 100 })`), "Verified email only" checkbox, one select per non-archived `enum`/`boolean` attribute.
 - Pagination: 25/50/100 selector, previous/next from `count`.
 - "Add contact" modal (name, email); show field errors from a 400.
@@ -2070,7 +2344,7 @@ Run `npm test`, `npm run lint`. **Commit** — `feat(frontend): contacts and com
 - Test: `frontend/src/pages/__tests__/ContactDetailPage.test.tsx`
 
 Layout (`lg:grid-cols-4`):
-- Left: avatar, inline-editable name, email + verified/unverified badge, phone, company link, external id (read-only, monospace), `AttributeEditor` (typed inputs per non-archived def: text, number, checkbox, date, select, url; saves `updateContact({ attributes: { [key]: value } })`); admin-only "Export data" (toast "Export queued — you will receive it by email") and "Anonymize" (confirm modal requiring the contact's email to be typed; hidden when `is_anonymized`).
+- Left: avatar, inline-editable name, email + verified/unverified badge, read-only `declared_email` + unverified badge, phone, company link, external id (read-only, monospace), `AttributeEditor` (typed inputs per non-archived def: text, number, checkbox, date, select, url; saves `updateContact({ attributes: { [key]: value } })`); admin-only "Export data" (toast "Export queued — you will receive it by email") and "Anonymize" (confirm modal requiring the contact's email to be typed; hidden when `is_anonymized`).
 - Centre (2 cols): filter All / Tickets / Notes, "Add note" box, list sorted by date (tickets: reference, title, status badge, link; notes: author, body).
 - Right: total and open tickets, first/last seen, company plan and MRR, company link.
 
@@ -2099,7 +2373,9 @@ Left: logo, name, domain, website link, plan, MRR (`mrr_cents / 100`, no currenc
 - Modify: `frontend/src/components/tickets/TicketDetail.tsx` (the "Requester" block, ~line 970)
 - Test: `frontend/src/components/contacts/__tests__/ContactCard.test.tsx`
 
-When `ticket.contact_detail` exists: heading "Contact", name linking to `/contacts/:id`, email + `UnverifiedBadge`, company line (logo, name, plan) linking to `/companies/:id`, "Other tickets: N" from `useContactTickets` excluding the current ticket. Otherwise keep the current requester rendering.
+When `ticket.contact_detail` exists: heading "Contact", name linking to `/contacts/:id`, email + `UnverifiedBadge`, `declared_email` + `UnverifiedBadge` when set, company line (logo, name, plan) linking to `/companies/:id`, "Other tickets: N" from `useContactTickets` excluding the current ticket. When `ticket.sender_verified` is false, show an "Unverified sender" hint on the card, even if the contact's email is verified: a forged ticket can link to a verified contact. Otherwise keep the current requester rendering.
+
+Test: the hint shows for `sender_verified: false` with a verified contact, and not for `sender_verified: true`.
 
 **Commit** — `feat(frontend): contact card on ticket detail`
 
