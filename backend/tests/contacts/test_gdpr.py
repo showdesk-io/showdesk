@@ -1,18 +1,29 @@
 """Anonymization and export of a contact."""
 
+import csv
 import hashlib
 import hmac
+import io
+import json
+import zipfile
 from unittest import mock
 
 import pytest
+from django.core import mail
 from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import transaction
 from django.utils import timezone
 
-from apps.contacts.gdpr import REMOVED_BODY, REMOVED_TITLE, anonymize_contact
+from apps.contacts.gdpr import (
+    REMOVED_BODY,
+    REMOVED_TITLE,
+    anonymize_contact,
+    build_contact_export,
+)
 from apps.contacts.models import Contact
 from apps.contacts.services import resolve_contact_for_widget_session
+from apps.contacts.tasks import export_contact_data
 from apps.tickets.models import TicketAttachment, TicketMessage, WidgetSession
 from apps.videos.models import VideoRecording
 from tests.factories import (
@@ -24,6 +35,7 @@ from tests.factories import (
     TicketAttachmentFactory,
     TicketFactory,
     TicketMessageFactory,
+    UserFactory,
     VideoRecordingFactory,
 )
 
@@ -583,3 +595,258 @@ def test_an_anonymized_contact_can_no_longer_be_written_to(admin_client, organiz
         f"/api/v1/contacts/{contact.id}/", {"name": "Bob"}, format="json"
     )
     assert res.status_code == 409
+
+
+# Export: the archive
+
+
+def _read_export(contact) -> tuple[dict, list, list]:
+    with zipfile.ZipFile(io.BytesIO(build_contact_export(contact))) as archive:
+        assert sorted(archive.namelist()) == [
+            "contact.json",
+            "tickets.csv",
+            "tickets.json",
+        ]
+        rows = list(csv.reader(io.StringIO(archive.read("tickets.csv").decode())))
+        return (
+            json.loads(archive.read("contact.json")),
+            json.loads(archive.read("tickets.json")),
+            rows,
+        )
+
+
+def test_export_holds_the_profile(organization, agent):
+    company = CompanyFactory(organization=organization, name="Acme")
+    contact = ContactFactory(
+        organization=organization,
+        company=company,
+        name="Alice",
+        email="alice@x.io",
+        declared_email="other@x.io",
+        external_id="u1",
+        attributes={"plan": "pro"},
+    )
+    ContactNoteFactory(contact=contact, author=agent, body="Prefers mornings")
+
+    profile, _, _ = _read_export(contact)
+
+    assert profile["name"] == "Alice"
+    assert profile["email"] == "alice@x.io"
+    assert profile["declared_email"] == "other@x.io"
+    assert profile["external_id"] == "u1"
+    assert profile["attributes"] == {"plan": "pro"}
+    assert profile["company"] == "Acme"
+    assert [note["body"] for note in profile["notes"]] == ["Prefers mornings"]
+    # The agent's identity is about the agent.
+    assert agent.email not in json.dumps(profile)
+
+
+def test_export_holds_tickets_without_what_is_internal(organization, agent):
+    contact = ContactFactory(organization=organization)
+    ticket = TicketFactory(
+        organization=organization,
+        contact=contact,
+        requester=None,
+        title="Printer on fire",
+        context_metadata={"browser": "Chrome", "pre_login_session_hash": "abc"},
+    )
+    TicketMessageFactory(
+        ticket=ticket,
+        author=None,
+        sender_type=TicketMessage.SenderType.USER,
+        body="Please help",
+    )
+    reply = TicketMessageFactory(ticket=ticket, author=agent, body="On it")
+    note = TicketMessageFactory(
+        ticket=ticket,
+        author=agent,
+        message_type=TicketMessage.MessageType.INTERNAL_NOTE,
+        body="This one is a pain",
+    )
+    TicketAttachmentFactory(
+        ticket=ticket, message=reply, uploaded_by=agent, filename="manual.pdf"
+    )
+    TicketAttachmentFactory(ticket=ticket, uploaded_by=None, filename="photo.png")
+    TicketAttachmentFactory(
+        ticket=ticket, message=note, uploaded_by=agent, filename="internal.pdf"
+    )
+    VideoRecordingFactory(ticket=ticket, transcription="It burns")
+    VideoRecordingFactory(ticket=ticket, recorded_by=agent, transcription="Agent talk")
+
+    _, tickets, _ = _read_export(contact)
+
+    assert len(tickets) == 1
+    exported = tickets[0]
+    assert exported["reference"] == ticket.reference
+    assert exported["title"] == "Printer on fire"
+    assert exported["context_metadata"] == {"browser": "Chrome"}
+    assert [m["body"] for m in exported["messages"]] == ["Please help", "On it"]
+    assert {a["filename"] for a in exported["attachments"]} == {
+        "manual.pdf",
+        "photo.png",
+    }
+    assert [v["transcription"] for v in exported["recordings"]] == ["It burns"]
+    text = json.dumps(tickets)
+    assert "This one is a pain" not in text
+    assert "internal.pdf" not in text
+    assert "Agent talk" not in text
+    assert agent.email not in text
+
+
+def test_export_is_scoped_to_the_contact_and_its_organization(organization):
+    contact = ContactFactory(organization=organization)
+    TicketFactory(organization=organization, requester=None, title="Someone else")
+    TicketFactory(
+        organization=OrganizationFactory(),
+        contact=contact,
+        requester=None,
+        title="Another organization",
+    )
+    _, tickets, rows = _read_export(contact)
+    assert tickets == []
+    assert rows == [["reference", "title", "status", "created_at", "resolved_at"]]
+
+
+def test_export_csv_lists_the_tickets(organization):
+    contact = ContactFactory(organization=organization)
+    ticket = TicketFactory(
+        organization=organization,
+        contact=contact,
+        requester=None,
+        title='A "quoted", title',
+    )
+    _, _, rows = _read_export(contact)
+    assert rows[0] == ["reference", "title", "status", "created_at", "resolved_at"]
+    assert rows[1] == [
+        ticket.reference,
+        'A "quoted", title',
+        "open",
+        ticket.created_at.isoformat(),
+        "",
+    ]
+
+
+@pytest.mark.parametrize(
+    "title",
+    ['=HYPERLINK("http://evil","x")', "+1+1", "-1+1", "@SUM(A1)", "\t=1", "\r=1"],
+)
+def test_export_csv_escapes_formulas(organization, title):
+    contact = ContactFactory(organization=organization)
+    TicketFactory(
+        organization=organization, contact=contact, requester=None, title=title
+    )
+    _, tickets, rows = _read_export(contact)
+    assert rows[1][1] == f"'{title}"
+    assert tickets[0]["title"] == title  # JSON isn't opened by a spreadsheet.
+
+
+def test_export_of_a_contact_without_data(organization):
+    contact = ContactFactory(organization=organization)
+    profile, tickets, _ = _read_export(contact)
+    assert profile["notes"] == []
+    assert tickets == []
+
+
+# Export: the endpoint and the task
+
+
+@pytest.fixture
+def eager_celery(settings):
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+
+
+def test_export_endpoint_emails_the_admin_a_zip(
+    admin_client, admin_user, organization, eager_celery
+):
+    contact = ContactFactory(organization=organization, name="Alice O'Brien")
+    res = admin_client.post(_url(contact, "export"))
+    assert res.status_code == 202
+    assert res.data == {"status": "queued"}
+    assert len(mail.outbox) == 1
+    message = mail.outbox[0]
+    assert message.to == [admin_user.email]
+    assert message.subject == "Contact export ready"
+    assert "Alice O'Brien" in message.body  # Plain text isn't HTML-escaped.
+    ((name, content, mimetype),) = message.attachments
+    assert name == f"contact-{contact.id}.zip"
+    assert mimetype == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        assert json.loads(archive.read("contact.json"))["name"] == "Alice O'Brien"
+
+
+def test_export_email_escapes_the_name_in_html(admin_user, organization):
+    contact = ContactFactory(organization=organization, name="<b>Alice</b>")
+    export_contact_data(str(contact.id), str(admin_user.id))
+    html = mail.outbox[0].alternatives[0][0]
+    assert "<b>Alice</b>" not in html
+    assert "&lt;b&gt;Alice&lt;/b&gt;" in html
+
+
+def test_export_endpoint_is_for_admins(
+    authenticated_client, organization, eager_celery
+):
+    contact = ContactFactory(organization=organization)
+    assert authenticated_client.post(_url(contact, "export")).status_code == 403
+    assert mail.outbox == []
+
+
+def test_export_endpoint_is_organization_scoped(admin_client, eager_celery):
+    other = ContactFactory(organization=OrganizationFactory())
+    assert admin_client.post(_url(other, "export")).status_code == 404
+    assert mail.outbox == []
+
+
+def test_export_task_skips_a_contact_deleted_since(admin_user, organization, caplog):
+    contact = ContactFactory(organization=organization)
+    contact_id = str(contact.id)
+    contact.delete()
+    export_contact_data(contact_id, str(admin_user.id))
+    assert mail.outbox == []
+    assert contact_id in caplog.text
+
+
+def test_export_task_skips_a_requester_deleted_since(organization):
+    contact = ContactFactory(organization=organization)
+    user = UserFactory(organization=organization)
+    user_id = str(user.id)
+    user.delete()
+    export_contact_data(str(contact.id), user_id)
+    assert mail.outbox == []
+
+
+def test_export_too_large_to_attach_tells_the_admin_instead(
+    admin_user, organization, monkeypatch, caplog
+):
+    monkeypatch.setattr("apps.contacts.gdpr.MAX_EXPORT_ATTACHMENT_BYTES", 10)
+    contact = ContactFactory(organization=organization, name="Alice")
+    export_contact_data(str(contact.id), str(admin_user.id))
+    assert len(mail.outbox) == 1
+    message = mail.outbox[0]
+    assert message.to == [admin_user.email]
+    assert message.subject == "Contact export too large"
+    assert message.attachments == []
+    assert "too large" in message.body
+    assert str(contact.id) in caplog.text
+
+
+def test_export_at_the_size_limit_is_still_sent(admin_user, organization, monkeypatch):
+    contact = ContactFactory(organization=organization)
+    size = len(build_contact_export(contact))
+    monkeypatch.setattr("apps.contacts.gdpr.MAX_EXPORT_ATTACHMENT_BYTES", size)
+    export_contact_data(str(contact.id), str(admin_user.id))
+    assert mail.outbox[0].subject == "Contact export ready"
+
+
+def test_export_task_retries_a_failed_email(admin_user, organization):
+    contact = ContactFactory(organization=organization)
+    with (
+        mock.patch(
+            "apps.contacts.tasks.send_branded_email", side_effect=OSError("smtp")
+        ),
+        mock.patch.object(
+            export_contact_data, "retry", side_effect=RuntimeError("retried")
+        ) as retry,
+        pytest.raises(RuntimeError, match="retried"),
+    ):
+        export_contact_data(str(contact.id), str(admin_user.id))
+    retry.assert_called_once()

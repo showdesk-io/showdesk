@@ -82,12 +82,13 @@ def send_branded_email(
     reply_to: Iterable[str] | None = None,
     from_email: str | None = None,
     fail_silently: bool = False,
+    attachments: Iterable[tuple[str, bytes, str]] | None = None,
 ) -> int:
     """Render and send a branded HTML + plain-text email.
 
     ``template`` is the base name under ``templates/emails/`` (e.g.
     ``"ticket_created"``); the helper loads ``<template>.html`` and
-    ``<template>.txt``.
+    ``<template>.txt``. ``attachments`` holds (name, content, mimetype) tuples.
     """
     recipients = [addr for addr in to if addr]
     if not recipients:
@@ -112,6 +113,8 @@ def send_branded_email(
         reply_to=list(reply_to) if reply_to else None,
     )
     message.attach_alternative(html_body, "text/html")
+    for name, content, mimetype in attachments or ():
+        message.attach(name, content, mimetype)
     if not fail_silently:
         return message.send()
     # Django 6.1 deprecated EmailMessage.send(fail_silently=...); swallow

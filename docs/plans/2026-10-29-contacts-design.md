@@ -276,8 +276,12 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   anonymized Contact is a 409. End users are refused on the whole contacts API.
 - `GET/POST /api/v1/contacts/{id}/notes/`.
 - `GET /api/v1/contacts/{id}/tickets/`.
-- `POST /api/v1/contacts/{id}/export/` — Celery task, emails a ZIP (JSON + CSV:
-  profile, attributes, tickets, messages, attachment metadata).
+- `POST /api/v1/contacts/{id}/export/` — admin only, Celery task, emails the requester a
+  ZIP attached (never a URL): `contact.json` (profile, attributes, notes), `tickets.json`
+  (tickets, public messages, attachment metadata, the contact's recordings with their
+  transcription; never internal notes, nor who at the organization wrote what) and
+  `tickets.csv` (formula-like cells escaped). Beyond 20 MB nothing is attached, and the
+  requester gets an email saying so.
 - `POST /api/v1/contacts/{id}/anonymize/` — admin only, irreversible, idempotent (a
   second call changes nothing). Contact: email → `anonymized-{uuid}@example.invalid`, name
   → "Anonymized contact", phone, external_id, declared_email, email_verified_at, avatar,
@@ -396,3 +400,5 @@ inbound sender).
   being processed at that moment can leave its thumbnail on the storage.
 - A file that the storage failed to delete is only logged: nothing retries it, and its row
   is gone.
+- An export holds the metadata of files, not the files. Past 20 MB it isn't sent at all,
+  and there's no other way to get it: both need a download with its own access control.

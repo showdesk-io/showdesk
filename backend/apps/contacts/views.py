@@ -41,6 +41,7 @@ from .serializers import (
     ContactSerializer,
     ContactTicketSerializer,
 )
+from .tasks import export_contact_data
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +311,13 @@ class ContactViewSet(LockedWriteViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         notes = contact.notes.select_related("author").order_by("-created_at", "-id")
         return Response(ContactNoteSerializer(notes, many=True).data)
+
+    @action(detail=True, methods=["post"])
+    def export(self, request, pk=None):
+        require_org_admin(request.user)
+        contact = self.get_object()
+        export_contact_data.delay(str(contact.id), str(request.user.id))
+        return Response({"status": "queued"}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=["post"])
     def anonymize(self, request, pk=None):

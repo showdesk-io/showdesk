@@ -1,0 +1,4 @@
+{% extends "emails/base.txt" %}
+{% block content %}{% autoescape off %}The data held about {{ contact_name }} is too large to attach to an email, so nothing was sent.
+
+Contact support and give them this contact's id: {{ contact_id }}.{% endautoescape %}{% endblock %}

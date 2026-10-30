@@ -231,6 +231,28 @@ def test_ticket_reply_email_renders_body_with_line_breaks_and_links():
     assert 'href="https://example.com"' in html
 
 
+def test_send_branded_email_attaches_files():
+    send_branded_email(
+        template="contact_export_ready",
+        subject="Hi",
+        to=["user@example.com"],
+        context={"contact_name": "A"},
+        attachments=[("a.zip", b"PK", "application/zip")],
+    )
+    assert mail.outbox[0].attachments == [("a.zip", b"PK", "application/zip")]
+    assert _alt(mail.outbox[0])
+
+
+def test_send_branded_email_has_no_attachments_by_default():
+    send_branded_email(
+        template="contact_export_ready",
+        subject="Hi",
+        to=["user@example.com"],
+        context={"contact_name": "A"},
+    )
+    assert mail.outbox[0].attachments == []
+
+
 def test_ticket_reply_email_lists_attachments_in_html_and_text():
     org = OrganizationFactory()
     agent = UserFactory(organization=org, role="agent")

@@ -173,6 +173,20 @@ SAMPLES: dict[str, Callable[[], tuple[str, dict[str, Any]]]] = {
             "domain": "acme.com",
         },
     ),
+    "contact_export_ready": lambda: (
+        "Contact export ready",
+        {
+            "contact_name": "Jane Doe",
+            "contact_id": "3f2b8c1e-0000-4000-8000-000000000000",
+        },
+    ),
+    "contact_export_too_large": lambda: (
+        "Contact export too large",
+        {
+            "contact_name": "Jane Doe",
+            "contact_id": "3f2b8c1e-0000-4000-8000-000000000000",
+        },
+    ),
     "domain_ownership_transferred": lambda: (
         "acme.com no longer belongs to your organization",
         {
