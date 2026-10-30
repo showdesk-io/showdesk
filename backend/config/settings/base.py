@@ -180,6 +180,18 @@ CORS_ALLOW_HEADERS = [
 ]
 
 # =============================================================================
+# Cache
+# =============================================================================
+# Shared between workers: the throttles count requests here, and Django's
+# default per-process cache would give each worker its own counters.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": config("REDIS_URL", default="redis://localhost:6379/0"),
+    },
+}
+
+# =============================================================================
 # Channels (WebSocket)
 # =============================================================================
 CHANNEL_LAYERS = {

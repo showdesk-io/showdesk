@@ -267,3 +267,10 @@ class TestAdminLogin:
         EndUserFactory(email=EMAIL, is_staff=True)
         otp = OTPCode.generate(EMAIL)
         assert _submit(ADMIN_LOGIN, otp.code) is False
+
+
+def test_throttle_counters_are_shared_between_worker_processes(settings) -> None:
+    assert (
+        settings.CACHES["default"]["BACKEND"]
+        == "django.core.cache.backends.redis.RedisCache"
+    )
