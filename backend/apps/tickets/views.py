@@ -437,17 +437,20 @@ class TicketViewSet(viewsets.ModelViewSet):
             data=request.data, context=self.get_serializer_context()
         )
         serializer.is_valid(raise_exception=True)
-        agent = serializer.validated_data.get("agent_id")
-        team = serializer.validated_data.get("team_id")
+        # A missing key leaves the assignment alone, an explicit null clears it.
+        data = serializer.validated_data
+        agent = data.get("agent_id")
+        team = data.get("team_id")
 
-        if agent:
+        if "agent_id" in data:
             ticket.assigned_agent = agent
-        if team:
+        if "team_id" in data:
             ticket.assigned_team = team
         if not ticket.first_response_at and agent:
             ticket.first_response_at = timezone.now()
 
-        ticket.status = Ticket.Status.IN_PROGRESS
+        if agent or team:
+            ticket.status = Ticket.Status.IN_PROGRESS
         ticket.save()
 
         # Notify

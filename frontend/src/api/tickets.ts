@@ -76,7 +76,7 @@ export async function createMessage(
 
 export async function assignTicket(
   ticketId: string,
-  data: { agent_id?: string; team_id?: string },
+  data: { agent_id?: string | null; team_id?: string | null },
 ): Promise<Ticket> {
   const response = await apiClient.post<Ticket>(
     `/tickets/${ticketId}/assign/`,

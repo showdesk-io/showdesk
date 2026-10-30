@@ -1,5 +1,7 @@
 """API tests for ticket endpoints."""
 
+from unittest.mock import patch
+
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
@@ -10,6 +12,7 @@ from tests.factories import (
     OrganizationFactory,
     PriorityLevelFactory,
     TagFactory,
+    TeamFactory,
     TicketFactory,
     UserFactory,
 )
@@ -111,6 +114,58 @@ class TestTicketAPI:
         )
         assert response.status_code == status.HTTP_200_OK
         assert response.data["status"] == "in_progress"
+
+    def test_unassign_agent(self, authenticated_client, organization) -> None:
+        """An explicit null removes the agent and leaves the status alone."""
+        agent = UserFactory(organization=organization, role="agent")
+        ticket = TicketFactory(
+            organization=organization,
+            assigned_agent=agent,
+            status=Ticket.Status.WAITING,
+        )
+        with patch("apps.tickets.views.send_ticket_assigned_email.delay") as email:
+            response = authenticated_client.post(
+                f"/api/v1/tickets/{ticket.id}/assign/",
+                {"agent_id": None},
+                format="json",
+            )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["assigned_agent"] is None
+        assert response.data["status"] == "waiting"
+        email.assert_not_called()
+
+    def test_unassign_team_keeps_the_agent(
+        self, authenticated_client, organization
+    ) -> None:
+        agent = UserFactory(organization=organization, role="agent")
+        team = TeamFactory(organization=organization)
+        ticket = TicketFactory(
+            organization=organization,
+            assigned_agent=agent,
+            assigned_team=team,
+            status=Ticket.Status.OPEN,
+        )
+        response = authenticated_client.post(
+            f"/api/v1/tickets/{ticket.id}/assign/", {"team_id": None}, format="json"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["assigned_team"] is None
+        assert response.data["assigned_agent"] == agent.id
+        assert response.data["status"] == "open"
+
+    def test_assign_without_a_target_changes_nothing(
+        self, authenticated_client, organization
+    ) -> None:
+        agent = UserFactory(organization=organization, role="agent")
+        ticket = TicketFactory(
+            organization=organization, assigned_agent=agent, status=Ticket.Status.OPEN
+        )
+        response = authenticated_client.post(
+            f"/api/v1/tickets/{ticket.id}/assign/", {}, format="json"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["assigned_agent"] == agent.id
+        assert response.data["status"] == "open"
 
     def test_reopen_ticket(self, authenticated_client, organization) -> None:
         """Agents can reopen a resolved ticket."""
