@@ -73,7 +73,7 @@ def _coerce(type_: str, value: Any, options: Any) -> Any:
     raise _Invalid
 
 
-def _is_storable(value: Any) -> bool:
+def is_storable(value: Any) -> bool:
     """Tell whether Postgres accepts ``value`` inside a ``jsonb`` column.
 
     ``jsonb`` rejects NUL characters and lone surrogates, both of which
@@ -115,7 +115,7 @@ def clean_attributes(definitions, values: Any) -> dict[str, Any]:
         except _Invalid:
             logger.info("Dropping invalid value for attribute %r", key)
             continue
-        if not _is_storable(coerced):
+        if not is_storable(coerced):
             logger.info("Dropping unstorable value for attribute %r", key)
             continue
         cleaned[key] = coerced
