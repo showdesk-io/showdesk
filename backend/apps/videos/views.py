@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from apps.core.throttling import WidgetUploadThrottle
 from apps.organizations.models import Organization
+from apps.tickets.models import Ticket
 
 from .models import VideoRecording
 from .serializers import VideoRecordingSerializer, VideoUploadSerializer
@@ -64,6 +65,10 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
             )
 
         serializer = VideoUploadSerializer(data=request.data)
+        # Another organization's ticket reads as one that doesn't exist.
+        serializer.fields["ticket"].queryset = Ticket.objects.filter(
+            organization=organization
+        )
         serializer.is_valid(raise_exception=True)
 
         # Compute expiration based on organization settings
