@@ -81,6 +81,11 @@ class UserAdmin(BaseUserAdmin):
         ),
     )
 
+    def save_model(self, request, obj, form, change) -> None:
+        if change:
+            obj.apply_field_changes(set(form.changed_data))
+        super().save_model(request, obj, form, change)
+
 
 @admin.register(OrganizationDomain)
 class OrganizationDomainAdmin(admin.ModelAdmin):

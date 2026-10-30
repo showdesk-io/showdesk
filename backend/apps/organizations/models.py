@@ -392,6 +392,19 @@ class User(AbstractUser):
         """Check if user is an agent or admin."""
         return self.role in (self.Role.AGENT, self.Role.ADMIN)
 
+    def apply_field_changes(self, changed: set[str]) -> set[str]:
+        """Update what follows from a change of ``changed``; return those fields."""
+        derived = set()
+        if (
+            "role" in changed
+            and self.role == self.Role.END_USER
+            and self.is_staff
+            and not self.is_superuser
+        ):
+            self.is_staff = False
+            derived.add("is_staff")
+        return derived
+
 
 class Team(TimestampedModel):
     """A group of agents within an organization.

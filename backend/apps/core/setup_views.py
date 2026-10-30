@@ -1,13 +1,15 @@
 """Instance setup views for first-time initialization.
 
-These endpoints are public and only work when the instance has no users.
-Once any user exists, the initialize endpoint is permanently locked.
+These endpoints are public and only work until a real account exists. End users
+don't count, as the public widget can create them. Neither do unfinished setup
+attempts: an unverified superuser in no organization, which a retry replaces.
 """
 
 import logging
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
@@ -21,9 +23,27 @@ from apps.organizations.models import OTPCode, User
 logger = logging.getLogger(__name__)
 
 
+def _unfinished_setup_attempts():
+    return User.objects.filter(
+        is_superuser=True, is_verified=False, organization__isnull=True
+    )
+
+
 def is_instance_initialized() -> bool:
-    """Check if the instance has a verified staff user."""
-    return User.objects.filter(is_staff=True, is_verified=True).exists()
+    """Check if anyone other than an end user or a setup attempt has an account.
+
+    Not based on is_verified or is_staff alone: an email change clears the first
+    and a demotion the second, and neither may reopen setup.
+    """
+    return (
+        User.objects.filter(
+            Q(role__in=[User.Role.ADMIN, User.Role.AGENT])
+            | Q(is_staff=True)
+            | Q(is_superuser=True)
+        )
+        .exclude(pk__in=_unfinished_setup_attempts().values("pk"))
+        .exists()
+    )
 
 
 class SetupStatusView(APIView):
@@ -72,8 +92,7 @@ class SetupInitializeView(APIView):
 
         try:
             with transaction.atomic():
-                # Clean up any previous unverified staff users (failed setup attempts)
-                User.objects.filter(is_staff=True, is_verified=False).delete()
+                _unfinished_setup_attempts().delete()
 
                 # Create the platform admin
                 user = User.objects.create_superuser(

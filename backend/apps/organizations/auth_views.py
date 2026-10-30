@@ -59,7 +59,7 @@ class RequestOTPView(APIView):
 
         # Only send OTP if the user exists and has dashboard access
         user = User.objects.filter(email=email, is_active=True).first()
-        if user and (user.is_agent or user.is_staff):
+        if user and (user.is_agent or user.is_superuser):
             otp = OTPCode.generate(email)
             self._send_otp_email(email, otp.code)
             logger.info("OTP sent to %s", email)
@@ -116,7 +116,7 @@ class VerifyOTPView(APIView):
 
         # Find the user
         user = User.objects.filter(email=email, is_active=True).first()
-        if not user or not (user.is_agent or user.is_staff):
+        if not user or not (user.is_agent or user.is_superuser):
             return Response(
                 {"detail": "Invalid or expired code."},
                 status=status.HTTP_401_UNAUTHORIZED,

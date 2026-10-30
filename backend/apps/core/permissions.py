@@ -24,9 +24,7 @@ class IsOrgStaff(BasePermission):
 
     def has_permission(self, request, view):
         user = request.user
-        return user.is_authenticated and (
-            user.is_agent or user.is_staff or user.is_superuser
-        )
+        return user.is_authenticated and (user.is_agent or user.is_superuser)
 
 
 def is_org_admin(user) -> bool:

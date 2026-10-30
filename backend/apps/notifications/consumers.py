@@ -31,7 +31,7 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
             return
 
         # End users have no access to their organization's tickets.
-        if not (user.is_agent or user.is_staff or user.is_superuser):
+        if not (user.is_agent or user.is_superuser):
             logger.warning("TicketConsumer: rejecting end user %s", user.pk)
             await self.close()
             return

@@ -238,6 +238,8 @@ class UserViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             if removes_admin:
                 _check_keeps_an_admin(target)
+            target.role = serializer.validated_data.get("role", target.role)
+            target.apply_field_changes(changed)
             serializer.save()
 
     def perform_destroy(self, instance: User) -> None:
