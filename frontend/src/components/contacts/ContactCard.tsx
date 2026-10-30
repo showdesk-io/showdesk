@@ -46,7 +46,7 @@ function ContactLink({ contactId, children }: { contactId: string; children: str
   return (
     <Link
       to={`/contacts/${contactId}`}
-      className="break-words font-medium text-gray-900 hover:text-primary-700"
+      className="break-words text-primary-700 hover:underline"
     >
       {children}
     </Link>
@@ -85,14 +85,14 @@ export function ContactCard({
 
         {contact.email && (
           <p className="flex flex-wrap items-center gap-2 text-gray-500">
-            <span className="break-all">{contact.email}</span>
+            <span className="min-w-0 break-words">{contact.email}</span>
             {!contact.email_verified && <UnverifiedBadge />}
           </p>
         )}
         {contact.declared_email && contact.declared_email !== contact.email && (
           <Fact label="Declared (unverified)">
             <span className="flex flex-wrap items-center gap-2">
-              <span className="break-all">{contact.declared_email}</span>
+              <span className="min-w-0 break-words">{contact.declared_email}</span>
               <UnverifiedBadge />
             </span>
           </Fact>
@@ -128,7 +128,7 @@ export function ContactCard({
         {(requester.name || requester.email) && (
           <Fact label="Requester on this ticket">
             {requester.name && <p>{requester.name}</p>}
-            {requester.email && <p className="break-all text-gray-500">{requester.email}</p>}
+            {requester.email && <p className="break-words text-gray-500">{requester.email}</p>}
           </Fact>
         )}
       </div>

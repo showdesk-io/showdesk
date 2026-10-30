@@ -141,7 +141,7 @@ function ContactDetail({ contact }: { contact: Contact }) {
                 >
                   {contact.email ? (
                     <span className="flex flex-wrap items-center gap-2">
-                      <span className="break-all">{contact.email}</span>
+                      <span className="min-w-0 break-words">{contact.email}</span>
                       {contact.email_verified ? <VerifiedBadge /> : <UnverifiedBadge />}
                     </span>
                   ) : undefined}
@@ -149,7 +149,7 @@ function ContactDetail({ contact }: { contact: Contact }) {
                 {contact.declared_email && contact.declared_email !== contact.email && (
                   <Fact label="Declared (unverified)">
                     <span className="flex flex-wrap items-center gap-2">
-                      <span className="break-all">{contact.declared_email}</span>
+                      <span className="min-w-0 break-words">{contact.declared_email}</span>
                       <UnverifiedBadge />
                     </span>
                   </Fact>

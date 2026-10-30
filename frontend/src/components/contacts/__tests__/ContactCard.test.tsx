@@ -74,6 +74,33 @@ describe("ContactCard", () => {
     );
   });
 
+  it("styles the contact's name like the company's link", () => {
+    renderCard(
+      makeContact({
+        company_detail: {
+          id: "co1",
+          name: "Analytical Engines",
+          domain: "engines.example",
+          logo_url: "",
+          plan: "",
+        },
+      }),
+    );
+
+    const name = screen.getByRole("link", { name: "Ada Lovelace" });
+    const company = screen.getByRole("link", { name: "Analytical Engines" });
+    expect(name.className).toBe(company.className);
+    expect(name).toHaveClass("text-primary-700");
+  });
+
+  it("breaks an email only where it doesn't fit", () => {
+    renderCard(makeContact());
+
+    const email = screen.getByText("ada@example.com");
+    expect(email).toHaveClass("break-words");
+    expect(email).not.toHaveClass("break-all");
+  });
+
   it("marks an unverified email, and not a verified one", () => {
     const { unmount } = renderCard(makeContact());
     expect(screen.getByText("ada@example.com")).toBeInTheDocument();
