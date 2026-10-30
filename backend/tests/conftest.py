@@ -20,6 +20,12 @@ def _reset_throttle_cache():
     cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _fast_password_hasher(settings):
+    """The default hasher is slow on purpose, and every factory user pays for it."""
+    settings.PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
+
 @pytest.fixture
 def api_client() -> APIClient:
     """Return an unauthenticated API client."""

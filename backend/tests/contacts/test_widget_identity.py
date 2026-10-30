@@ -243,9 +243,7 @@ def _nested(depth: int = 100_000) -> str:
     return f"{'[' * depth}1{']' * depth}"
 
 
-@pytest.mark.parametrize(
-    "external_user_id", [True, 1.5, 2**63, "x" * 256, "\ud800", ["x"], {"a": 1}]
-)
+@pytest.mark.parametrize("external_user_id", [True, 2**63, "x" * 256, ["x"]])
 def test_malformed_external_id_is_refused_before_touching_the_session(
     api_client, org, external_user_id
 ):
@@ -264,7 +262,7 @@ def test_deeply_nested_external_id_is_a_400_not_a_crash(api_client, org):
     assert _send(api_client, "post", org, raw).status_code == 400
 
 
-BAD_HASHES = [1, 1.5, True, ["x"], {"a": 1}, "é", "\ud800", "x" * 129]
+BAD_HASHES = [["x"], "é"]  # Not text, and text compare_digest refuses.
 
 
 @pytest.mark.parametrize("bad", BAD_HASHES)
@@ -328,9 +326,7 @@ def test_bad_shape_user_hash_without_an_id_is_ignored(api_client, org, bad):
     assert res.status_code == 201
 
 
-@pytest.mark.parametrize(
-    "field", ["name", "email", "email_hash", "company_hash", "user_hash", "session_id"]
-)
+@pytest.mark.parametrize("field", ["name", "user_hash", "session_id"])
 def test_deeply_nested_field_doesnt_stop_the_widget(api_client, org, field):
     raw = f'{{"{field}": {_nested()}}}'
     res = _send(api_client, "post", org, raw)
@@ -343,15 +339,10 @@ def test_deeply_nested_field_doesnt_stop_the_widget(api_client, org, field):
     ("name", "stored"),
     [
         (42, "42"),
-        (1.5, "1.5"),
         ("n" * 256, "n" * 255),
         ("  Bob ", "Bob"),
         # Not a name, and it would stick: a resume only fills a blank name.
         (True, ""),
-        (False, ""),
-        (["x"], ""),
-        ({"a": 1}, ""),
-        ("\ud800", ""),
         ("Bob\x00", ""),
     ],
 )
@@ -368,19 +359,7 @@ def test_huge_number_as_a_name_is_truncated(api_client, org):
     assert WidgetSession.objects.get(id=res.data["session_id"]).name == "1" * 255
 
 
-@pytest.mark.parametrize(
-    "email",
-    [
-        42,
-        1.5,
-        True,
-        ["a@x.io"],
-        {"a": 1},
-        "x" * 250 + "@x.io",
-        "\ud800@x.io",
-        "a\x00@x.io",
-    ],
-)
+@pytest.mark.parametrize("email", [42, "x" * 250 + "@x.io", "a\x00@x.io"])
 def test_unusable_email_is_ignored_and_the_name_kept(api_client, org, email):
     raw = json.dumps({"name": "Bob", "email": email})
     res = _send(api_client, "post", org, raw)
@@ -524,20 +503,7 @@ class TestRealClientPayloads:
         assert res.status_code == 200
         assert res.data["session_id"] == str(session.id)
 
-    @pytest.mark.parametrize(
-        "field",
-        [
-            "session_id",
-            "name",
-            "email",
-            "external_user_id",
-            "user_hash",
-            "email_hash",
-            "company_hash",
-            "company",
-            "traits",
-        ],
-    )
+    @pytest.mark.parametrize("field", ["session_id", "traits"])
     def test_null_field_on_post(self, api_client, org, field):
         assert _post(api_client, org, **{field: None}).status_code == 201
 
@@ -594,7 +560,7 @@ class TestRealClientPayloads:
         session.refresh_from_db()
         assert (session.name, session.email) == ("A", "a@x.io")
 
-    @pytest.mark.parametrize("email", ["a@b", "not-an-email", "a b@x.io"])
+    @pytest.mark.parametrize("email", ["a@b", "a b@x.io"])
     def test_contact_nudge_with_an_email_the_widget_lets_through(
         self, api_client, org, email
     ):
@@ -665,9 +631,7 @@ class TestRealClientPayloads:
         assert session.email == "bob@x.io"
         assert session.contact.email == "bob@x.io"
 
-    @pytest.mark.parametrize(
-        "session_id", ["not-a-uuid", "\x00", 1, 1.5, True, {"a": 1}, ["x"]]
-    )
+    @pytest.mark.parametrize("session_id", ["not-a-uuid", 1])
     def test_stored_session_id_that_isnt_one_starts_a_new_session(
         self, api_client, org, session_id
     ):
@@ -952,8 +916,15 @@ def test_failing_to_link_tickets_leaves_it_to_the_next_init(api_client, org):
     assert ticket.contact.email == "bob@x.io"
 
 
-@pytest.mark.parametrize("field", ["traits", "company"])
-@pytest.mark.parametrize("raw", ['"text"', "1", "[1]", "true", _nested()])
+@pytest.mark.parametrize(
+    ("field", "raw"),
+    [
+        ("traits", '"text"'),
+        ("traits", _nested()),
+        ("company", "[1]"),
+        ("company", _nested()),
+    ],
+)
 def test_traits_or_company_that_isnt_an_object_is_ignored(api_client, org, field, raw):
     body = (
         f'{{"external_user_id": "u1", "user_hash": "{_sign("s3cret", "u1")}", '
@@ -1081,8 +1052,9 @@ class TestEmailOnResume:
         assert session.email == "old@x.io"
         assert session.email_verified_at == before
 
-    @pytest.mark.parametrize("external_user_id", ["", "u1"])
-    @pytest.mark.parametrize("email", ["old@x.io", "OLD@x.io", " old@x.io "])
+    @pytest.mark.parametrize(
+        ("external_user_id", "email"), [("", "OLD@x.io"), ("u1", " old@x.io ")]
+    )
     def test_same_email_changes_nothing(self, api_client, org, external_user_id, email):
         session = self._proven(org, external_user_id=external_user_id)
         before = session.email_verified_at

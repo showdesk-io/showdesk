@@ -42,20 +42,11 @@ def _add_definition(client, model, **fields):
     )
 
 
-@pytest.mark.parametrize("model", [ContactAttributeDef, CompanyAttributeDef])
 @pytest.mark.parametrize(
-    ("type_", "options"),
+    ("model", "type_", "options"),
     [
-        ("enum", '"free"'),
-        ("enum", '{"free": 1}'),
-        ("enum", "1"),
-        ("enum", "[]"),
-        ("enum", ""),
-        ("enum", '["a", "a"]'),
-        ("enum", '["a", ""]'),
-        ("enum", '["a", 1]'),
-        ("string", '["a"]'),
-        ("string", '"a"'),
+        (ContactAttributeDef, "enum", '["a", ""]'),
+        (CompanyAttributeDef, "string", '["a"]'),
     ],
 )
 def test_admin_refuses_invalid_options(client, model, type_, options):

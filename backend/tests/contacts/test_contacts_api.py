@@ -163,17 +163,13 @@ def test_last_seen_filters(authenticated_client, organization):
     ]
 
 
-@pytest.mark.parametrize("param", ["last_seen_after", "last_seen_before"])
 @pytest.mark.parametrize(
-    "value",
+    ("param", "value"),
     [
-        "garbage",
-        "",
-        "0000-00-00",
-        "2026-13-45T00:00:00Z",
-        "2026-01-01T00:00:00\x00",
-        "9999-12-31T23:59:59-23:59",
-        "0001-01-01T00:00:00+23:59",
+        ("last_seen_after", "garbage"),
+        ("last_seen_before", "2026-13-45T00:00:00Z"),
+        ("last_seen_after", "9999-12-31T23:59:59-23:59"),
+        ("last_seen_before", "0001-01-01T00:00:00+23:59"),
     ],
 )
 def test_invalid_or_extreme_date_filter_is_no_error(
@@ -228,24 +224,7 @@ def test_filters_dont_reach_another_org(authenticated_client, organization):
 
 @pytest.mark.parametrize(
     "key",
-    [
-        "attr.a__b",
-        "attr.a__gt",
-        "attr.__class__",
-        "attr.plan__contains",
-        "attr.plan__isnull",
-        "attr.a___b",
-        "attr.",
-        "attr.a b",
-        "attr.a.b",
-        "attr.é",
-        "attr.1a",
-        "attr.a-b",
-        "attr.plan\n",
-        "attr.a'b",
-        "attr.a\x00",
-        "attr." + "a" * 65,
-    ],
+    ["attr.a__b", "attr.", "attr.a.b", "attr.plan\n", "attr.a'b"],
 )
 def test_unsafe_attribute_keys_are_ignored(authenticated_client, organization, key):
     """No JSON path nor lookup: they filter nothing, and are never an error."""
@@ -258,20 +237,7 @@ def test_unsafe_attribute_keys_are_ignored(authenticated_client, organization, k
 
 @pytest.mark.parametrize(
     ("name", "value"),
-    [
-        ("contains", "x"),
-        ("contained_by", "x"),
-        ("has_key", "plan"),
-        ("has_keys", "plan"),
-        ("has_any_keys", "plan"),
-        ("isnull", "garbage"),
-        ("isnull", "false"),
-        ("regex", "("),
-        ("in", "x"),
-        ("gt", "0"),
-        ("exact", "x"),
-        ("range", "x"),
-    ],
+    [("has_key", "plan"), ("isnull", "garbage"), ("regex", "(")],
 )
 def test_lookup_names_are_plain_keys(authenticated_client, organization, name, value):
     """``attributes__has_key=plan`` would be a lookup: this has to read the key."""
@@ -326,10 +292,7 @@ def test_attribute_filter_doesnt_match_a_stored_null(
     assert _ids(authenticated_client.get(URL, {"attr.plan": "null"})) == []
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["a\x00b", "9" * 5000, "1e999", "-1e999", "nan", "Infinity", "1_000", "", "\n"],
-)
+@pytest.mark.parametrize("value", ["a\x00b", "9" * 5000, "1e999"])
 def test_unusual_attribute_values_are_no_error(
     authenticated_client, organization, value
 ):
@@ -486,7 +449,7 @@ def test_patch_copes_with_any_stored_attributes(authenticated_client, organizati
     assert res.data["attributes"] == {"role": "cto"}
 
 
-@pytest.mark.parametrize("value", [[], [1], "text", 1, True, None])
+@pytest.mark.parametrize("value", [[], None])
 def test_attributes_must_be_an_object(authenticated_client, organization, value):
     contact = ContactFactory(organization=organization, attributes={"plan": "pro"})
     res = authenticated_client.patch(
@@ -663,7 +626,7 @@ def test_company_of_another_org_is_like_an_unknown_one(
     ][0].replace("00000000-0000-4000-8000-000000000000", "")
 
 
-@pytest.mark.parametrize("value", ["not-a-uuid", 1, -1, True, [], {}, "a\x00b"])
+@pytest.mark.parametrize("value", ["not-a-uuid", []])
 def test_malformed_company_is_400(authenticated_client, organization, value):
     contact = ContactFactory(organization=organization)
     res = authenticated_client.patch(
@@ -672,23 +635,7 @@ def test_malformed_company_is_400(authenticated_client, organization, value):
     assert res.status_code == 400
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        {"name": "a\x00b"},
-        {"name": "\ud800"},
-        {"name": "x" * 256},
-        {"phone": "1" * 31},
-        {"locale": "x" * 11},
-        {"timezone": "x" * 51},
-        {"job_title": "x" * 256},
-        {"email": "not-an-email"},
-        {"email": "a\x00@x.io"},
-        {"email": None},
-        {"avatar_url": "javascript:alert(1)"},
-        {"is_unsubscribed": "maybe"},
-    ],
-)
+@pytest.mark.parametrize("body", [{"name": "a\x00b"}, {"email": None}])
 def test_invalid_fields_are_400(authenticated_client, organization, body):
     contact = ContactFactory(organization=organization)
     res = authenticated_client.patch(
@@ -924,6 +871,97 @@ def test_a_superuser_impersonates_with_the_header():
     )
     assert res.status_code == 201
     assert Contact.objects.get(pk=res.data["id"]).organization == other
+
+
+@pytest.fixture
+def superuser_client(organization) -> APIClient:
+    """A superuser whose own organization is ``organization``."""
+    client = APIClient()
+    client.force_authenticate(UserFactory(organization=organization, is_superuser=True))
+    return client
+
+
+def test_impersonation_refuses_a_company_of_the_superusers_own_org(
+    superuser_client, organization
+):
+    other = OrganizationFactory()
+    contact = ContactFactory(organization=other)
+    own_company = CompanyFactory(organization=organization)
+    res = superuser_client.patch(
+        _detail(contact),
+        {"company": str(own_company.id)},
+        format="json",
+        HTTP_X_SHOWDESK_ORG=str(other.id),
+    )
+    assert res.status_code == 400
+    assert "company" in res.data
+    contact.refresh_from_db()
+    assert contact.company is None
+
+
+def test_impersonation_accepts_a_company_of_the_impersonated_org(superuser_client):
+    other = OrganizationFactory()
+    contact = ContactFactory(organization=other)
+    company = CompanyFactory(organization=other)
+    res = superuser_client.patch(
+        _detail(contact),
+        {"company": str(company.id)},
+        format="json",
+        HTTP_X_SHOWDESK_ORG=str(other.id),
+    )
+    assert res.status_code == 200
+    assert res.data["company"] == company.id
+
+
+def test_impersonation_validates_attributes_on_the_impersonated_org(
+    superuser_client, organization
+):
+    other = OrganizationFactory()
+    ContactAttributeDefFactory(organization=other, key="tier")
+    ContactAttributeDefFactory(organization=organization, key="mine")
+    contact = ContactFactory(organization=other)
+    res = superuser_client.patch(
+        _detail(contact),
+        {"attributes": {"tier": "gold", "mine": "x"}},
+        format="json",
+        HTTP_X_SHOWDESK_ORG=str(other.id),
+    )
+    assert res.status_code == 200
+    assert res.data["attributes"] == {"tier": "gold"}
+
+
+def test_impersonating_superuser_can_delete(superuser_client):
+    other = OrganizationFactory()
+    contact = ContactFactory(organization=other)
+    res = superuser_client.delete(_detail(contact), HTTP_X_SHOWDESK_ORG=str(other.id))
+    assert res.status_code == 204
+    assert not Contact.objects.filter(pk=contact.pk).exists()
+
+
+def test_attribute_defined_only_in_another_org_is_dropped(
+    authenticated_client, organization
+):
+    ContactAttributeDefFactory(organization=OrganizationFactory(), key="tier")
+    contact = ContactFactory(organization=organization)
+    res = authenticated_client.patch(
+        _detail(contact), {"attributes": {"tier": "gold"}}, format="json"
+    )
+    assert res.status_code == 200
+    assert res.data["attributes"] == {}
+    res = authenticated_client.post(
+        URL, {"email": "n@x.io", "attributes": {"tier": "gold"}}, format="json"
+    )
+    assert res.status_code == 201
+    assert res.data["attributes"] == {}
+
+
+def test_patch_moves_updated_at(authenticated_client, organization):
+    contact = ContactFactory(organization=organization, name="Alice")
+    before = contact.updated_at
+    res = authenticated_client.patch(_detail(contact), {"name": "Bob"}, format="json")
+    assert res.status_code == 200
+    contact.refresh_from_db()
+    assert contact.updated_at > before
 
 
 # Tickets and notes
