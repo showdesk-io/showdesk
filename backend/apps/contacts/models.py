@@ -1,9 +1,15 @@
 """Contacts (end-users) and Companies of an Organization."""
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
 from apps.core.models import TimestampedModel
+
+
+def _normalize(value: str) -> str:
+    """Canonical form of an email or domain, as stored and compared."""
+    return (value or "").strip().lower()
 
 
 class Company(TimestampedModel):
@@ -29,7 +35,7 @@ class Company(TimestampedModel):
     attributes = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ["name"]
+        ordering = ["name", "id"]
         verbose_name_plural = "companies"
         constraints = [
             models.UniqueConstraint(
@@ -47,8 +53,12 @@ class Company(TimestampedModel):
     def __str__(self) -> str:
         return self.name
 
+    def clean(self) -> None:
+        super().clean()
+        self.domain = _normalize(self.domain)
+
     def save(self, *args, **kwargs) -> None:
-        self.domain = (self.domain or "").strip().lower()
+        self.domain = _normalize(self.domain)
         super().save(*args, **kwargs)
 
 
@@ -93,7 +103,7 @@ class Contact(TimestampedModel):
     attributes = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ["-last_seen_at", "-created_at"]
+        ordering = [models.F("last_seen_at").desc(nulls_last=True), "-created_at"]
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "email"],
@@ -115,6 +125,20 @@ class Contact(TimestampedModel):
     def display_name(self) -> str:
         return self.name or self.email or self.external_id or "Anonymous contact"
 
+    def clean(self) -> None:
+        super().clean()
+        self.email = _normalize(self.email)
+        if (
+            self.company_id
+            and self.organization_id
+            and Company.objects.filter(pk=self.company_id)
+            .exclude(organization_id=self.organization_id)
+            .exists()
+        ):
+            raise ValidationError(
+                {"company": "This company belongs to another organization."}
+            )
+
     def save(self, *args, **kwargs) -> None:
-        self.email = (self.email or "").strip().lower()
+        self.email = _normalize(self.email)
         super().save(*args, **kwargs)

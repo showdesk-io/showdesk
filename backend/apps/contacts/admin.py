@@ -11,6 +11,7 @@ class ContactAdmin(admin.ModelAdmin):
 
     list_display = ["name", "email", "organization", "last_seen_at"]
     search_fields = ["email", "name", "external_id"]
+    autocomplete_fields = ["company"]
     readonly_fields = ["id", "created_at", "updated_at"]
 
 
