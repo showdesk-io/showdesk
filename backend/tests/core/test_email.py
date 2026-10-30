@@ -9,6 +9,7 @@ import pytest
 from django.core import mail
 
 from apps.core.email import send_branded_email
+from apps.tickets.models import TicketMessage
 from apps.tickets.tasks import (
     send_ticket_assigned_email,
     send_ticket_created_email,
@@ -16,6 +17,7 @@ from apps.tickets.tasks import (
     send_ticket_resolved_email,
 )
 from tests.factories import (
+    ContactFactory,
     OrganizationFactory,
     TicketAttachmentFactory,
     TicketFactory,
@@ -308,3 +310,82 @@ def test_primary_color_override_lands_in_html_body():
 
     html = _alt(mail.outbox[0])
     assert "#FF00AA" in html or "#ff00aa" in html.lower()
+
+
+@pytest.fixture
+def mail_ticket():
+    org = OrganizationFactory()
+    return (
+        UserFactory(organization=org, role="agent"),
+        TicketFactory(organization=org, requester_email="end@example.com"),
+    )
+
+
+def _undeliverable_cases(ticket):
+    """Each way a requester can no longer be emailed."""
+    anonymized = ContactFactory(organization=ticket.organization, is_anonymized=True)
+    return {
+        "contact-anonymized": {"contact": anonymized},
+        "address-anonymized": {"requester_email": "anonymized-1@example.invalid"},
+        "address-other-case": {"requester_email": "Anonymized-1@EXAMPLE.invalid"},
+    }
+
+
+@pytest.mark.parametrize(
+    "case", ["contact-anonymized", "address-anonymized", "address-other-case"]
+)
+def test_agent_reply_isnt_emailed_to_an_anonymized_requester(mail_ticket, case):
+    agent, ticket = mail_ticket
+    for field, value in _undeliverable_cases(ticket)[case].items():
+        setattr(ticket, field, value)
+    ticket.save()
+    message = TicketMessageFactory(ticket=ticket, author=agent, body="Hello")
+
+    send_ticket_reply_email(message.id)
+
+    assert mail.outbox == []
+
+
+@pytest.mark.parametrize(
+    "case", ["contact-anonymized", "address-anonymized", "address-other-case"]
+)
+def test_resolved_ticket_isnt_emailed_to_an_anonymized_requester(mail_ticket, case):
+    _, ticket = mail_ticket
+    for field, value in _undeliverable_cases(ticket)[case].items():
+        setattr(ticket, field, value)
+    ticket.save()
+
+    send_ticket_resolved_email(ticket.id)
+
+    assert mail.outbox == []
+
+
+def test_requester_of_a_regular_contact_is_still_emailed(mail_ticket):
+    agent, ticket = mail_ticket
+    ticket.contact = ContactFactory(organization=ticket.organization)
+    ticket.save()
+    message = TicketMessageFactory(ticket=ticket, author=agent, body="Hello")
+
+    send_ticket_reply_email(message.id)
+    send_ticket_resolved_email(ticket.id)
+
+    assert [message.to for message in mail.outbox] == [["end@example.com"]] * 2
+
+
+def test_anonymized_requesters_reply_still_reaches_agents(mail_ticket):
+    agent, ticket = mail_ticket
+    ticket.contact = ContactFactory(
+        organization=ticket.organization, is_anonymized=True
+    )
+    ticket.assigned_agent = agent
+    ticket.save()
+    message = TicketMessageFactory(
+        ticket=ticket,
+        author=None,
+        sender_type=TicketMessage.SenderType.USER,
+        body="Hello",
+    )
+
+    send_ticket_reply_email(message.id)
+
+    assert [message.to for message in mail.outbox] == [[agent.email]]

@@ -44,6 +44,18 @@ def _priority_label(ticket) -> str:
         return slug.replace("_", " ").title() or "—"
 
 
+def _requester_can_be_emailed(ticket) -> bool:
+    """Tell if the ticket has an address, and one that isn't an anonymized contact's."""
+    from apps.contacts.models import ANONYMIZED_EMAIL_DOMAIN
+
+    contact = ticket.contact
+    return (
+        bool(ticket.requester_email)
+        and not ticket.requester_email.lower().endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")
+        and not (contact and contact.is_anonymized)
+    )
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_ticket_created_email(self, ticket_id: str) -> None:
     """Notify agents when a new ticket is created.
@@ -129,7 +141,11 @@ def send_ticket_reply_email(self, message_id: str) -> None:
 
     try:
         message = TicketMessage.objects.select_related(
-            "ticket", "ticket__organization", "ticket__assigned_agent", "author"
+            "ticket",
+            "ticket__organization",
+            "ticket__assigned_agent",
+            "ticket__contact",
+            "author",
         ).get(id=message_id)
     except TicketMessage.DoesNotExist:
         logger.warning("Message %s not found, skipping email.", message_id)
@@ -144,8 +160,8 @@ def send_ticket_reply_email(self, message_id: str) -> None:
     is_agent_reply = author and author.role in (User.Role.AGENT, User.Role.ADMIN)
 
     if is_agent_reply:
-        if not ticket.requester_email:
-            logger.info("No requester email for ticket %s.", ticket.reference)
+        if not _requester_can_be_emailed(ticket):
+            logger.info("No requester to email for ticket %s.", ticket.reference)
             return
         recipients = [ticket.requester_email]
         author_label = (author.first_name or "").strip() or (
@@ -257,11 +273,13 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
     from apps.tickets.models import Ticket
 
     try:
-        ticket = Ticket.objects.select_related("organization").get(id=ticket_id)
+        ticket = Ticket.objects.select_related("organization", "contact").get(
+            id=ticket_id
+        )
     except Ticket.DoesNotExist:
         return
 
-    if not ticket.requester_email:
+    if not _requester_can_be_emailed(ticket):
         return
 
     try:

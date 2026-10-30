@@ -36,6 +36,10 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
             return VideoRecording.objects.filter(ticket__organization=org)
         return VideoRecording.objects.none()
 
+    def perform_create(self, serializer) -> None:
+        """Record who uploaded it: anonymizing a contact takes those with no user."""
+        serializer.save(recorded_by=self.request.user)
+
     @action(
         detail=False,
         methods=["post"],
