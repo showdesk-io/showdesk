@@ -10,6 +10,7 @@ import { Link } from "react-router";
 import { fetchOrganization, fetchTicketStats } from "@/api/users";
 import { useTickets } from "@/hooks/useTickets";
 import { useCurrentUser } from "@/hooks/useAuth";
+import { isOrgAdmin } from "@/lib/permissions";
 import { StatusBadge, PriorityBadge } from "@/components/common/StatusBadge";
 import { requesterAddress } from "@/components/contacts/anonymized";
 
@@ -24,7 +25,8 @@ export function DashboardPage() {
     queryFn: fetchTicketStats,
   });
   const { data: recentTickets } = useTickets({ page: 1 });
-  const showOnboardingNudge = !!org && !org.onboarding_completed_at;
+  const showOnboardingNudge =
+    !!org && !org.onboarding_completed_at && isOrgAdmin(user);
 
   const statCards = [
     {

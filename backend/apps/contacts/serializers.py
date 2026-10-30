@@ -6,6 +6,8 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import DomainNameValidator
 from rest_framework import serializers
 
+from apps.core.serializers import OrgScopedPrimaryKeyRelatedField
+
 from .attributes import clean_attributes, validate_options
 from .models import (
     Company,
@@ -68,6 +70,9 @@ class ContactSerializer(serializers.ModelSerializer):
     would give the widget user of that id access to this contact's history.
     """
 
+    company = OrgScopedPrimaryKeyRelatedField(
+        queryset=Company.objects.all(), required=False, allow_null=True
+    )
     company_detail = CompanySummarySerializer(source="company", read_only=True)
     email_verified = serializers.SerializerMethodField()
     display_name = serializers.CharField(read_only=True)
@@ -115,15 +120,6 @@ class ContactSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-
-    def get_fields(self):
-        fields = super().get_fields()
-        # Scoping the choices gives a company of another organization the very
-        # answer of an unknown one, which doesn't tell which ids exist elsewhere.
-        fields["company"].queryset = Company.objects.filter(
-            organization=self.context.get("organization")
-        )
-        return fields
 
     def get_email_verified(self, obj) -> bool:
         return obj.email_verified_at is not None

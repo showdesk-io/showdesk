@@ -19,18 +19,19 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import get_active_org
+from apps.core.permissions import (
+    HasStrictActiveOrg,
+    IsOrgAdminOrReadOnly,
+    IsOrgStaff,
+    get_active_org,
+    require_org_admin,
+)
 from apps.tickets.models import Ticket
 from apps.tickets.serializers import TicketListSerializer, ticket_list_rows
 
 from .attributes import is_storable
 from .gdpr import anonymize_contact
 from .models import Company, CompanyAttributeDef, Contact, ContactAttributeDef
-from .permissions import (
-    IsOrganizationAdminOrReadOnly,
-    IsOrganizationStaff,
-    require_org_admin,
-)
 from .serializers import (
     DOMAIN_TAKEN,
     EMAIL_TAKEN,
@@ -154,7 +155,7 @@ def contacts_with_counts(contacts):
 
 
 class OrgScopedMixin:
-    permission_classes = [IsAuthenticated, IsOrganizationStaff]
+    permission_classes = [IsAuthenticated, IsOrgStaff, HasStrictActiveOrg]
 
     def get_serializer_context(self):
         return {
@@ -395,8 +396,9 @@ class AttributeDefViewSet(OrgScopedMixin, viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "head", "options"]
     permission_classes = [
         IsAuthenticated,
-        IsOrganizationStaff,
-        IsOrganizationAdminOrReadOnly,
+        IsOrgStaff,
+        HasStrictActiveOrg,
+        IsOrgAdminOrReadOnly,
     ]
     pagination_class = None
     filter_backends = []

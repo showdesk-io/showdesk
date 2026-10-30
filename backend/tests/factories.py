@@ -14,6 +14,7 @@ from apps.contacts.models import (
     ContactAttributeDef,
     ContactNote,
 )
+from apps.knowledge_base.models import Article, Category
 from apps.organizations.models import Organization, Team, User
 from apps.tickets.models import (
     CannedResponse,
@@ -286,3 +287,26 @@ class ContactNoteFactory(factory.django.DjangoModelFactory):
         UserFactory, organization=factory.SelfAttribute("..contact.organization")
     )
     body = factory.Faker("sentence")
+
+
+class CategoryFactory(factory.django.DjangoModelFactory):
+    """Factory for creating knowledge base Category instances."""
+
+    class Meta:
+        model = Category
+
+    organization = factory.SubFactory(OrganizationFactory)
+    name = factory.Sequence(lambda n: f"Category {n}")
+    slug = factory.Sequence(lambda n: f"category-{n}")
+
+
+class ArticleFactory(factory.django.DjangoModelFactory):
+    """Factory for creating knowledge base Article instances."""
+
+    class Meta:
+        model = Article
+
+    organization = factory.SubFactory(OrganizationFactory)
+    title = factory.Sequence(lambda n: f"Article {n}")
+    slug = factory.Sequence(lambda n: f"article-{n}")
+    body = "Body."

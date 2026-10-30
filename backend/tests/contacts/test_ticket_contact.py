@@ -594,8 +594,12 @@ class TestCreateResolvesTheContact:
 
     def test_not_from_an_account_of_another_organization(self, authenticated_client):
         account = EndUserFactory(organization=OrganizationFactory())
-        _, ticket = self._post(authenticated_client, requester=str(account.id))
-        assert ticket.contact is None
+        res = authenticated_client.post(
+            TICKETS, {"title": "x", "requester": str(account.id)}, format="json"
+        )
+        assert res.status_code == 400
+        assert "requester" in res.data
+        assert not Ticket.objects.exists()
         assert not Contact.objects.exists()
 
     def test_nothing_to_go_by(self, authenticated_client):
@@ -704,7 +708,7 @@ class TestCreateSource:
         client = APIClient()
         client.force_authenticate(UserFactory(organization=None, is_superuser=True))
         res = client.post(TICKETS, {"title": "x"}, format="json")
-        assert res.status_code == 403
+        assert res.status_code == 400
 
 
 class TestEndUsers:

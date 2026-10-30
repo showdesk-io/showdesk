@@ -39,6 +39,7 @@ import {
 } from "@/components/contacts/UnverifiedBadge";
 import { useContactConflict } from "@/components/contacts/useContactConflict";
 import { useCurrentUser } from "@/hooks/useAuth";
+import { isOrgAdmin } from "@/lib/permissions";
 import { useCompany } from "@/hooks/useCompanies";
 import {
   useAnonymizeContact,
@@ -77,7 +78,7 @@ export function ContactDetailPage() {
 
 function ContactDetail({ contact }: { contact: Contact }) {
   const { data: currentUser } = useCurrentUser();
-  const isAdmin = currentUser?.role === "admin";
+  const isAdmin = isOrgAdmin(currentUser);
   const readOnly = contact.is_anonymized;
   const updateContact = useUpdateContact();
   const handleConflict = useContactConflict(contact.id);

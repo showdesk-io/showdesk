@@ -38,6 +38,7 @@ import { safeHttpUrl } from "@/components/contacts/safeUrl";
 import { TicketLine } from "@/components/contacts/TicketLine";
 import { UnverifiedBadge } from "@/components/contacts/UnverifiedBadge";
 import { useCurrentUser } from "@/hooks/useAuth";
+import { isOrgAdmin } from "@/lib/permissions";
 import {
   useCompany,
   useCompanyContacts,
@@ -78,7 +79,7 @@ export function CompanyDetailPage() {
 
 function CompanyDetail({ company }: { company: Company }) {
   const { data: currentUser } = useCurrentUser();
-  const isAdmin = currentUser?.role === "admin";
+  const isAdmin = isOrgAdmin(currentUser);
   const updateCompany = useUpdateCompany();
   const [showDelete, setShowDelete] = useState(false);
 

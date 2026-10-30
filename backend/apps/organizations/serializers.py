@@ -4,6 +4,12 @@ import re
 
 from rest_framework import serializers
 
+from apps.core.permissions import is_org_admin
+from apps.core.serializers import (
+    OrgScopedPrimaryKeyRelatedField,
+    read_only_organization_field,
+)
+
 from .models import (
     Organization,
     OrganizationDomain,
@@ -45,10 +51,16 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        # What the platform manages (see PlatformOrganizationDetailSerializer)
+        # stays out of reach of the organization's own admins.
         read_only_fields = [
             "id",
+            "slug",
             "api_token",
             "widget_secret",
+            "is_active",
+            "video_expiration_days",
+            "video_max_duration_seconds",
             "widget_first_seen_at",
             "plan",
             "enabled_features",
@@ -61,6 +73,14 @@ class OrganizationSerializer(serializers.ModelSerializer):
 
     def get_enabled_features(self, obj: Organization) -> list[str]:
         return sorted(obj.enabled_features())
+
+    def to_representation(self, instance: Organization) -> dict:
+        """Keep the widget secret to admins: it signs end-user identities."""
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        if not (request and is_org_admin(request.user)):
+            data.pop("widget_secret", None)
+        return data
 
 
 class OrganizationPublicSerializer(serializers.ModelSerializer):
@@ -99,7 +119,17 @@ class UserSerializer(serializers.ModelSerializer):
             "is_superuser",
             "date_joined",
         ]
-        read_only_fields = ["id", "is_superuser", "date_joined"]
+        read_only_fields = ["id", "organization", "is_superuser", "date_joined"]
+
+    def validate_email(self, value: str) -> str:
+        """Keep the address findable: logging in looks it up in lowercase."""
+        email = value.lower().strip()
+        taken = User.objects.filter(email__iexact=email)
+        if self.instance is not None:
+            taken = taken.exclude(pk=self.instance.pk)
+        if taken.exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return email
 
 
 class InviteAgentSerializer(serializers.Serializer):
@@ -317,13 +347,17 @@ class OrgJoinRequestSerializer(serializers.ModelSerializer):
 class TeamSerializer(serializers.ModelSerializer):
     """Serializer for the Team model."""
 
+    organization = read_only_organization_field()
     members = UserSerializer(many=True, read_only=True)
-    member_ids = serializers.PrimaryKeyRelatedField(
+    member_ids = OrgScopedPrimaryKeyRelatedField(
         many=True,
         queryset=User.objects.all(),
         source="members",
         write_only=True,
         required=False,
+    )
+    lead = OrgScopedPrimaryKeyRelatedField(
+        queryset=User.objects.all(), required=False, allow_null=True
     )
 
     class Meta:

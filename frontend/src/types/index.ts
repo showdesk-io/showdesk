@@ -14,7 +14,8 @@ export interface Organization {
   primary_color: string;
   email_from_name: string;
   api_token: string;
-  widget_secret: string;
+  /** Only sent to admins. */
+  widget_secret?: string;
   is_active: boolean;
   widget_color: string;
   widget_position: "bottom-right" | "bottom-left";

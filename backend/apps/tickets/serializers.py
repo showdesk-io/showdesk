@@ -8,7 +8,11 @@ from apps.contacts.attributes import is_storable
 from apps.contacts.models import Contact
 from apps.contacts.summary import ContactSummarySerializer
 from apps.core.permissions import get_active_org
-from apps.organizations.models import RESERVED_EXTERNAL_ID_PREFIXES
+from apps.core.serializers import (
+    OrgScopedPrimaryKeyRelatedField,
+    read_only_organization_field,
+)
+from apps.organizations.models import RESERVED_EXTERNAL_ID_PREFIXES, Team, User
 from apps.organizations.serializers import UserSerializer
 
 from .models import (
@@ -27,6 +31,8 @@ from .models import (
 class PriorityLevelSerializer(serializers.ModelSerializer):
     """Serializer for the PriorityLevel model."""
 
+    organization = read_only_organization_field()
+
     class Meta:
         model = PriorityLevel
         fields = [
@@ -40,16 +46,18 @@ class PriorityLevelSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "organization", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
 
 
 class TagSerializer(serializers.ModelSerializer):
     """Serializer for the Tag model."""
 
+    organization = read_only_organization_field()
+
     class Meta:
         model = Tag
         fields = ["id", "organization", "name", "color", "created_at"]
-        read_only_fields = ["id", "organization", "created_at"]
+        read_only_fields = ["id", "created_at"]
 
 
 class SLAPolicySerializer(serializers.ModelSerializer):
@@ -78,8 +86,6 @@ class SLAPolicySerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "organization", "created_at", "updated_at"]
 
     def validate_priority(self, value: str) -> str:
-        from apps.core.permissions import get_active_org
-
         request = self.context.get("request")
         if request is None:
             return value
@@ -98,6 +104,14 @@ class SLAPolicySerializer(serializers.ModelSerializer):
 
 class TicketAttachmentSerializer(serializers.ModelSerializer):
     """Serializer for ticket attachments with file validation."""
+
+    ticket = OrgScopedPrimaryKeyRelatedField(queryset=Ticket.objects.all())
+    message = OrgScopedPrimaryKeyRelatedField(
+        queryset=TicketMessage.objects.all(),
+        org_field="ticket__organization",
+        required=False,
+        allow_null=True,
+    )
 
     # Max 20 MB per file
     MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -139,7 +153,7 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
             "file_size",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "uploaded_by", "created_at"]
 
     def validate_file(self, value):
         """Validate file size and type."""
@@ -161,6 +175,7 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
 class TicketMessageSerializer(serializers.ModelSerializer):
     """Serializer for ticket messages."""
 
+    ticket = OrgScopedPrimaryKeyRelatedField(queryset=Ticket.objects.all())
     author_detail = UserSerializer(source="author", read_only=True)
     attachments = TicketAttachmentSerializer(many=True, read_only=True)
     sender_name = serializers.CharField(read_only=True)
@@ -181,28 +196,27 @@ class TicketMessageSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "author", "created_at", "updated_at"]
 
 
-class TicketContactField(serializers.PrimaryKeyRelatedField):
-    """A contact a ticket can take. Any other reads as one that doesn't exist.
+# Who a ticket can be assigned to, as in the bulk_update action.
+ASSIGNABLE_AGENTS = User.objects.filter(
+    role__in=[User.Role.AGENT, User.Role.ADMIN], is_active=True
+)
 
-    That's one of the ticket's organization, or on creation of the active one. An
-    anonymized contact takes no more tickets, but a ticket can keep the one it has.
+
+class TicketContactField(OrgScopedPrimaryKeyRelatedField):
+    """A contact of the active organization that a ticket can take.
+
+    An anonymized contact takes no more tickets, but a ticket can keep the one it has.
     """
 
     def get_queryset(self):
+        taken = Q(is_anonymized=False)
         ticket = self.parent.instance
         if ticket is not None:
-            return Contact.objects.filter(
-                Q(is_anonymized=False) | Q(pk=ticket.contact_id),
-                organization_id=ticket.organization_id,
-            )
-        request = self.context.get("request")
-        org = get_active_org(request) if request else None
-        if org is None:
-            return Contact.objects.none()
-        return Contact.objects.filter(organization=org, is_anonymized=False)
+            taken |= Q(pk=ticket.contact_id)
+        return super().get_queryset().filter(taken)
 
 
 class TicketSerializer(serializers.ModelSerializer):
@@ -213,17 +227,29 @@ class TicketSerializer(serializers.ModelSerializer):
     messages = TicketMessageSerializer(many=True, read_only=True)
     videos = VideoRecordingSerializer(many=True, read_only=True)
     tags_detail = TagSerializer(source="tags", many=True, read_only=True)
-    tag_ids = serializers.PrimaryKeyRelatedField(
+    tag_ids = OrgScopedPrimaryKeyRelatedField(
         many=True,
         queryset=Tag.objects.all(),
         source="tags",
         write_only=True,
         required=False,
     )
+    requester = OrgScopedPrimaryKeyRelatedField(
+        queryset=User.objects.all(), required=False, allow_null=True
+    )
     requester_detail = UserSerializer(source="requester", read_only=True)
+    assigned_agent = OrgScopedPrimaryKeyRelatedField(
+        queryset=ASSIGNABLE_AGENTS, required=False, allow_null=True
+    )
     assigned_agent_detail = UserSerializer(source="assigned_agent", read_only=True)
+    assigned_team = OrgScopedPrimaryKeyRelatedField(
+        queryset=Team.objects.all(), required=False, allow_null=True
+    )
+    sla_policy = OrgScopedPrimaryKeyRelatedField(
+        queryset=SLAPolicy.objects.all(), required=False, allow_null=True
+    )
     contact = TicketContactField(
-        queryset=Contact.objects.none(), required=False, allow_null=True
+        queryset=Contact.objects.all(), required=False, allow_null=True
     )
     contact_detail = ContactSummarySerializer(source="contact", read_only=True)
     sender_verified = serializers.BooleanField(read_only=True, allow_null=True)
@@ -305,6 +331,25 @@ class WidgetSubmitResponseSerializer(serializers.ModelSerializer):
         fields = ["id", "reference"]
 
 
+class TicketAssignSerializer(serializers.Serializer):
+    """Validates the body of the ticket ``assign`` action."""
+
+    agent_id = OrgScopedPrimaryKeyRelatedField(
+        queryset=ASSIGNABLE_AGENTS, required=False, allow_null=True
+    )
+    team_id = OrgScopedPrimaryKeyRelatedField(
+        queryset=Team.objects.all(), required=False, allow_null=True
+    )
+
+
+class TicketSetTagsSerializer(serializers.Serializer):
+    """Validates the body of the ticket ``set_tags`` action."""
+
+    tag_ids = OrgScopedPrimaryKeyRelatedField(
+        many=True, queryset=Tag.objects.all(), required=False
+    )
+
+
 class TicketListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for ticket list views."""
 
@@ -339,6 +384,7 @@ class TicketListSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        read_only_fields = fields
 
 
 def ticket_list_rows(tickets):
@@ -444,12 +490,10 @@ class SavedViewSerializer(serializers.ModelSerializer):
     def validate_name(self, value):
         """Ensure the name is unique within the organization."""
         request = self.context.get("request")
-        if not request or not request.user.organization:
+        org = get_active_org(request) if request else None
+        if not org:
             return value
-        qs = SavedView.objects.filter(
-            organization=request.user.organization,
-            name=value,
-        )
+        qs = SavedView.objects.filter(organization=org, name=value)
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():
@@ -491,8 +535,6 @@ class CannedResponseSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request:
             return value
-        from apps.core.permissions import get_active_org
-
         org = get_active_org(request)
         if not org:
             return value

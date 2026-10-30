@@ -19,6 +19,8 @@ import {
   inviteAgent,
   updateOrganization,
 } from "@/api/users";
+import { useCurrentUser } from "@/hooks/useAuth";
+import { isOrgAdmin } from "@/lib/permissions";
 import type { Organization } from "@/types";
 
 const STEP_LABELS = ["Widget", "Teammates", "Embed"] as const;
@@ -26,6 +28,7 @@ const STEP_LABELS = ["Widget", "Teammates", "Embed"] as const;
 export function OnboardingPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { data: currentUser } = useCurrentUser();
   const { data: org, isLoading } = useQuery({
     queryKey: ["organization"],
     queryFn: fetchOrganization,
@@ -56,6 +59,10 @@ export function OnboardingPage() {
     );
   }
   if (!org) {
+    return <Navigate to="/" replace />;
+  }
+  // Every step edits settings or invites people, which only admins can do.
+  if (currentUser && !isOrgAdmin(currentUser)) {
     return <Navigate to="/" replace />;
   }
   if (org.onboarding_completed_at) {

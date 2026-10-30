@@ -103,8 +103,8 @@ export function useAssignTicket() {
       ...data
     }: {
       ticketId: string;
-      agent_id?: string;
-      team_id?: string;
+      agent_id?: string | null;
+      team_id?: string | null;
     }) => assignTicket(ticketId, data),
     onSuccess: (ticket) => {
       invalidateTimelines(queryClient);

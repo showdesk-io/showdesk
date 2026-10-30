@@ -20,7 +20,7 @@ import type {
 } from "@/types";
 import { ContactDetailPage } from "../ContactDetailPage";
 
-const auth = vi.hoisted(() => ({ role: "admin" }));
+const auth = vi.hoisted(() => ({ role: "admin", is_superuser: false }));
 
 vi.mock("@/api/client", () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -29,7 +29,9 @@ vi.mock("react-hot-toast", () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
 vi.mock("@/hooks/useAuth", () => ({
-  useCurrentUser: () => ({ data: { id: "u1", role: auth.role } }),
+  useCurrentUser: () => ({
+    data: { id: "u1", role: auth.role, is_superuser: auth.is_superuser },
+  }),
 }));
 
 const client = vi.mocked(apiClient);
@@ -159,6 +161,7 @@ function patchLikeTheApi(extra: Partial<Contact> = {}) {
 beforeEach(() => {
   vi.resetAllMocks();
   auth.role = "admin";
+  auth.is_superuser = false;
   contact = makeContact();
   tickets = [makeTicket()];
   notes = [makeNote()];
@@ -986,6 +989,15 @@ describe("admin controls", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit name" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Add note" })).toBeInTheDocument();
+  });
+
+  it("are shown to a superuser, whose own role means nothing", async () => {
+    auth.role = "end_user";
+    auth.is_superuser = true;
+    renderPage();
+
+    await loaded();
+    expect(screen.getByRole("button", { name: "Anonymize" })).toBeInTheDocument();
   });
 
   it("are shown to admins", async () => {

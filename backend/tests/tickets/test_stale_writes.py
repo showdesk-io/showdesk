@@ -76,6 +76,33 @@ class TestActionsDontRestoreData:
         assert ticket.assigned_team == team
         assert ticket.first_response_at is not None
 
+    def test_assign_with_an_explicit_null(self, authenticated_client, ticket, agent):
+        team = TeamFactory(organization=ticket.organization)
+        Ticket.objects.filter(pk=ticket.pk).update(
+            assigned_agent=agent, assigned_team=team, status=Ticket.Status.WAITING
+        )
+        res = authenticated_client.post(
+            f"{URL}{ticket.id}/assign/", {"agent_id": None}, format="json"
+        )
+        assert res.status_code == 200
+        ticket.refresh_from_db()
+        _assert_still_scrubbed(ticket)
+        assert ticket.assigned_agent is None
+        assert ticket.assigned_team == team
+        assert ticket.status == Ticket.Status.WAITING
+
+    def test_assign_to_a_team_alone(self, authenticated_client, ticket):
+        team = TeamFactory(organization=ticket.organization)
+        res = authenticated_client.post(
+            f"{URL}{ticket.id}/assign/", {"team_id": str(team.id)}, format="json"
+        )
+        assert res.status_code == 200
+        ticket.refresh_from_db()
+        _assert_still_scrubbed(ticket)
+        assert ticket.assigned_team == team
+        assert ticket.status == Ticket.Status.IN_PROGRESS
+        assert ticket.first_response_at is None
+
     def test_resolve(self, authenticated_client, ticket):
         res = authenticated_client.post(f"{URL}{ticket.id}/resolve/")
         assert res.status_code == 200

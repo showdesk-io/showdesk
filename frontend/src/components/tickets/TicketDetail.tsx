@@ -821,7 +821,7 @@ function MediaLightbox({
 
 // ── Sidebar ─────────────────────────────────────────────────────────
 
-function TicketSidebar({ ticket }: { ticket: Ticket }) {
+export function TicketSidebar({ ticket }: { ticket: Ticket }) {
   const { data: agents } = useQuery({
     queryKey: ["agents"],
     queryFn: fetchAgents,
@@ -839,9 +839,10 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
 
   const handleAssignAgent = (agentId: string) => {
     assignMutation.mutate(
-      { ticketId: ticket.id, agent_id: agentId || undefined },
+      { ticketId: ticket.id, agent_id: agentId || null },
       {
-        onSuccess: () => toast.success("Agent assigned."),
+        onSuccess: () =>
+          toast.success(agentId ? "Agent assigned." : "Agent unassigned."),
         onError: () => toast.error("Failed to assign agent."),
       },
     );
@@ -849,9 +850,10 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
 
   const handleAssignTeam = (teamId: string) => {
     assignMutation.mutate(
-      { ticketId: ticket.id, team_id: teamId || undefined },
+      { ticketId: ticket.id, team_id: teamId || null },
       {
-        onSuccess: () => toast.success("Team assigned."),
+        onSuccess: () =>
+          toast.success(teamId ? "Team assigned." : "Team unassigned."),
         onError: () => toast.error("Failed to assign team."),
       },
     );
