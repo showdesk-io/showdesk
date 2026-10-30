@@ -733,7 +733,7 @@ model, no inbound pipeline feeds it.
 - [ ] Inbound parsing: quote/signature stripping, attachments to S3, auto-responder / bounce / loop detection, `Fwd:` → new ticket
 - [ ] Agent replies on email tickets go out as email from the org's address (sender domain / DKIM per org)
 - [ ] Requester identity unification (email requester ↔ widget `external_user_id`)
-- [ ] Model refactor decision: keep `Ticket → TicketMessage` + `channel` field, or move to `Conversation → Message + Channel` before adding WhatsApp/Slack
+- [x] Model refactor decision: keep `Ticket → TicketMessage` + `channel`/`external_id` on messages (decided 2026-10-29, see `docs/plans/2026-10-29-email-channel-design.md`); revisit when designing a third channel
 
 ### MCP server -- see `docs/brainstorm/mcp-server.md`
 
