@@ -15,7 +15,8 @@
  *           data-user-id="user-123"
  *           data-user-name="John Doe"
  *           data-user-email="john@example.com"
- *           data-user-hash="hmac-sha256-hex">
+ *           data-user-hash="hmac-sha256-hex"
+ *           data-user-email-hash="hmac-sha256-hex">
  *   </script>
  *
  * For multi-page sites (non-SPA), add data-navigation-mode="mpa"
@@ -35,11 +36,22 @@ installConsoleCollector();
 installNetworkCollector();
 
 import { createButton, updateBadge } from "./ui/button";
-import { createModal, destroyModal, getStore, initSession } from "./ui/modal";
+import {
+  createModal,
+  destroyModal,
+  getStore,
+  initSession,
+  switchSession,
+} from "./ui/modal";
 import { reattachPopupIfNeeded } from "./ui/chat/chat-view";
 import { injectStyles } from "./ui/styles";
 import { clearSession as clearStoredSession } from "./session/session-manager";
-import type { NavigationMode, ShowdeskConfig, ShowdeskUserIdentity } from "./types";
+import type {
+  NavigationMode,
+  ShowdeskCompany,
+  ShowdeskConfig,
+  ShowdeskUserIdentity,
+} from "./types";
 
 let isInitialized = false;
 let config: ShowdeskConfig;
@@ -79,8 +91,9 @@ function buildUserFromDataAttrs(
   const name = el.dataset["userName"];
   const email = el.dataset["userEmail"];
   const hash = el.dataset["userHash"];
+  const emailHash = el.dataset["userEmailHash"];
   if (!id && !name && !email) return undefined;
-  return { id, name, email, hash };
+  return { id, name, email, hash, emailHash };
 }
 
 /**
@@ -112,6 +125,7 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
       "How can we help you?",
     hideButton: userConfig.hideButton ?? false,
     user: userConfig.user ?? buildUserFromDataAttrs(scriptTag),
+    company: userConfig.company,
     navigationMode:
       userConfig.navigationMode ??
       (scriptTag?.dataset["navigationMode"] as NavigationMode) ??
@@ -166,13 +180,41 @@ function open(): void {
 
 /**
  * Set or update user identity after initialization.
+ *
+ * - With an id and a hash (a login without a reload): the session is created again
+ *   and replaces the stored one. An anonymous conversation carries on under the
+ *   identified session; another user's is taken off the screen.
+ * - With nothing, or without a hash when a user was identified (a logout): same as
+ *   reset(). The widget is gone until the next init().
+ * - Otherwise, on an anonymous session (a name or an email without a hash): only
+ *   updates the local config, sent to the server by the next init().
+ *
+ * `company` belongs to this user: leaving it out sends none, so that a user can't
+ * inherit the company of the previous one.
  */
-function setUser(user: ShowdeskUserIdentity): void {
+function setUser(
+  user?: ShowdeskUserIdentity | null,
+  company?: ShowdeskCompany,
+): void {
   if (!isInitialized) {
     console.warn("[Showdesk] Call init() before setUser()");
     return;
   }
-  config.user = user;
+  const hasIdentity = Boolean(String(user?.id ?? "") && user?.hash);
+  const isEmpty = !String(user?.id ?? "") && !user?.name && !user?.email;
+  // The hash covers a session still being created, not known here yet.
+  const wasIdentified = Boolean(
+    config.user?.hash || getStore().state.session?.externalUserId,
+  );
+  if (!hasIdentity && (isEmpty || wasIdentified)) {
+    reset();
+    return;
+  }
+  config.user = user ?? undefined;
+  config.company = company;
+  if (hasIdentity) {
+    void switchSession(config);
+  }
 }
 
 /**
@@ -191,6 +233,7 @@ function destroy(): void {
  * Reset the widget: destroy the UI AND clear the stored session id.
  * Call this when the embedding app's user identity changes (e.g. logout)
  * so the next init() does not resume the previous user's conversation.
+ * setUser() without an identity does the same. Call init() to bring the widget back.
  */
 function reset(): void {
   destroy();

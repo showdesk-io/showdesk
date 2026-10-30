@@ -322,6 +322,9 @@ async function handleSendText(
       context,
     );
 
+    // The view was cleared meanwhile (another user): this ticket isn't for it.
+    if (!store.state.messages.some((m) => m.id === tempId)) return;
+
     // Update optimistic message with real data
     const updated = store.state.messages.map((m) =>
       m.id === tempId
@@ -381,6 +384,8 @@ async function handleSendAttachment(
       bodyType,
       filename,
     );
+
+    if (!store.state.messages.some((m) => m.id === tempId)) return;
 
     const updated = store.state.messages.map((m) =>
       m.id === tempId

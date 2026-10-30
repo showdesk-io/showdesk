@@ -20,11 +20,12 @@ import {
   storeSessionId,
 } from "../session/session-manager";
 import { createWidgetStore } from "../state/widget-state";
-import type { WidgetStore } from "../state/widget-state";
+import type { WidgetState, WidgetStore } from "../state/widget-state";
 import type {
   ChatMessage,
   ConversationSummary,
   ShowdeskConfig,
+  WidgetSession,
   WidgetTab,
 } from "../types";
 import { renderChatView, reattachPopupIfNeeded } from "./chat/chat-view";
@@ -53,6 +54,22 @@ function pickConversationToResume(
     });
   return candidates[0] ?? null;
 }
+
+const EMPTY_CONVERSATION: Partial<WidgetState> = {
+  activeTicketId: null,
+  activeTicketReference: null,
+  messages: [],
+};
+
+/** What the store holds of the user whose session it is. */
+const EMPTY_VIEW: Partial<WidgetState> = {
+  ...EMPTY_CONVERSATION,
+  conversations: [],
+  unreadCount: 0,
+  isLoading: false,
+  contactNudgeDismissed: false,
+  contactNudgeShown: false,
+};
 
 let currentPanel: HTMLElement | null = null;
 let store: WidgetStore | null = null;
@@ -86,70 +103,77 @@ export function getWebSocket(): WidgetWebSocket {
 }
 
 /**
+ * Bumped by each session request and by destroyModal: whatever an older request
+ * gets back is stale, and must neither be stored nor touch the view.
+ */
+let sessionRun = 0;
+let runInFlight: Promise<void> | null = null;
+
+/**
  * Initialize the session and WebSocket connection.
  * Called eagerly on widget init so the FAB badge reflects unread replies
- * even before the panel is opened.
+ * even before the panel is opened, and again when the panel opens: the second
+ * call joins the request in flight rather than creating a second session.
  */
-export async function initSession(config: ShowdeskConfig): Promise<void> {
+export function initSession(config: ShowdeskConfig): Promise<void> {
+  if (getStore().state.session) return Promise.resolve();
+  return runInFlight ?? startSessionRun(config);
+}
+
+/**
+ * Create the session again for the identity now in `config`, whatever is in flight.
+ *
+ * The session returned replaces the stored one. An anonymous session's conversation
+ * moved to it on the server (a login), so it stays on screen until refreshed. Another
+ * user's goes at once, even if the request then fails: that user is no longer here.
+ */
+export function switchSession(config: ShowdeskConfig): Promise<void> {
   const s = getStore();
-  if (s.state.session) return; // Already initialized
+  const owner = s.state.session?.externalUserId;
+  if (owner && owner !== String(config.user?.id ?? "")) {
+    ws?.disconnect();
+    s.update({ session: null, isConnected: false, ...EMPTY_VIEW });
+    renderActiveTab(config);
+  }
+  return startSessionRun(config);
+}
+
+function startSessionRun(config: ShowdeskConfig): Promise<void> {
+  const run = ++sessionRun;
+  const promise = runSession(config, run).finally(() => {
+    if (runInFlight === promise) runInFlight = null;
+  });
+  runInFlight = promise;
+  return promise;
+}
+
+async function runSession(config: ShowdeskConfig, run: number): Promise<void> {
+  const s = getStore();
 
   try {
-    const existingSessionId = getStoredSessionId();
-    const session = await createOrResumeSession(config, existingSessionId);
+    const session = await createOrResumeSession(config, getStoredSessionId());
+    if (run !== sessionRun) return;
     storeSessionId(session.sessionId);
+
+    if (config.user?.hash && !session.externalUserId) {
+      console.warn("[Showdesk] User hash refused: the session stays anonymous.");
+    }
+
+    const previous = s.state.session;
+    const changed = previous?.sessionId !== session.sessionId;
     s.update({ session });
 
-    // Connect WebSocket
-    const socket = getWebSocket();
-    socket.onMessage = (msg: ChatMessage) => {
-      // Skip user's own messages — already handled by optimistic UI
-      if (msg.senderType === "user") return;
-
-      // The user is actively looking at this ticket only if the panel is
-      // open AND the ticket is the currently-displayed one. Otherwise the
-      // message counts as unread, even on the "last active" ticket.
-      const isViewing =
-        isPanelVisible() && msg.ticketId === s.state.activeTicketId;
-
-      if (isViewing) {
-        // Don't add duplicates
-        const exists = s.state.messages.some((m) => m.id === msg.id);
-        if (!exists) {
-          s.update({ messages: [...s.state.messages, msg] });
-          // Keep the server-side read marker current so a refresh doesn't
-          // re-raise the badge for this reply.
-          void markConversationRead(config, session.sessionId, msg.ticketId);
-        }
-      } else {
-        // Widget is closed or the reply is on another ticket — bump the
-        // badge and keep the conversations list in sync so
-        // pickConversationToResume picks the right ticket next open.
-        const nextConversations = s.state.conversations.map((c) =>
-          c.id === msg.ticketId
-            ? {
-                ...c,
-                unreadCount: c.unreadCount + 1,
-                lastMessageAt: msg.createdAt,
-                lastMessagePreview: msg.body || c.lastMessagePreview,
-              }
-            : c,
-        );
-        s.update({
-          unreadCount: s.state.unreadCount + 1,
-          conversations: nextConversations,
-        });
-      }
-    };
-    socket.onConnectionChange = (connected: boolean) => {
-      s.update({ isConnected: connected });
-    };
-    socket.connect(config.apiUrl, config.token, session.sessionId);
+    if (changed) {
+      connectWebSocket(config, s, session.sessionId);
+      if (previous) await refreshActiveConversation(config, s, session, run);
+      if (run !== sessionRun) return;
+    }
 
     // Prefetch conversation list so the FAB badge is accurate on page load
     // and the panel can auto-open the most recent unread reply.
     try {
       const conversations = await fetchHistory(config, session.sessionId);
+      if (run !== sessionRun) return;
       s.update({
         conversations,
         unreadCount: countOpenUnread(conversations),
@@ -157,8 +181,95 @@ export async function initSession(config: ShowdeskConfig): Promise<void> {
     } catch {
       // Silent — history is a nice-to-have on boot; user can still open the panel.
     }
+
+    // The history tab shows what it fetched when rendered, not the store.
+    if (changed && previous && s.state.activeTab === "history") {
+      renderActiveTab(config);
+    }
   } catch (err) {
-    console.error("[Showdesk] Session initialization failed:", err);
+    if (run === sessionRun) {
+      console.error("[Showdesk] Session initialization failed:", err);
+    }
+  }
+}
+
+/** Point the shared WebSocket at a session, instead of the one it was on. */
+function connectWebSocket(
+  config: ShowdeskConfig,
+  s: WidgetStore,
+  sessionId: string,
+): void {
+  const socket = getWebSocket();
+  socket.disconnect();
+  socket.onMessage = (msg: ChatMessage) => {
+    // Skip user's own messages — already handled by optimistic UI
+    if (msg.senderType === "user") return;
+
+    // The user is actively looking at this ticket only if the panel is
+    // open AND the ticket is the currently-displayed one. Otherwise the
+    // message counts as unread, even on the "last active" ticket.
+    const isViewing =
+      isPanelVisible() && msg.ticketId === s.state.activeTicketId;
+
+    if (isViewing) {
+      // Don't add duplicates
+      const exists = s.state.messages.some((m) => m.id === msg.id);
+      if (!exists) {
+        s.update({ messages: [...s.state.messages, msg] });
+        // Keep the server-side read marker current so a refresh doesn't
+        // re-raise the badge for this reply.
+        void markConversationRead(config, sessionId, msg.ticketId);
+      }
+    } else {
+      // Widget is closed or the reply is on another ticket — bump the
+      // badge and keep the conversations list in sync so
+      // pickConversationToResume picks the right ticket next open.
+      const nextConversations = s.state.conversations.map((c) =>
+        c.id === msg.ticketId
+          ? {
+              ...c,
+              unreadCount: c.unreadCount + 1,
+              lastMessageAt: msg.createdAt,
+              lastMessagePreview: msg.body || c.lastMessagePreview,
+            }
+          : c,
+      );
+      s.update({
+        unreadCount: s.state.unreadCount + 1,
+        conversations: nextConversations,
+      });
+    }
+  };
+  socket.onConnectionChange = (connected: boolean) => {
+    s.update({ isConnected: connected });
+  };
+  socket.connect(config.apiUrl, config.token, sessionId);
+}
+
+/**
+ * Reload the open conversation under a new session, keeping what's still being sent.
+ * If the session can't read it, it wasn't moved: back to a new conversation.
+ */
+async function refreshActiveConversation(
+  config: ShowdeskConfig,
+  s: WidgetStore,
+  session: WidgetSession,
+  run: number,
+): Promise<void> {
+  const ticketId = s.state.activeTicketId;
+  if (!ticketId) return;
+  try {
+    const data = await fetchConversation(config, session.sessionId, ticketId);
+    if (run !== sessionRun || s.state.activeTicketId !== ticketId) return;
+    const unsent = s.state.messages.filter((m) => m._status !== "sent");
+    s.update({
+      activeTicketReference: data.reference,
+      messages: [...data.messages, ...unsent],
+    });
+  } catch {
+    if (run !== sessionRun || s.state.activeTicketId !== ticketId) return;
+    s.update(EMPTY_CONVERSATION);
+    renderActiveTab(config);
   }
 }
 
@@ -192,6 +303,8 @@ function resumeActiveConversation(config: ShowdeskConfig): void {
     if (session) {
       fetchConversation(config, session.sessionId, resume.id)
         .then((data) => {
+          // The user changed meanwhile: this is no longer theirs to see.
+          if (s.state.session?.sessionId !== session.sessionId) return;
           s.update({
             activeTicketId: data.ticketId,
             activeTicketReference: data.reference,
@@ -302,7 +415,7 @@ export function createModal(config: ShowdeskConfig): void {
   (panel as unknown as Record<string, unknown>)._escHandler = escHandler;
 
   // Initialize session (async, don't block render)
-  initSession(config);
+  void initSession(config);
 
   // MPA mode: check if a popup recorder is still alive from a previous page
   if (config.navigationMode === "mpa") {
@@ -345,6 +458,14 @@ function renderTab(
   }
 }
 
+/** Render the active tab again, if the panel exists. */
+function renderActiveTab(config: ShowdeskConfig): void {
+  const content = currentPanel?.querySelector(
+    ".sd-panel-content",
+  ) as HTMLElement | null;
+  if (content) renderTab(content, getStore(), config);
+}
+
 /**
  * Close the messaging panel (hide, don't destroy).
  */
@@ -363,6 +484,9 @@ export function closeModal(): void {
  * Destroy the panel and clean up.
  */
 export function destroyModal(): void {
+  // A session coming back now must not be stored over a reset, nor reconnect.
+  sessionRun++;
+  runInFlight = null;
   if (unsubscribe) {
     unsubscribe();
     unsubscribe = null;

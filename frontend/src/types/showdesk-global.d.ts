@@ -3,9 +3,19 @@
  */
 
 export interface ShowdeskUser {
-  id?: string;
+  id?: string | number;
   name?: string;
   email?: string;
+  hash?: string;
+  emailHash?: string;
+  traits?: Record<string, unknown>;
+}
+
+export interface ShowdeskCompany {
+  id: string | number;
+  name: string;
+  domain?: string;
+  traits?: Record<string, unknown>;
   hash?: string;
 }
 
@@ -19,6 +29,7 @@ export interface ShowdeskInitConfig {
   hideButton?: boolean;
   navigationMode?: "spa" | "mpa";
   user?: ShowdeskUser;
+  company?: ShowdeskCompany;
 }
 
 export interface ShowdeskGlobal {
@@ -26,7 +37,7 @@ export interface ShowdeskGlobal {
   open(): void;
   destroy(): void;
   reset(): void;
-  setUser(user: ShowdeskUser): void;
+  setUser(user?: ShowdeskUser | null, company?: ShowdeskCompany): void;
 }
 
 declare global {
