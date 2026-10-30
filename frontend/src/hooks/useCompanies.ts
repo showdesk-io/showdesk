@@ -82,7 +82,9 @@ export function useUpdateCompany() {
   return useMutation({
     mutationFn: ({ id, ...data }: { id: string } & CompanyWrite) =>
       updateCompany(id, data),
-    onSuccess: (_data, { id }) => {
+    onSuccess: (company, { id }) => {
+      // At once: what the server made of it can differ, as a domain's normal form.
+      queryClient.setQueryData(["company", id], company);
       void queryClient.invalidateQueries({ queryKey: ["company", id] });
       invalidateWhatShowsCompanies(queryClient);
     },

@@ -9,6 +9,9 @@ import { apiClient } from "./client";
 import { toListParams } from "./contacts";
 import type { Company, Contact, PaginatedResponse, TicketListItem } from "@/types";
 
+/** The API's cap on a company's contacts, by name. A full list may be cut off. */
+export const COMPANY_CONTACTS_LIMIT = 200;
+
 export interface CompanyFilters {
   search?: string;
   ordering?: string;

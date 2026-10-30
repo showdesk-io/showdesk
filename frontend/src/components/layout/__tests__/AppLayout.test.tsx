@@ -66,16 +66,14 @@ describe("Contacts in the sidebar", () => {
     expect(link).toHaveAttribute("href", "/contacts");
   });
 
-  it("is active on /contacts/c1, whose page loads in the layout", () => {
+  it.each([
+    ["/contacts/c1", "Loading contact"],
+    ["/companies/co1", "Loading company"],
+  ])("is active on %s, whose page loads in the layout", (path, loading) => {
     vi.mocked(apiClient.get).mockImplementation(() => new Promise(() => {}));
 
-    expect(renderAt("/contacts/c1")).toHaveClass("bg-primary-50");
-    expect(screen.getByRole("status", { name: "Loading contact" })).toBeInTheDocument();
-  });
-
-  it("is active on /companies/co1, in the layout", () => {
-    expect(renderAt("/companies/co1")).toHaveClass("bg-primary-50");
-    expect(screen.getByText("This page isn't available yet.")).toBeInTheDocument();
+    expect(renderAt(path)).toHaveClass("bg-primary-50");
+    expect(screen.getByRole("status", { name: loading })).toBeInTheDocument();
   });
 
   it("is not active elsewhere", () => {
