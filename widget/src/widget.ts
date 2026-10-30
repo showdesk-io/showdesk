@@ -41,7 +41,6 @@ import {
   destroyModal,
   getStore,
   initSession,
-  isCreatingNewSession,
   restartAnonymousSession,
   switchSession,
 } from "./ui/modal";
@@ -186,13 +185,13 @@ function open(): void {
  * - With an id and a hash (a login without a reload): the session is created again
  *   and replaces the stored one. An anonymous conversation carries on under the
  *   identified session; another user's is taken off the screen.
- * - With nothing, or without a hash when a user was identified (a logout): starts over
- *   with a new anonymous session. The stored id is cleared and the previous conversation
- *   leaves the screen, while the widget stays usable. Whatever name or email was given
- *   goes with the new session. Call this when the user logs out, not on every render of
- *   a logged-out page: an anonymous visitor would lose their conversation each time.
- * - Otherwise, on an anonymous session (a name or an email without a hash): only
- *   updates the local config, sent to the server by the next init().
+ * - Without a hash when a user was identified (a logout): starts over with a new
+ *   anonymous session. The stored id is cleared and the previous conversation leaves the
+ *   screen, while the widget stays usable. Whatever name or email was given goes with
+ *   the new session.
+ * - Without a hash on an anonymous visitor: their session and conversation stay as they
+ *   are, so a logged-out page can call this on every render. Only the local config
+ *   changes, sent to the server by the next init().
  *
  * `company` belongs to this user: leaving it out sends none, so that a user can't
  * inherit the company of the previous one.
@@ -211,15 +210,10 @@ function setUser(
   const wasIdentified = Boolean(
     config.user?.hash || getStore().state.session?.externalUserId,
   );
-  const isLogout = !hasIdentity && (isEmpty || wasIdentified);
-  const hadNoUser = !config.user;
   config.user = (isEmpty ? undefined : user) ?? undefined;
   config.company = company;
-  if (isLogout) {
-    // Called twice for one logout: the request in flight is already the right one.
-    if (!(isEmpty && hadNoUser && isCreatingNewSession())) {
-      void restartAnonymousSession(config);
-    }
+  if (!hasIdentity && wasIdentified) {
+    void restartAnonymousSession(config);
     return;
   }
   if (hasIdentity) {

@@ -151,13 +151,6 @@ export function restartAnonymousSession(config: ShowdeskConfig): Promise<void> {
   return startSessionRun(config);
 }
 
-/** True while a session is being created with no stored id to resume. */
-export function isCreatingNewSession(): boolean {
-  return (
-    runInFlight !== null && !getStore().state.session && !getStoredSessionId()
-  );
-}
-
 /** Take the session and whatever its user has on screen out of the view. */
 function clearUserFromView(config: ShowdeskConfig): void {
   const s = getStore();
