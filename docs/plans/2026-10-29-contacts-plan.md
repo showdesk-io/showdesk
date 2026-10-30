@@ -2299,6 +2299,17 @@ class ContactViewSet(OrgScopedMixin, viewsets.ModelViewSet):
 
 An invalid `company` UUID must not 500: validate with `uuid.UUID(...)` and ignore on `ValueError` (add a test). Register `router.register(r"contacts", ContactViewSet, basename="contact")`.
 
+**As implemented** (`backend/apps/contacts/`, which supersedes the samples above where they differ):
+
+- `external_id` is read-only, so the uniqueness check only covers `email`.
+- The PATCH is `ContactViewSet.update`, not `perform_update`: it validates on the locked row, so an anonymized contact answers 409 before any 400, and the email check sees what was committed while it waited. PUT isn't offered.
+- An `IntegrityError` on create or PATCH is a 400. `company`'s choices are scoped to the organization, instead of `validate_company`.
+- `attribute_filters` became `filter_by_attributes(queryset, params)`: keys match `[A-Za-z_][A-Za-z0-9_]{0,63}` without a double underscore and go through `KeyTransform`, since `attributes__has_key` is a lookup and not a key. A value also matches its typed reading (`3`, `true`).
+- `_parse_dt` converts to UTC: Postgres refuses offsets beyond ±15:59. Filters and search only apply to the list, through `filter_queryset`.
+- The default order is on the viewset (`ordering`): the counts' GROUP BY makes Django drop `Meta.ordering`.
+- `timeline_tickets()` loads what `ContactTicketSerializer` needs and annotates `message_count`, which is one COUNT per ticket in `TicketListSerializer`.
+- `IsOrganizationStaff` refuses end users and users without an active organization. A note on an anonymized contact is a 409.
+
 **Step 4:** PASS. **Step 5: Commit** — `feat(backend): contacts API`
 
 ---
@@ -2334,7 +2345,7 @@ class CompanyViewSet(OrgScopedMixin, viewsets.ModelViewSet):
                 distinct=True,
             ),
         )
-        return qs.filter(**attribute_filters(self.request.query_params))
+        return filter_by_attributes(qs, self.request.query_params)
 
     @action(detail=True, methods=["get"])
     def contacts(self, request, pk=None):
@@ -2346,9 +2357,7 @@ class CompanyViewSet(OrgScopedMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def tickets(self, request, pk=None):
-        tickets = Ticket.objects.filter(contact__company=self.get_object()).order_by(
-            "-updated_at"
-        )[:100]
+        tickets = timeline_tickets(Ticket.objects.filter(contact__company=self.get_object()))
         return Response(ContactTicketSerializer(tickets, many=True).data)
 ```
 

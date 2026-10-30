@@ -269,8 +269,11 @@ on `tickets_ticket` before the fill (PostgreSQL only).
 All endpoints are agent-authenticated and scoped to the agent's organization.
 
 - `GET/POST /api/v1/contacts/`, `GET/PATCH/DELETE /api/v1/contacts/{id}/`
-  (search on name/email/declared_email, filters: company, enum/bool attributes,
-  last seen; `declared_email` is read-only; NULL `last_seen_at` always sorts last).
+  (search on name/email/declared_email/external_id, filters: company, attributes, last
+  seen; NULL `last_seen_at` always sorts last). `declared_email` and `external_id` are
+  read-only: an `external_id` set here would give the widget user of that id this
+  Contact's history. Changing `email` clears `email_verified_at`. Writing to an
+  anonymized Contact is a 409. End users are refused on the whole contacts API.
 - `GET/POST /api/v1/contacts/{id}/notes/`.
 - `GET /api/v1/contacts/{id}/tickets/`.
 - `POST /api/v1/contacts/{id}/export/` — Celery task, emails a ZIP (JSON + CSV:

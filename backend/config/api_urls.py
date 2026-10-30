@@ -4,6 +4,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from apps.contacts.views import ContactViewSet
 from apps.core.setup_views import SetupInitializeView, SetupStatusView
 from apps.core.views import HealthCheckView
 from apps.knowledge_base.views import ArticleViewSet, CategoryViewSet
@@ -50,6 +51,9 @@ router.register(
     OrganizationDomainViewSet,
     basename="organization-domain",
 )
+
+# Contacts
+router.register(r"contacts", ContactViewSet, basename="contact")
 
 # Tickets
 router.register(r"tickets", TicketViewSet, basename="ticket")
