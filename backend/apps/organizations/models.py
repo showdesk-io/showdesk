@@ -403,6 +403,16 @@ class User(AbstractUser):
         ):
             self.is_staff = False
             derived.add("is_staff")
+        # The new address is unproven until its next OTP login. Not for a platform
+        # admin in no organization: it can't claim a domain, and unverified it would
+        # look like the unfinished setup attempt that a retry replaces.
+        if (
+            "email" in changed
+            and self.is_verified
+            and (self.organization_id is not None or not self.is_superuser)
+        ):
+            self.is_verified = False
+            derived.add("is_verified")
         return derived
 
 
