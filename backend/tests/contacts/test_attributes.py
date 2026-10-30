@@ -1,6 +1,7 @@
 """Tests for the validation of custom attribute values."""
 
 import pytest
+from django.core.exceptions import ValidationError
 
 from apps.contacts.attributes import clean_attributes
 from apps.contacts.models import ContactAttributeDef
@@ -69,6 +70,28 @@ def test_valid_values_are_kept_and_coerced(defs):
 )
 def test_invalid_or_unknown_values_are_dropped(defs, traits):
     assert clean_attributes(defs, traits) == {}
+
+
+@pytest.mark.parametrize(
+    "traits",
+    [
+        {"seats": "many"},
+        {"unknown": "x"},
+        {"unknown": None},
+        {"old": "x"},
+        {"role": "a\x00b"},
+    ],
+)
+def test_strict_refuses_what_would_be_dropped(defs, traits):
+    with pytest.raises(ValidationError) as exc:
+        clean_attributes(defs, {"plan": "pro", **traits}, strict=True)
+    assert list(exc.value.message_dict) == list(traits)
+
+
+def test_strict_keeps_what_is_valid(defs):
+    assert clean_attributes(
+        defs, {"plan": "pro", "seats": "3", "role": None}, strict=True
+    ) == {"plan": "pro", "seats": 3, "role": None}
 
 
 def test_none_clears_a_value(defs):

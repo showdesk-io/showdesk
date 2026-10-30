@@ -32,7 +32,10 @@ def _clean_attributes(definitions, value):
     """Validate the ``attributes`` of a request, which have to be an object."""
     if not isinstance(value, dict):
         raise serializers.ValidationError("Expected an object.")
-    return clean_attributes(definitions, value)
+    try:
+        return clean_attributes(definitions, value, strict=True)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError(exc.message_dict) from exc
 
 
 def _merged_attributes(instance, values) -> dict:

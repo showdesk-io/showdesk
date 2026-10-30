@@ -156,30 +156,6 @@ def contacts_with_counts(contacts):
     )
 
 
-def _lock_writable_contact(pk) -> Contact:
-    """Return the contact's committed row, locked, unless it can't be written to.
-
-    Same row lock as the identity service and the anonymization, so nothing read
-    before an anonymization can write personal data back over it. Plain manager: the
-    aggregates of ``get_queryset()`` can't be locked. For a transaction.
-    """
-    contact = Contact.objects.select_for_update(no_key=True).filter(pk=pk).first()
-    if contact is None:
-        raise NotFound
-    if contact.is_anonymized:
-        raise ContactAnonymized
-    return contact
-
-
-def _as_validation_error(exc: IntegrityError) -> ValidationError:
-    """Turn a conflict the serializer's checks couldn't see coming into a 400."""
-    if "unique_contact_email_per_org" in str(exc):
-        return ValidationError({"email": [EMAIL_TAKEN]})
-    # What's left is a company deleted since it was validated.
-    logger.warning("Contact write refused by the database: %s", type(exc).__name__)
-    return ValidationError({"non_field_errors": ["This contact could not be saved."]})
-
-
 class OrgScopedMixin:
     permission_classes = [IsAuthenticated, IsOrganizationStaff]
 
@@ -197,11 +173,73 @@ class OrgScopedMixin:
         instance.delete()
 
 
-class ContactViewSet(OrgScopedMixin, viewsets.ModelViewSet):
+class LockedWriteViewSet(OrgScopedMixin, viewsets.ModelViewSet):
+    """A directory: PATCH validates and writes on the committed row, locked.
+
+    A conflict the serializer's checks couldn't see coming is a 400, not a 500.
+    """
+
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
-    serializer_class = ContactSerializer
     pagination_class = DirectoryPagination
     filter_backends = [SearchFilter, NullsLastOrderingFilter]
+    # The constraint that gives away a taken value, with the field and answer it means.
+    unique_conflict: tuple[str, str, str]
+    entity_name: str
+
+    def lock_row(self, pk):
+        """Return the row, locked, as the identity service locks it. In a transaction.
+
+        NO KEY: it lets others link to this row. Plain manager: the aggregates of
+        ``get_queryset()`` can't be locked.
+        """
+        row = self.serializer_class.Meta.model.objects.select_for_update(no_key=True)
+        row = row.filter(pk=pk).first()
+        if row is None:
+            raise NotFound
+        return row
+
+    def _as_validation_error(self, exc: IntegrityError) -> ValidationError:
+        constraint, field, message = self.unique_conflict
+        if constraint in str(exc):
+            return ValidationError({field: [message]})
+        # What's left is, say, a company deleted since it was validated.
+        logger.warning(
+            "%s write refused by the database: %s",
+            self.entity_name.capitalize(),
+            type(exc).__name__,
+        )
+        return ValidationError(
+            {"non_field_errors": [f"This {self.entity_name} could not be saved."]}
+        )
+
+    def perform_create(self, serializer):
+        try:
+            with transaction.atomic():
+                super().perform_create(serializer)
+        except IntegrityError as exc:
+            raise self._as_validation_error(exc) from exc
+
+    def update(self, request, *args, **kwargs):
+        """Handle a PATCH (no PUT here)."""
+        pk = self.get_object().pk
+        try:
+            with transaction.atomic():
+                serializer = self.get_serializer(
+                    self.lock_row(pk), data=request.data, partial=True
+                )
+                serializer.is_valid(raise_exception=True)
+                serializer.save()
+                # The response needs the counts.
+                data = self.get_serializer(self.get_queryset().get(pk=pk)).data
+        except IntegrityError as exc:
+            raise self._as_validation_error(exc) from exc
+        return Response(data)
+
+
+class ContactViewSet(LockedWriteViewSet):
+    serializer_class = ContactSerializer
+    unique_conflict = ("unique_contact_email_per_org", "email", EMAIL_TAKEN)
+    entity_name = "contact"
     search_fields = ["name", "email", "declared_email", "external_id"]
     ordering_fields = ["name", "email", "last_seen_at", "created_at"]
     # Not left to Meta.ordering, which Django drops from a query with a GROUP BY.
@@ -232,29 +270,14 @@ class ContactViewSet(OrgScopedMixin, viewsets.ModelViewSet):
             qs = qs.filter(last_seen_at__lte=before)
         return filter_by_attributes(qs, params)
 
-    def perform_create(self, serializer):
-        try:
-            with transaction.atomic():
-                super().perform_create(serializer)
-        except IntegrityError as exc:
-            raise _as_validation_error(exc) from exc
-
-    def update(self, request, *args, **kwargs):
-        """Handle a PATCH (no PUT here): validate and write on the locked row."""
-        pk = self.get_object().pk
-        try:
-            with transaction.atomic():
-                contact = _lock_writable_contact(pk)
-                serializer = self.get_serializer(
-                    contact, data=request.data, partial=True
-                )
-                serializer.is_valid(raise_exception=True)
-                serializer.save()
-                # The response needs the ticket counts.
-                data = self.get_serializer(self.get_queryset().get(pk=pk)).data
-        except IntegrityError as exc:
-            raise _as_validation_error(exc) from exc
-        return Response(data)
+    def lock_row(self, pk) -> Contact:
+        """Refuse an anonymized contact, so nothing read before an anonymization can
+        write personal data back over it.
+        """
+        contact = super().lock_row(pk)
+        if contact.is_anonymized:
+            raise ContactAnonymized
+        return contact
 
     def perform_destroy(self, instance):
         require_org_admin(self.request.user)
@@ -278,52 +301,33 @@ class ContactViewSet(OrgScopedMixin, viewsets.ModelViewSet):
     def notes(self, request, pk=None):
         contact = self.get_object()
         if request.method == "POST":
-            serializer = ContactNoteSerializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
             with transaction.atomic():
-                serializer.save(
-                    contact=_lock_writable_contact(contact.pk), author=request.user
-                )
+                locked = self.lock_row(contact.pk)
+                serializer = ContactNoteSerializer(data=request.data)
+                serializer.is_valid(raise_exception=True)
+                serializer.save(contact=locked, author=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         notes = contact.notes.select_related("author").order_by("-created_at", "-id")
         return Response(ContactNoteSerializer(notes, many=True).data)
 
 
-def _as_company_validation_error(exc: IntegrityError) -> ValidationError:
-    """Turn a conflict the serializer's checks couldn't see coming into a 400."""
-    if "unique_company_domain_per_org" in str(exc):
-        return ValidationError({"domain": [DOMAIN_TAKEN]})
-    logger.warning("Company write refused by the database: %s", type(exc).__name__)
-    return ValidationError({"non_field_errors": ["This company could not be saved."]})
-
-
-class CompanyViewSet(OrgScopedMixin, viewsets.ModelViewSet):
-    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+class CompanyViewSet(LockedWriteViewSet):
     serializer_class = CompanySerializer
-    pagination_class = DirectoryPagination
-    filter_backends = [SearchFilter, NullsLastOrderingFilter]
+    unique_conflict = ("unique_company_domain_per_org", "domain", DOMAIN_TAKEN)
+    entity_name = "company"
     search_fields = ["name", "domain", "external_id"]
     ordering_fields = ["name", "created_at", "mrr_cents"]
     # Not left to Meta.ordering, which Django drops from a query with a GROUP BY.
     ordering = ["name"]
 
     def get_queryset(self):
-        # The counts only cover rows of the organization, as the actions below do.
         return Company.objects.filter(
             organization=get_active_org(self.request)
         ).annotate(
-            contacts_count=Count(
-                "contacts",
-                filter=Q(contacts__organization=F("organization")),
-                distinct=True,
-            ),
+            contacts_count=Count("contacts", distinct=True),
             open_tickets_count=Count(
                 "contacts__tickets",
-                filter=Q(
-                    contacts__organization=F("organization"),
-                    contacts__tickets__organization=F("organization"),
-                    contacts__tickets__status__in=OPEN_STATUSES,
-                ),
+                filter=Q(contacts__tickets__status__in=OPEN_STATUSES),
                 distinct=True,
             ),
         )
@@ -335,37 +339,6 @@ class CompanyViewSet(OrgScopedMixin, viewsets.ModelViewSet):
         return filter_by_attributes(
             super().filter_queryset(queryset), self.request.query_params
         )
-
-    def perform_create(self, serializer):
-        try:
-            with transaction.atomic():
-                super().perform_create(serializer)
-        except IntegrityError as exc:
-            raise _as_company_validation_error(exc) from exc
-
-    def update(self, request, *args, **kwargs):
-        """Handle a PATCH (no PUT here): validate and write on the locked row.
-
-        NO KEY, the lock of the identity service: it lets contacts link to the company.
-        """
-        pk = self.get_object().pk
-        try:
-            with transaction.atomic():
-                company = (
-                    Company.objects.select_for_update(no_key=True).filter(pk=pk).first()
-                )
-                if company is None:
-                    raise NotFound
-                serializer = self.get_serializer(
-                    company, data=request.data, partial=True
-                )
-                serializer.is_valid(raise_exception=True)
-                serializer.save()
-                # The response needs the counts.
-                data = self.get_serializer(self.get_queryset().get(pk=pk)).data
-        except IntegrityError as exc:
-            raise _as_company_validation_error(exc) from exc
-        return Response(data)
 
     def perform_destroy(self, instance):
         """Delete the company; its contacts stay, without a company.

@@ -1,5 +1,6 @@
 """Reusable permission classes and helpers for the Showdesk platform."""
 
+from django.core.exceptions import ValidationError
 from rest_framework.permissions import BasePermission
 
 
@@ -35,22 +36,37 @@ def has_feature(feature: str) -> type[BasePermission]:
     return _HasFeature
 
 
+def _impersonated_org(request):
+    """Return the organization a superuser's header names, None if it names none."""
+    org_id = request.META.get("HTTP_X_SHOWDESK_ORG")
+    if not org_id or not request.user.is_superuser:
+        return None
+    from apps.organizations.models import Organization
+
+    try:
+        return Organization.objects.get(id=org_id)
+    except (Organization.DoesNotExist, ValueError, ValidationError):
+        return None
+
+
+def impersonates_no_organization(request) -> bool:
+    """Tell whether a superuser's header names an organization that doesn't resolve."""
+    return (
+        request.user.is_superuser
+        and bool(request.META.get("HTTP_X_SHOWDESK_ORG"))
+        and _impersonated_org(request) is None
+    )
+
+
 def get_active_org(request):
     """Return the effective organization for the current request.
 
     For superusers with an impersonated org (via X-Showdesk-Org header),
-    returns the impersonated org. Otherwise returns the user's own org.
+    returns the impersonated org. Otherwise returns the user's own org,
+    including when the header names an org that doesn't resolve: the frontend
+    persists the org it sends, and a stale one mustn't lock its user out.
 
     Note: This resolves the header lazily at call time (in the ViewSet),
     because DRF JWT authentication runs after Django middleware.
     """
-    if request.user.is_superuser:
-        org_id = request.META.get("HTTP_X_SHOWDESK_ORG")
-        if org_id:
-            from apps.organizations.models import Organization
-
-            try:
-                return Organization.objects.get(id=org_id)
-            except (Organization.DoesNotExist, ValueError):
-                pass
-    return request.user.organization
+    return _impersonated_org(request) or request.user.organization

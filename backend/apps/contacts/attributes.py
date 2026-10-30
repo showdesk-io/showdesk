@@ -119,22 +119,31 @@ def validate_options(type_: str, options: Any) -> None:
         raise ValidationError("The options have to be unique.")
 
 
-def clean_attributes(definitions, values: Any) -> dict[str, Any]:
+def clean_attributes(
+    definitions, values: Any, *, strict: bool = False
+) -> dict[str, Any]:
     """Return the subset of ``values`` that matches active ``definitions``.
 
     Unknown keys, archived definitions and values of the wrong type are
     dropped (and logged) instead of raising, so a host app sending extra
     traits never breaks the widget. ``None`` clears a value, and anything
     but a ``dict`` cleans to nothing.
+
+    ``strict`` is for an agent, who can correct what they sent: anything that
+    would be dropped raises a ``ValidationError`` by key instead.
     """
     if not isinstance(values, dict):
         return {}
     by_key = {d.key: d for d in definitions if not d.is_archived}
     cleaned: dict[str, Any] = {}
+    errors: dict[str, str] = {}
     for key, value in values.items():
+        # Sent back in the errors, where a key Postgres can't store can't go either.
+        error_key = key if is_storable(key) else "invalid_key"
         definition = by_key.get(key)
         if definition is None:
             logger.info("Dropping unknown attribute %r", key)
+            errors[error_key] = "Unknown attribute."
             continue
         if value is None:
             cleaned[key] = None
@@ -143,9 +152,13 @@ def clean_attributes(definitions, values: Any) -> dict[str, Any]:
             coerced = _coerce(definition.type, value, definition.options)
         except _Invalid:
             logger.info("Dropping invalid value for attribute %r", key)
+            errors[error_key] = f"Not a valid {definition.type} value."
             continue
         if not is_storable(coerced):
             logger.info("Dropping unstorable value for attribute %r", key)
+            errors[error_key] = "This value can't be stored."
             continue
         cleaned[key] = coerced
+    if strict and errors:
+        raise ValidationError(errors)
     return cleaned

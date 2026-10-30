@@ -326,13 +326,14 @@ def test_removing_an_option_leaves_stored_values_alone(admin_client, organizatio
     assert res.status_code == 200
     assert res.data["options"] == ["free"]
     assert Contact.objects.get(pk=contact.pk).attributes == {"plan": "pro"}
-    # A new write of the removed value is dropped, like any other invalid one.
+    # A new write of the removed value is refused, like any other invalid one.
     res = admin_client.patch(
         f"/api/v1/contacts/{contact.id}/",
-        {"attributes": {"plan": "pro", "other": 1}},
+        {"attributes": {"plan": "pro"}},
         format="json",
     )
-    assert res.data["attributes"] == {"plan": "pro"}
+    assert res.status_code == 400
+    assert "plan" in res.data["attributes"]
 
 
 def test_patch_without_options_doesnt_check_the_stored_ones(admin_client, organization):

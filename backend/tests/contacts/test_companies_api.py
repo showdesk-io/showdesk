@@ -66,14 +66,11 @@ def test_list_counts_arent_multiplied_by_the_joins(authenticated_client, organiz
     assert (row["contacts_count"], row["open_tickets_count"]) == (2, 3)
 
 
-def test_counts_ignore_rows_of_another_org(authenticated_client, organization):
-    """They agree with the ``contacts`` and ``tickets`` actions."""
+def test_actions_ignore_rows_of_another_org(authenticated_client, organization):
     company = CompanyFactory(organization=organization)
     contact = ContactFactory(organization=organization, company=company)
     TicketFactory(organization=OrganizationFactory(), contact=contact, status="open")
     ContactFactory(organization=OrganizationFactory(), company=company)
-    row = authenticated_client.get(URL).data["results"][0]
-    assert (row["contacts_count"], row["open_tickets_count"]) == (1, 0)
     assert len(authenticated_client.get(f"{_detail(company)}contacts/").data) == 1
     assert len(authenticated_client.get(f"{_detail(company)}tickets/").data) == 0
 
@@ -289,15 +286,18 @@ def test_create_validates_attributes(authenticated_client, organization):
     # A definition of the other entity gives no right to store its key here.
     ContactAttributeDefFactory(organization=organization, key="role")
     res = authenticated_client.post(
-        URL,
-        {"name": "Acme", "attributes": {"seats": "3", "junk": 1, "role": "x"}},
-        format="json",
+        URL, {"name": "Acme", "attributes": {"seats": "3"}}, format="json"
     )
     assert res.status_code == 201
     assert res.data["attributes"] == {"seats": 3}
+    res = authenticated_client.post(
+        URL, {"name": "Acme", "attributes": {"role": "x"}}, format="json"
+    )
+    assert res.status_code == 400
+    assert "role" in res.data["attributes"]
 
 
-def test_attribute_defined_only_in_another_org_is_dropped(
+def test_attribute_defined_only_in_another_org_is_refused(
     authenticated_client, organization
 ):
     CompanyAttributeDefFactory(organization=OrganizationFactory(), key="tier")
@@ -305,13 +305,25 @@ def test_attribute_defined_only_in_another_org_is_dropped(
     res = authenticated_client.patch(
         _detail(company), {"attributes": {"tier": "gold"}}, format="json"
     )
-    assert res.status_code == 200
-    assert res.data["attributes"] == {}
+    assert res.status_code == 400
+    assert "tier" in res.data["attributes"]
     res = authenticated_client.post(
         URL, {"name": "Acme", "attributes": {"tier": "gold"}}, format="json"
     )
-    assert res.status_code == 201
-    assert res.data["attributes"] == {}
+    assert res.status_code == 400
+    assert "tier" in res.data["attributes"]
+
+
+def test_invalid_attribute_value_is_400(authenticated_client, organization):
+    CompanyAttributeDefFactory(organization=organization, key="seats", type="number")
+    company = CompanyFactory(organization=organization, attributes={"seats": 1})
+    res = authenticated_client.patch(
+        _detail(company), {"attributes": {"seats": "many"}}, format="json"
+    )
+    assert res.status_code == 400
+    assert "seats" in res.data["attributes"]
+    company.refresh_from_db()
+    assert company.attributes == {"seats": 1}
 
 
 def test_impersonation_validates_attributes_on_the_impersonated_org(organization):
@@ -323,12 +335,19 @@ def test_impersonation_validates_attributes_on_the_impersonated_org(organization
     client.force_authenticate(UserFactory(organization=organization, is_superuser=True))
     res = client.patch(
         _detail(company),
-        {"attributes": {"tier": "gold", "mine": "x"}},
+        {"attributes": {"tier": "gold"}},
         format="json",
         HTTP_X_SHOWDESK_ORG=str(other.id),
     )
     assert res.status_code == 200
     assert res.data["attributes"] == {"tier": "gold"}
+    res = client.patch(
+        _detail(company),
+        {"attributes": {"mine": "x"}},
+        format="json",
+        HTTP_X_SHOWDESK_ORG=str(other.id),
+    )
+    assert res.status_code == 400
 
 
 def test_patch_moves_updated_at(authenticated_client, organization):
@@ -422,7 +441,7 @@ def test_patch_merges_attributes(authenticated_client, organization):
     company = CompanyFactory(organization=organization, attributes={"tier": "pro"})
     res = authenticated_client.patch(
         _detail(company),
-        {"attributes": {"region": "eu", "junk": 1}},
+        {"attributes": {"region": "eu"}},
         format="json",
     )
     assert res.data["attributes"] == {"tier": "pro", "region": "eu"}

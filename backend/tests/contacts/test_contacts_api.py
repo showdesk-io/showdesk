@@ -366,7 +366,7 @@ def test_create_validates_attributes(authenticated_client, organization):
     ContactAttributeDefFactory(organization=organization, key="seats", type="number")
     res = authenticated_client.post(
         URL,
-        {"email": "New@X.io", "attributes": {"seats": "3", "junk": 1}},
+        {"email": "New@X.io", "attributes": {"seats": "3"}},
         format="json",
     )
     assert res.status_code == 201
@@ -922,12 +922,52 @@ def test_impersonation_validates_attributes_on_the_impersonated_org(
     contact = ContactFactory(organization=other)
     res = superuser_client.patch(
         _detail(contact),
-        {"attributes": {"tier": "gold", "mine": "x"}},
+        {"attributes": {"tier": "gold"}},
         format="json",
         HTTP_X_SHOWDESK_ORG=str(other.id),
     )
     assert res.status_code == 200
     assert res.data["attributes"] == {"tier": "gold"}
+    res = superuser_client.patch(
+        _detail(contact),
+        {"attributes": {"mine": "x"}},
+        format="json",
+        HTTP_X_SHOWDESK_ORG=str(other.id),
+    )
+    assert res.status_code == 400
+    assert "mine" in res.data["attributes"]
+
+
+@pytest.mark.parametrize(
+    "header", ["not-a-uuid", "00000000-0000-4000-8000-000000000000"]
+)
+@pytest.mark.parametrize(
+    "url", [URL, "/api/v1/companies/", "/api/v1/contact-attributes/"]
+)
+def test_impersonating_an_org_that_doesnt_resolve_is_400(
+    superuser_client, organization, header, url
+):
+    ContactFactory(organization=organization)
+    res = superuser_client.get(url, HTTP_X_SHOWDESK_ORG=header)
+    assert res.status_code == 400
+
+
+def test_impersonating_an_org_that_doesnt_resolve_writes_nothing(
+    superuser_client, organization
+):
+    res = superuser_client.post(
+        URL, {"email": "a@x.io"}, format="json", HTTP_X_SHOWDESK_ORG="not-a-uuid"
+    )
+    assert res.status_code == 400
+    assert not Contact.objects.filter(organization=organization).exists()
+
+
+def test_the_organization_header_of_a_non_superuser_is_ignored_even_if_malformed(
+    authenticated_client, organization
+):
+    contact = ContactFactory(organization=organization)
+    res = authenticated_client.get(URL, HTTP_X_SHOWDESK_ORG="not-a-uuid")
+    assert _ids(res) == [str(contact.id)]
 
 
 def test_impersonating_superuser_can_delete(superuser_client):
@@ -938,7 +978,7 @@ def test_impersonating_superuser_can_delete(superuser_client):
     assert not Contact.objects.filter(pk=contact.pk).exists()
 
 
-def test_attribute_defined_only_in_another_org_is_dropped(
+def test_attribute_defined_only_in_another_org_is_refused(
     authenticated_client, organization
 ):
     ContactAttributeDefFactory(organization=OrganizationFactory(), key="tier")
@@ -946,13 +986,60 @@ def test_attribute_defined_only_in_another_org_is_dropped(
     res = authenticated_client.patch(
         _detail(contact), {"attributes": {"tier": "gold"}}, format="json"
     )
-    assert res.status_code == 200
-    assert res.data["attributes"] == {}
+    assert res.status_code == 400
+    assert "tier" in res.data["attributes"]
     res = authenticated_client.post(
         URL, {"email": "n@x.io", "attributes": {"tier": "gold"}}, format="json"
     )
-    assert res.status_code == 201
-    assert res.data["attributes"] == {}
+    assert res.status_code == 400
+    assert "tier" in res.data["attributes"]
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        {"seats": "many"},  # Invalid.
+        {"seats": 3, "junk": 1},  # Unknown, next to a valid one.
+        {"old": "x"},  # Archived.
+        {"role": "a\x00b"},  # Not storable.
+        {"a\x00b": 1},  # A key that couldn't be sent back as it is.
+        {"\ud800": 1},
+    ],
+)
+def test_attributes_that_cant_be_stored_as_sent_are_400(
+    authenticated_client, organization, attributes
+):
+    ContactAttributeDefFactory(organization=organization, key="seats", type="number")
+    ContactAttributeDefFactory(organization=organization, key="role")
+    ContactAttributeDefFactory(organization=organization, key="old", is_archived=True)
+    contact = ContactFactory(organization=organization, attributes={"seats": 1})
+    res = authenticated_client.patch(
+        _detail(contact),
+        json.dumps({"attributes": attributes}),
+        content_type="application/json",
+    )
+    assert res.status_code == 400
+    assert "attributes" in res.json()
+    contact.refresh_from_db()
+    assert contact.attributes == {"seats": 1}
+    res = authenticated_client.post(
+        URL,
+        json.dumps({"email": "n@x.io", "attributes": attributes}),
+        content_type="application/json",
+    )
+    assert res.status_code == 400
+    assert "attributes" in res.json()
+    assert not Contact.objects.filter(email="n@x.io").exists()
+
+
+def test_invalid_attributes_of_an_anonymized_contact_are_a_409(
+    authenticated_client, organization
+):
+    contact = ContactFactory(organization=organization, is_anonymized=True)
+    res = authenticated_client.patch(
+        _detail(contact), {"attributes": {"junk": 1}}, format="json"
+    )
+    assert res.status_code == 409
 
 
 def test_patch_moves_updated_at(authenticated_client, organization):
@@ -1028,6 +1115,16 @@ def test_invalid_note_is_400(authenticated_client, organization, body):
     res = authenticated_client.post(f"{_detail(contact)}notes/", body, format="json")
     assert res.status_code == 400
     assert not contact.notes.exists()
+
+
+def test_invalid_note_on_an_anonymized_contact_is_a_409(
+    authenticated_client, organization
+):
+    contact = ContactFactory(organization=organization, is_anonymized=True)
+    res = authenticated_client.post(
+        f"{_detail(contact)}notes/", {"body": ""}, format="json"
+    )
+    assert res.status_code == 409
 
 
 def test_notes_are_newest_first(authenticated_client, organization):
