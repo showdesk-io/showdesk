@@ -8,6 +8,8 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { AxiosError, type AxiosResponse } from "axios";
+import toast from "react-hot-toast";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 
@@ -282,5 +284,76 @@ describe("SignupPage — slug auto-derivation", () => {
     await user.type(slugInput, "my-team");
     await user.type(screen.getByLabelText(/organization name/i), " Ltd");
     expect(slugInput).toHaveValue("my-team");
+  });
+});
+
+
+describe("SignupPage — rate limits", () => {
+  const RATE_LIMITED = "Too many attempts. Please wait a while and try again.";
+
+  function http429(data: object = { detail: "Request was throttled." }) {
+    return new AxiosError("429", "ERR_BAD_REQUEST", undefined, undefined, {
+      status: 429,
+      data,
+    } as AxiosResponse);
+  }
+
+  async function goToOtpStep(user: ReturnType<typeof userEvent.setup>) {
+    renderSignup();
+    await user.type(await screen.findByLabelText(/full name/i), "Jane Doe");
+    await user.type(screen.getByLabelText(/work email/i), "jane@acme.com");
+    await user.click(
+      screen.getByRole("button", { name: /send verification code/i }),
+    );
+    return screen.findByLabelText(/verification code/i);
+  }
+
+  beforeEach(() => {
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it("explains a 429 when requesting a code", async () => {
+    vi.mocked(signupApi.signupRequestOTP).mockRejectedValueOnce(http429());
+    const user = userEvent.setup();
+    renderSignup();
+    await user.type(await screen.findByLabelText(/full name/i), "Jane Doe");
+    await user.type(screen.getByLabelText(/work email/i), "jane@acme.com");
+    await user.click(
+      screen.getByRole("button", { name: /send verification code/i }),
+    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(RATE_LIMITED));
+  });
+
+  it("explains a 429 when verifying and keeps the code", async () => {
+    vi.mocked(signupApi.signupVerifyOTP).mockRejectedValueOnce(http429());
+    const user = userEvent.setup();
+    const input = await goToOtpStep(user);
+    await user.type(input, "123456");
+    await user.click(screen.getByRole("button", { name: /verify|continue/i }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(RATE_LIMITED));
+    expect(input).toHaveValue("123456");
+  });
+
+  it("explains a 429 when resending a code", async () => {
+    const user = userEvent.setup();
+    await goToOtpStep(user);
+    vi.mocked(signupApi.signupRequestOTP).mockRejectedValueOnce(http429());
+    await user.click(screen.getByRole("button", { name: /resend/i }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(RATE_LIMITED));
+  });
+
+  it("keeps the server's explanation of the signup quota", async () => {
+    const detail = "Too many accounts created from this network recently.";
+    vi.mocked(signupApi.signupRequestOTP).mockRejectedValueOnce(
+      http429({ detail, code: "signup_quota_exceeded" }),
+    );
+    const user = userEvent.setup();
+    renderSignup();
+    await user.type(await screen.findByLabelText(/full name/i), "Jane Doe");
+    await user.type(screen.getByLabelText(/work email/i), "jane@acme.com");
+    await user.click(
+      screen.getByRole("button", { name: /send verification code/i }),
+    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(detail));
   });
 });

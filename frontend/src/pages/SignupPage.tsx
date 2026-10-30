@@ -22,6 +22,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { isAxiosError } from "axios";
+import { isRateLimited, RATE_LIMIT_MESSAGE } from "@/lib/rateLimit";
 import toast from "react-hot-toast";
 import {
   checkDomain,
@@ -176,8 +177,8 @@ export function SignupPage() {
     try {
       await signupRequestOTP({ email, full_name: fullName });
       toast.success("New code sent.");
-    } catch {
-      toast.error("Could not resend code.");
+    } catch (err) {
+      toast.error(isRateLimited(err) ? RATE_LIMIT_MESSAGE : "Could not resend code.");
     } finally {
       setIsLoading(false);
     }
@@ -237,8 +238,8 @@ export function SignupPage() {
           data.detail ||
             "This email cannot be used for signup. Try signing in instead.",
         );
-      } else if (err.response.status === 429) {
-        toast.error("Too many attempts. Please try again later.");
+      } else if (isRateLimited(err) && data.code !== "signup_quota_exceeded") {
+        toast.error(RATE_LIMIT_MESSAGE);
       } else {
         toast.error(data.detail || fallback);
       }

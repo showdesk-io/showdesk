@@ -10,6 +10,7 @@ import { useState, useRef, useEffect } from "react";
 import { Link, useNavigate } from "react-router";
 import toast from "react-hot-toast";
 import { requestOTP, verifyOTP } from "@/api/auth";
+import { isRateLimited, RATE_LIMIT_MESSAGE } from "@/lib/rateLimit";
 import { useAuthStore } from "@/store/authStore";
 
 type Step = "email" | "otp";
@@ -38,8 +39,12 @@ export function LoginPage() {
       await requestOTP(email);
       setStep("otp");
       toast.success("Code sent! Check your email.");
-    } catch {
-      toast.error("Something went wrong. Please try again.");
+    } catch (err) {
+      toast.error(
+        isRateLimited(err)
+          ? RATE_LIMIT_MESSAGE
+          : "Something went wrong. Please try again.",
+      );
     } finally {
       setIsLoading(false);
     }
@@ -53,9 +58,14 @@ export function LoginPage() {
       const tokens = await verifyOTP(email, code);
       setTokens(tokens.access, tokens.refresh);
       navigate("/");
-    } catch {
-      toast.error("Invalid or expired code.");
-      setCode("");
+    } catch (err) {
+      if (isRateLimited(err)) {
+        // The code wasn't checked: it may still be good once the limit passes.
+        toast.error(RATE_LIMIT_MESSAGE);
+      } else {
+        toast.error("Invalid or expired code.");
+        setCode("");
+      }
     } finally {
       setIsLoading(false);
     }
