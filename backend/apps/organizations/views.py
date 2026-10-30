@@ -9,7 +9,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -79,6 +79,23 @@ class OrganizationViewSet(
         self._reject_branding_writes_without_flag(request)
         return super().update(request, *args, **kwargs)
 
+    def perform_update(self, serializer) -> None:
+        """Write the submitted fields only, so a stale read can't undo a rotation."""
+        with transaction.atomic():
+            org = (
+                self.get_queryset()
+                .select_for_update()
+                .filter(pk=serializer.instance.pk)
+                .first()
+            )
+            if org is None:
+                raise NotFound()
+            serializer.instance = org
+            changed = _changed_fields(org, serializer.validated_data)
+            _assign(org, serializer.validated_data, changed)
+            if changed:
+                org.save(update_fields=[*changed, "updated_at"])
+
     def _reject_writes_by_agents(self, request) -> None:
         if is_org_admin(request.user):
             return
@@ -130,6 +147,19 @@ class OrganizationViewSet(
         return Response(self.get_serializer(org).data)
 
 
+def _changed_fields(instance, validated_data: dict) -> set[str]:
+    return {
+        name
+        for name, value in validated_data.items()
+        if getattr(instance, name) != value
+    }
+
+
+def _assign(instance, validated_data: dict, fields: set[str]) -> None:
+    for name in fields:
+        setattr(instance, name, validated_data[name])
+
+
 # What anybody may change on their own row.
 SELF_EDITABLE_USER_FIELDS = frozenset(
     {"first_name", "last_name", "avatar", "phone", "timezone", "is_available"}
@@ -156,12 +186,29 @@ def _check_user_edit(actor: User, target: User, changed: set[str]) -> None:
         )
 
 
+def _lock_admins(organization_id) -> list[User]:
+    """Lock the organization's admins, always in the same order.
+
+    A superuser that holds an admin role in the organization doesn't count: it
+    isn't one of its own admins.
+    """
+    return list(
+        User.objects.select_for_update()
+        .filter(
+            organization_id=organization_id,
+            role=User.Role.ADMIN,
+            is_active=True,
+            is_superuser=False,
+        )
+        .order_by("pk")
+    )
+
+
 def _check_keeps_an_admin(target: User) -> None:
     """Refuse to take away the last active admin of ``target``'s organization.
 
     Call it in a transaction, before the change: the row locks make concurrent
-    removals of two admins wait for each other. A superuser that holds an admin
-    role in the organization doesn't count: it isn't one of its own admins.
+    removals of two admins wait for each other.
     """
     if (
         target.is_superuser
@@ -170,13 +217,9 @@ def _check_keeps_an_admin(target: User) -> None:
         or target.organization_id is None
     ):
         return
-    admins = User.objects.select_for_update().filter(
-        organization_id=target.organization_id,
-        role=User.Role.ADMIN,
-        is_active=True,
-        is_superuser=False,
-    )
-    if not [admin for admin in admins if admin.pk != target.pk]:
+    if not [
+        admin for admin in _lock_admins(target.organization_id) if admin.pk != target.pk
+    ]:
         raise ValidationError(
             {"error": "An organization needs at least one active admin."}
         )
@@ -222,32 +265,50 @@ class UserViewSet(viewsets.ModelViewSet):
         """Create the user in the active organization."""
         serializer.save(organization=require_active_org(self.request))
 
+    def _lock_target(self, instance: User, *, may_remove_admin: bool) -> User:
+        """Reload ``instance`` under a row lock, or answer 404 if it's gone.
+
+        Call it in a transaction. Whoever may remove an admin locks the admins
+        first, as _check_keeps_an_admin does: two such requests then queue up
+        rather than deadlock.
+        """
+        if may_remove_admin and instance.organization_id is not None:
+            _lock_admins(instance.organization_id)
+        target = self.get_queryset().select_for_update().filter(pk=instance.pk).first()
+        if target is None:
+            raise NotFound()
+        return target
+
     def perform_update(self, serializer) -> None:
-        target = serializer.instance
-        changed = {
-            name
-            for name, value in serializer.validated_data.items()
-            if getattr(target, name) != value
-        }
-        _check_user_edit(self.request.user, target, changed)
-        removes_admin = serializer.validated_data.get(
-            "role", target.role
-        ) != User.Role.ADMIN or not serializer.validated_data.get(
-            "is_active", target.is_active
+        data = serializer.validated_data
+        may_remove_admin = (
+            data.get("role", User.Role.ADMIN) != User.Role.ADMIN
+            or data.get("is_active") is False
         )
+        actor = self.request.user
         with transaction.atomic():
-            if removes_admin:
+            target = self._lock_target(
+                serializer.instance, may_remove_admin=may_remove_admin
+            )
+            serializer.instance = target
+            changed = _changed_fields(target, data)
+            # On their own row, go by the role as it is now, not as authenticated.
+            _check_user_edit(
+                target if actor.pk == target.pk else actor, target, changed
+            )
+            if may_remove_admin:
                 _check_keeps_an_admin(target)
-            target.role = serializer.validated_data.get("role", target.role)
-            target.apply_field_changes(changed)
-            serializer.save()
+            _assign(target, data, changed)
+            changed |= target.apply_field_changes(changed)
+            target.save(update_fields=changed)
 
     def perform_destroy(self, instance: User) -> None:
-        if instance.is_superuser and not self.request.user.is_superuser:
-            raise PermissionDenied("Only a superuser can delete a superuser.")
         with transaction.atomic():
-            _check_keeps_an_admin(instance)
-            instance.delete()
+            target = self._lock_target(instance, may_remove_admin=True)
+            if target.is_superuser and not self.request.user.is_superuser:
+                raise PermissionDenied("Only a superuser can delete a superuser.")
+            _check_keeps_an_admin(target)
+            target.delete()
 
     # End users have no agents' routes, but they do have an account.
     @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
@@ -330,15 +391,16 @@ class UserViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        user = self.get_object()
-        if user.id == request.user.id:
+        instance = self.get_object()
+        if instance.id == request.user.id:
             return Response(
                 {"error": "You cannot deactivate yourself."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if user.is_superuser and not request.user.is_superuser:
-            raise PermissionDenied("Only a superuser can change a superuser.")
         with transaction.atomic():
+            user = self._lock_target(instance, may_remove_admin=True)
+            if user.is_superuser and not request.user.is_superuser:
+                raise PermissionDenied("Only a superuser can change a superuser.")
             _check_keeps_an_admin(user)
             user.is_active = not user.is_active
             user.save(update_fields=["is_active"])
@@ -756,56 +818,70 @@ class JoinRequestViewSet(
             )
 
         org = join_request.organization
-        existing = User.objects.filter(email__iexact=join_request.email).first()
+        with transaction.atomic():
+            _lock_admins(org.id)
+            existing = (
+                User.objects.select_for_update()
+                .filter(email__iexact=join_request.email)
+                .first()
+            )
 
-        if existing and (
-            existing.is_superuser or existing.organization_id not in (None, org.id)
-        ):
-            # The requester created or joined another org between request and
-            # decision, or runs the platform. Auto-reject; we cannot move them.
-            join_request.status = OrgJoinRequest.Status.REJECTED
+            if existing and (
+                existing.is_superuser or existing.organization_id not in (None, org.id)
+            ):
+                # The requester created or joined another org between request and
+                # decision, or runs the platform. Auto-reject; we cannot move them.
+                join_request.status = OrgJoinRequest.Status.REJECTED
+                join_request.decided_at = timezone.now()
+                join_request.decided_by = request.user
+                join_request.save(update_fields=["status", "decided_at", "decided_by"])
+                return Response(
+                    {
+                        "detail": (
+                            "This email now belongs to another organization; the "
+                            "request was auto-rejected."
+                        ),
+                        "code": "email_taken",
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            if existing:
+                user = existing
+                # Approving makes them an agent, which an admin would lose by.
+                _check_keeps_an_admin(user)
+                user.organization = org
+                user.role = User.Role.AGENT
+                user.is_staff = True
+                user.is_active = True
+                updated = ["organization", "role", "is_staff", "is_active"]
+                if (
+                    not user.first_name
+                    and not user.last_name
+                    and join_request.full_name
+                ):
+                    first_name, _, last_name = join_request.full_name.partition(" ")
+                    user.first_name = first_name
+                    user.last_name = last_name
+                    updated += ["first_name", "last_name"]
+                user.save(update_fields=updated)
+            else:
+                first_name, _, last_name = (join_request.full_name or "").partition(" ")
+                user = User(
+                    email=join_request.email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    role=User.Role.AGENT,
+                    organization=org,
+                    is_staff=True,
+                )
+                user.set_unusable_password()
+                user.save()
+
+            join_request.status = OrgJoinRequest.Status.APPROVED
             join_request.decided_at = timezone.now()
             join_request.decided_by = request.user
             join_request.save(update_fields=["status", "decided_at", "decided_by"])
-            return Response(
-                {
-                    "detail": (
-                        "This email now belongs to another organization; the "
-                        "request was auto-rejected."
-                    ),
-                    "code": "email_taken",
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        if existing:
-            user = existing
-            user.organization = org
-            user.role = User.Role.AGENT
-            user.is_staff = True
-            user.is_active = True
-            if not user.first_name and not user.last_name and join_request.full_name:
-                first_name, _, last_name = join_request.full_name.partition(" ")
-                user.first_name = first_name
-                user.last_name = last_name
-            user.save()
-        else:
-            first_name, _, last_name = (join_request.full_name or "").partition(" ")
-            user = User(
-                email=join_request.email,
-                first_name=first_name,
-                last_name=last_name,
-                role=User.Role.AGENT,
-                organization=org,
-                is_staff=True,
-            )
-            user.set_unusable_password()
-            user.save()
-
-        join_request.status = OrgJoinRequest.Status.APPROVED
-        join_request.decided_at = timezone.now()
-        join_request.decided_by = request.user
-        join_request.save(update_fields=["status", "decided_at", "decided_by"])
 
         otp = OTPCode.generate(user.email)
         expiry_minutes = getattr(settings, "OTP_EXPIRY_SECONDS", 600) // 60
