@@ -278,12 +278,22 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
 - `GET /api/v1/contacts/{id}/tickets/`.
 - `POST /api/v1/contacts/{id}/export/` — Celery task, emails a ZIP (JSON + CSV:
   profile, attributes, tickets, messages, attachment metadata).
-- `POST /api/v1/contacts/{id}/anonymize/` — admin only, irreversible: email →
-  `anonymized-{uuid}@example.invalid`, name → "Anonymized contact", phone and
-  external_id and declared_email cleared, attributes emptied, the contact's notes deleted
-  (free text that can hold personal data), the contact's message bodies replaced by a
-  placeholder, ticket `context_metadata` reduced to a whitelist,
-  `is_anonymized = True`.
+- `POST /api/v1/contacts/{id}/anonymize/` — admin only, irreversible, idempotent (a
+  second call changes nothing). Contact: email → `anonymized-{uuid}@example.invalid`, name
+  → "Anonymized contact", phone, external_id, declared_email, email_verified_at, avatar,
+  job title, locale, timezone and company cleared, attributes emptied,
+  `is_anonymized = True`, notes deleted (free text that can hold personal data). Sessions:
+  name, email, external_user_id, email_verified_at and user agent cleared, unlinked from
+  the Contact. Tickets: title and description replaced (the widget copies the first
+  message there), requester name and email set to the anonymized ones, external_user_id,
+  context_url and context_user_agent cleared, `context_metadata` reduced to a whitelist
+  (which also removes the `pre_login_*` trace), `widget_session` unlinked. The contact's
+  messages: body replaced by a placeholder, unlinked from their session. Files: the
+  contact's attachments and recordings are deleted, rows and files. "The contact's" means
+  uploaded with no user (as the widget does, or by an account since deleted) or by the
+  ticket's requester. Files go once the
+  transaction has committed; a failure is logged with the file's path, and doesn't fail
+  the request.
 - `GET/POST /api/v1/companies/`, `GET/PATCH/DELETE /api/v1/companies/{id}/`,
   `GET /api/v1/companies/{id}/contacts/`, `GET /api/v1/companies/{id}/tickets/`.
   `external_id` is read-only, as on a Contact: it's what signed widget payloads upsert a
@@ -375,3 +385,14 @@ inbound sender).
   a signed page to an unsigned one creates a new anonymous session.
 - A wrong `user_hash` returns 403 and the widget doesn't start. A host app signing with
   an old secret loses the widget on its identified pages, not only their history.
+- Anonymization leaves personal data in places it can't judge: agent replies and internal
+  notes on the tickets (free text that may quote the contact), agents' own attachments and
+  recordings (a screenshot of the contact's account, say), and the `requester` user of a
+  ticket, an account the Contact doesn't own. It also keeps the OS, browser and screen
+  resolution of the tickets, and the Contact's seen dates.
+- A widget request already past its session lookup when an anonymization commits can
+  still write what it holds: a new ticket on the anonymized Contact with the old requester
+  details, or one more message on a scrubbed ticket. The window is one request. A video
+  being processed at that moment can leave its thumbnail on the storage.
+- A file that the storage failed to delete is only logged: nothing retries it, and its row
+  is gone.

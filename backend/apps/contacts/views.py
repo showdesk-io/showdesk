@@ -23,6 +23,7 @@ from apps.core.permissions import get_active_org
 from apps.tickets.models import Ticket
 
 from .attributes import is_storable
+from .gdpr import anonymize_contact
 from .models import Company, CompanyAttributeDef, Contact, ContactAttributeDef
 from .permissions import (
     IsOrganizationAdminOrReadOnly,
@@ -309,6 +310,16 @@ class ContactViewSet(LockedWriteViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         notes = contact.notes.select_related("author").order_by("-created_at", "-id")
         return Response(ContactNoteSerializer(notes, many=True).data)
+
+    @action(detail=True, methods=["post"])
+    def anonymize(self, request, pk=None):
+        require_org_admin(request.user)
+        contact = anonymize_contact(self.get_object())
+        if contact is None:
+            raise NotFound
+        return Response(
+            self.get_serializer(self.get_queryset().get(pk=contact.pk)).data
+        )
 
 
 class CompanyViewSet(LockedWriteViewSet):

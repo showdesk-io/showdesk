@@ -65,6 +65,13 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
 
         serializer = VideoUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        # No session here to have lost the ticket: see contacts.gdpr.
+        contact = serializer.validated_data["ticket"].contact
+        if contact is not None and contact.is_anonymized:
+            return Response(
+                {"error": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         # Compute expiration based on organization settings
         expiration_days = organization.video_expiration_days

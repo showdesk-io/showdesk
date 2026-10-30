@@ -636,7 +636,10 @@ class TicketViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            ticket = Ticket.objects.get(id=ticket_id, organization=organization)
+            # No session here to have lost the ticket: see contacts.gdpr.
+            ticket = Ticket.objects.exclude(contact__is_anonymized=True).get(
+                id=ticket_id, organization=organization
+            )
         except Ticket.DoesNotExist:
             return Response(
                 {"error": "Ticket not found."},
