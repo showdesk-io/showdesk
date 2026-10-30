@@ -7,7 +7,12 @@ All factories are self-contained and can be used independently.
 import factory
 from django.utils import timezone
 
-from apps.contacts.models import Company, Contact
+from apps.contacts.models import (
+    Company,
+    Contact,
+    ContactAttributeDef,
+    ContactNote,
+)
 from apps.organizations.models import Organization, Team, User
 from apps.tickets.models import (
     CannedResponse,
@@ -243,3 +248,28 @@ class ContactFactory(factory.django.DjangoModelFactory):
     organization = factory.SubFactory(OrganizationFactory)
     name = factory.Faker("name")
     email = factory.Sequence(lambda n: f"contact{n}@customer.example")
+
+
+class ContactAttributeDefFactory(factory.django.DjangoModelFactory):
+    """Factory for creating ContactAttributeDef instances."""
+
+    class Meta:
+        model = ContactAttributeDef
+
+    organization = factory.SubFactory(OrganizationFactory)
+    key = factory.Sequence(lambda n: f"attr_{n}")
+    label = factory.Sequence(lambda n: f"Attribute {n}")
+    type = "string"
+
+
+class ContactNoteFactory(factory.django.DjangoModelFactory):
+    """Factory for creating ContactNote instances."""
+
+    class Meta:
+        model = ContactNote
+
+    contact = factory.SubFactory(ContactFactory)
+    author = factory.SubFactory(
+        UserFactory, organization=factory.SelfAttribute("..contact.organization")
+    )
+    body = factory.Faker("sentence")

@@ -1,4 +1,4 @@
-"""Tests for Contact and Company models."""
+"""Tests for the contacts app models."""
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -6,8 +6,19 @@ from django.db import IntegrityError
 from django.forms import modelform_factory
 from django.utils import timezone
 
-from apps.contacts.models import Company, Contact
-from tests.factories import CompanyFactory, ContactFactory, OrganizationFactory
+from apps.contacts.models import (
+    Company,
+    CompanyAttributeDef,
+    Contact,
+    ContactAttributeDef,
+)
+from tests.factories import (
+    CompanyFactory,
+    ContactAttributeDefFactory,
+    ContactFactory,
+    ContactNoteFactory,
+    OrganizationFactory,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -177,3 +188,63 @@ def test_company_ordering_breaks_name_ties_by_id():
     assert [
         company.pk for company in Company.objects.filter(organization=org)
     ] == ordered_ids
+
+
+def test_attribute_key_unique_per_org():
+    attr = ContactAttributeDefFactory(key="plan")
+    with pytest.raises(IntegrityError):
+        ContactAttributeDefFactory(organization=attr.organization, key="plan")
+
+
+def test_attribute_same_key_allowed_in_other_org():
+    ContactAttributeDefFactory(key="plan")
+    ContactAttributeDefFactory(organization=OrganizationFactory(), key="plan")
+
+
+def test_company_attribute_key_unique_per_org():
+    org = OrganizationFactory()
+    CompanyAttributeDef.objects.create(
+        organization=org, key="plan", label="Plan", type="string"
+    )
+    with pytest.raises(IntegrityError):
+        CompanyAttributeDef.objects.create(
+            organization=org, key="plan", label="Other", type="string"
+        )
+
+
+def test_contact_and_company_attribute_keys_are_independent():
+    attr = ContactAttributeDefFactory(key="plan")
+    CompanyAttributeDef.objects.create(
+        organization=attr.organization, key="plan", label="Plan", type="string"
+    )
+
+
+def test_attribute_limit_constant():
+    assert ContactAttributeDef.MAX_PER_ORGANIZATION == 50
+    assert CompanyAttributeDef.MAX_PER_ORGANIZATION == 50
+
+
+def test_attribute_ordering_by_position_then_label_then_id():
+    org = OrganizationFactory()
+    second = ContactAttributeDefFactory(organization=org, position=1, label="A")
+    first = ContactAttributeDefFactory(organization=org, position=0, label="Z")
+    ties = [
+        ContactAttributeDefFactory(organization=org, position=2, label="Same")
+        for _ in range(5)
+    ]
+    expected = [first.pk, second.pk, *sorted(attr.pk for attr in ties)]
+    assert [
+        attr.pk for attr in ContactAttributeDef.objects.filter(organization=org)
+    ] == expected
+
+
+def test_contact_note_str():
+    note = ContactNoteFactory(body="Called them")
+    assert note.contact.display_name in str(note)
+
+
+def test_contact_note_survives_author_deletion():
+    note = ContactNoteFactory()
+    note.author.delete()
+    note.refresh_from_db()
+    assert note.author is None

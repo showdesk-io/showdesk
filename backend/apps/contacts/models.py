@@ -1,5 +1,6 @@
 """Contacts (end-users) and Companies of an Organization."""
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
@@ -142,3 +143,71 @@ class Contact(TimestampedModel):
     def save(self, *args, **kwargs) -> None:
         self.email = _normalize(self.email)
         super().save(*args, **kwargs)
+
+
+class CustomAttributeDef(TimestampedModel):
+    """Definition of a custom attribute an Organization adds to an entity."""
+
+    MAX_PER_ORGANIZATION = 50
+
+    class Type(models.TextChoices):
+        STRING = "string", "Text"
+        NUMBER = "number", "Number"
+        BOOLEAN = "boolean", "Yes/No"
+        DATE = "date", "Date"
+        ENUM = "enum", "List"
+        URL = "url", "URL"
+
+    organization = models.ForeignKey(
+        "organizations.Organization", on_delete=models.CASCADE, related_name="+"
+    )
+    key = models.SlugField(max_length=64, help_text="snake_case, immutable.")
+    label = models.CharField(max_length=120)
+    type = models.CharField(max_length=10, choices=Type.choices)
+    description = models.TextField(blank=True)
+    options = models.JSONField(default=list, blank=True)
+    is_required = models.BooleanField(default=False)
+    is_archived = models.BooleanField(default=False)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        abstract = True
+        ordering = ["position", "label", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.label} ({self.key})"
+
+
+class ContactAttributeDef(CustomAttributeDef):
+    """Custom attribute definition for an Organization's contacts."""
+
+    class Meta(CustomAttributeDef.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "key"], name="unique_contact_attr_key"
+            )
+        ]
+
+
+class CompanyAttributeDef(CustomAttributeDef):
+    """Custom attribute definition for an Organization's companies."""
+
+    class Meta(CustomAttributeDef.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "key"], name="unique_company_attr_key"
+            )
+        ]
+
+
+class ContactNote(TimestampedModel):
+    """Internal note written by an agent on a contact."""
+
+    contact = models.ForeignKey(Contact, on_delete=models.CASCADE, related_name="notes")
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+"
+    )
+    body = models.TextField()
+
+    def __str__(self) -> str:
+        return f"Note on {self.contact.display_name}"
