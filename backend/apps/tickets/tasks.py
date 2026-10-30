@@ -45,15 +45,18 @@ def _priority_label(ticket) -> str:
 
 
 def _requester_can_be_emailed(ticket) -> bool:
-    """Tell if the ticket has an address, and one that isn't an anonymized contact's."""
+    """Tell if the ticket has an address, and one that isn't an anonymized contact's.
+
+    Its contact says so. A ticket with none, scrubbed that way or left by a deleted
+    contact, only has the address to tell.
+    """
     from apps.contacts.models import ANONYMIZED_EMAIL_DOMAIN
 
-    contact = ticket.contact
-    return (
-        bool(ticket.requester_email)
-        and not ticket.requester_email.lower().endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")
-        and not (contact and contact.is_anonymized)
-    )
+    if not ticket.requester_email:
+        return False
+    if ticket.contact:
+        return not ticket.contact.is_anonymized
+    return not ticket.requester_email.lower().endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)

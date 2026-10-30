@@ -372,6 +372,17 @@ def test_requester_of_a_regular_contact_is_still_emailed(mail_ticket):
     assert [message.to for message in mail.outbox] == [["end@example.com"]] * 2
 
 
+def test_a_visitor_at_that_domain_with_a_regular_contact_is_still_emailed(mail_ticket):
+    _, ticket = mail_ticket
+    ticket.contact = ContactFactory(organization=ticket.organization)
+    ticket.requester_email = "visitor@example.invalid"
+    ticket.save()
+
+    send_ticket_resolved_email(ticket.id)
+
+    assert [message.to for message in mail.outbox] == [["visitor@example.invalid"]]
+
+
 def test_anonymized_requesters_reply_still_reaches_agents(mail_ticket):
     agent, ticket = mail_ticket
     ticket.contact = ContactFactory(
