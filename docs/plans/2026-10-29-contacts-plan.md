@@ -2721,6 +2721,8 @@ Docs: `data-user-email-hash`, `init({ user: { emailHash, traits }, company: { �
 - External user ids starting with `email:` or `company\n` are refused, since those prefixes are reserved for the other two hashes.
 - A numeric user or company id is accepted, and signed as its decimal string.
 
+**`setUser()` must start a session again.** Today it only changes the local config, and identity reaches the backend on the next `init()`. So a single-page app that logs in without a reload gets no continuity until then: its conversation stays on the anonymous session, and its new tickets too. This task closes that gap: when `setUser()` receives an identity with a `hash`, it re-runs the session init with the stored id and that hash (the login of design rule 8), stores the session returned, and reloads the conversation list. Without a `hash` it starts no identified session. Document it, and test it by hand since the widget has no test runner: anonymous conversation, `setUser()` with a hash, then the same conversation continues without a reload.
+
 **Commit** — `feat(widget): send signed email, signed company and traits`
 
 ---
@@ -2832,6 +2834,7 @@ Table: label, key (monospace), type, options, archived toggle. Admin-only form: 
 4. `cd widget && npm run lint && npm run build` → clean.
 5. Manual smoke with `make dev`: Contacts page, create a contact, a widget session with `data-user-*` attributes creates/updates a contact, the ticket card links to it.
 6. Use superpowers:requesting-code-review; address findings.
-7. Push `feat/contacts`; open a PR → `develop` titled `feat: contacts and companies` with summary, migration note (back-fill runs during the deploy migrate step), test instructions for the development environment, the `CONTRIBUTING.md` checklist, and the Claude Code attribution line.
-8. Post-deploy, in the release notes: pods still running the old code keep writing rows without a contact after the back-fill migration. Once none is left, run `python manage.py backfill_contacts` once. It runs the same idempotent function, on the rows still unlinked and only there. Don't run it later: it would also link again a ticket whose contact an agent cleared.
-9. `docker stop showdesk-test-pg showdesk-test-redis`.
+7. Release notes, before deploying: count the rows the reserved prefixes now exclude, with `WidgetSession.objects.filter(external_user_id__startswith="email:").count()` and the same on `Ticket` (and `company\n` on both). Those sessions can't be resumed and get no contact, so check any non-zero count with the integrator concerned. Tell integrators that a `user_hash` is required on every init of an identified user: an init without one now counts as a logout and starts a new anonymous session.
+8. Push `feat/contacts`; open a PR → `develop` titled `feat: contacts and companies` with summary, migration note (back-fill runs during the deploy migrate step), test instructions for the development environment, the `CONTRIBUTING.md` checklist, and the Claude Code attribution line.
+9. Post-deploy, in the release notes: pods still running the old code keep writing rows without a contact after the back-fill migration. Once none is left, run `python manage.py backfill_contacts` once. It runs the same idempotent function, on the rows still unlinked and only there. Don't run it later: it would also link again a ticket whose contact an agent cleared.
+10. `docker stop showdesk-test-pg showdesk-test-redis`.

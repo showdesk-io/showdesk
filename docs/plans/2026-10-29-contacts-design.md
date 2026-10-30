@@ -178,8 +178,10 @@ a malformed `external_user_id` is a 400.
 7. **No Contact**: whenever the service resolves no Contact (no usable identity, or
    an anonymized one), a Contact previously linked to the session is unlinked.
 8. **Login and logout on a browser**: one session per `(organization,
-   external_user_id)`, and only a valid `user_hash` gives access to it. The session
-   id the widget stored decides what an init does:
+   external_user_id)`, and only a valid `user_hash` resumes it through the session
+   endpoint's `POST`. That's the only thing gated: every other widget endpoint takes the
+   session id alone (`X-Widget-Session`), so an id stays a bearer token (see §8). The
+   session id the widget stored decides what an init does:
    - **Anonymous, no valid hash**: resumed. An id sent without a valid hash is ignored.
    - **Anonymous, valid hash (login)**: the identified session is found or created,
      and returned for the widget to store instead. In one transaction, within the
@@ -195,10 +197,13 @@ a malformed `external_user_id` is a 400.
      requester of a moved ticket: it isn't necessarily this user's.
    - **Identified, valid hash**: find-or-create on the id sent, which is the user's own
      session unless another user logged in since on that browser.
-   - **Identified, no hash (logout)**: a new anonymous session. Nothing is written to
-     the identified session or its Contact, and its history isn't exposed. This includes
-     an id sent without a hash: nothing proves it. A session can only become identified
-     through a valid hash, so an integration that never signs has none to lose.
+   - **Identified, no hash (logout)**: a new anonymous session, which the widget stores
+     instead. Nothing is written to the identified session or its Contact, and the
+     response exposes nothing of its history. This includes an id sent without a hash:
+     nothing proves it. It only stops the init from resuming that session: the old id
+     isn't revoked and keeps working as `X-Widget-Session` for whoever still holds it. A
+     session can only become identified through a valid hash, so an integration that
+     never signs has none to lose.
    - **Identified, wrong hash**: refused (403), as without a stored session.
 
    A ticket without a Contact is only linked to the session's Contact when a request
@@ -347,9 +352,17 @@ inbound sender).
   new conversation it starts stays with the anonymous session.
 - The widget only sends its stored id on `init()`. `Showdesk.reset()` clears it, so a
   login following a reset can't move anything, and `setUser()` doesn't start a new
-  session: identity only reaches the backend on the next `init()`.
+  session: identity only reaches the backend on the next `init()`. A single-page app that
+  logs in without a reload gets no continuity until then. Plan Task 15 closes this one.
 - A vouched external id on a ticket only proves that the id exists in the organization,
   not that this ticket's sender holds it: `widget_submit` can still name a real user. The
   back-fill can link such a ticket, and take a name or a `declared_email` from it, on a
   Contact it creates. `sender_verified` stays false on it, as it has no session of that
   Contact.
+- Session ids don't expire and don't rotate. A logged-out session's id stays usable as a
+  bearer token through `X-Widget-Session`, on its conversations and its history, for
+  whoever kept it: only `POST` resume is gated by the hash (rule 8).
+- Pages with and without identity on one origin share the stored id, so each switch from
+  a signed page to an unsigned one creates a new anonymous session.
+- A wrong `user_hash` returns 403 and the widget doesn't start. A host app signing with
+  an old secret loses the widget on its identified pages, not only their history.
