@@ -415,16 +415,6 @@ class TestOrganizationCredentials:
             assert row["api_token"] == str(organization.api_token)
             assert "widget_secret" not in row
 
-    def test_agents_do_not_get_the_secret_from_a_write(
-        self, authenticated_client, organization
-    ) -> None:
-        res = authenticated_client.patch(
-            f"/api/v1/organizations/{organization.id}/",
-            {"onboarding_step": 1},
-            format="json",
-        )
-        assert "widget_secret" not in res.data
-
     def test_admins_see_both(self, admin_client, organization) -> None:
         row = admin_client.get(f"/api/v1/organizations/{organization.id}/").data
         assert row["widget_secret"] == organization.widget_secret
@@ -477,21 +467,28 @@ class TestOrganizationWrites:
         )
         assert res.status_code == 403
 
-    def test_onboarding_progress_stays_open_to_agents(
+    def test_onboarding_progress_is_refused_to_agents(
         self, authenticated_client, organization
     ) -> None:
+        """They could otherwise hide the wizard from the organization's admin."""
         res = authenticated_client.patch(
             f"/api/v1/organizations/{organization.id}/",
-            {
-                "onboarding_step": 3,
-                "onboarding_completed_at": "2026-01-01T00:00:00Z",
-            },
+            {"onboarding_completed_at": "2026-01-01T00:00:00Z"},
             format="json",
         )
-        assert res.status_code == 200, res.data
+        assert res.status_code == 403
         organization.refresh_from_db()
-        assert organization.onboarding_step == 3
-        assert organization.onboarding_completed_at is not None
+        assert organization.onboarding_completed_at is None
+
+    @pytest.mark.parametrize("body", [123, "text", [1, 2], [{"name": "New"}], []])
+    def test_a_body_that_is_not_an_object_is_refused(
+        self, authenticated_client, admin_client, organization, body
+    ) -> None:
+        for client in (authenticated_client, admin_client):
+            res = client.patch(
+                f"/api/v1/organizations/{organization.id}/", body, format="json"
+            )
+            assert res.status_code == 400
 
     def test_admins_can_run_the_onboarding_widget_step(
         self, admin_client, organization

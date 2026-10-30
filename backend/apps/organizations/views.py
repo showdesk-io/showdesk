@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from collections.abc import Mapping
 
 from django.conf import settings
 from django.db import transaction
@@ -59,9 +60,6 @@ class OrganizationViewSet(
     serializer_class = OrganizationSerializer
     permission_classes = [IsAuthenticated, IsOrgStaff]
 
-    # All that agents may write: the wizard's progress, not the settings.
-    AGENT_WRITABLE_FIELDS = frozenset({"onboarding_step", "onboarding_completed_at"})
-
     # Fields that require the ``custom_branding`` feature flag to mutate.
     # Read-only orgs (free plan) keep the defaults (Showdesk brand) but
     # cannot edit them; the API returns 403 the moment they try.
@@ -75,7 +73,10 @@ class OrganizationViewSet(
         return Organization.objects.none()
 
     def update(self, request, *args, **kwargs):
-        self._reject_writes_by_agents(request)
+        if not isinstance(request.data, Mapping):
+            raise ValidationError({"error": "Expected an object."})
+        if not is_org_admin(request.user):
+            raise PermissionDenied("Only admins can change the organization.")
         self._reject_branding_writes_without_flag(request)
         return super().update(request, *args, **kwargs)
 
@@ -95,13 +96,6 @@ class OrganizationViewSet(
             _assign(org, serializer.validated_data, changed)
             if changed:
                 org.save(update_fields=[*changed, "updated_at"])
-
-    def _reject_writes_by_agents(self, request) -> None:
-        if is_org_admin(request.user):
-            return
-        fields = set(request.data)
-        if not fields or fields - self.AGENT_WRITABLE_FIELDS:
-            raise PermissionDenied("Only admins can change the organization.")
 
     def _reject_branding_writes_without_flag(self, request) -> None:
         org = get_active_org(request)
