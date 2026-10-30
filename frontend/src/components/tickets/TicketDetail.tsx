@@ -31,6 +31,7 @@ import { useRecordCannedResponseUse } from "@/hooks/useCannedResponses";
 import { useCurrentUser } from "@/hooks/useAuth";
 import { applyTemplateVariables } from "@/lib/cannedResponseVars";
 import type { CannedResponse } from "@/api/cannedResponses";
+import { ContactCard } from "@/components/contacts/ContactCard";
 import { CannedResponsePicker } from "./CannedResponsePicker";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -967,18 +968,24 @@ function TicketSidebar({ ticket }: { ticket: Ticket }) {
         ))}
       </select>
 
-      {/* Requester */}
-      <h2 className="mb-2 text-sm font-semibold text-gray-900">Requester</h2>
-      <div className="mb-6 space-y-1 text-sm">
-        <p className="text-gray-900">
-          {ticket.requester_detail
-            ? `${ticket.requester_detail.first_name} ${ticket.requester_detail.last_name}`
-            : ticket.requester_name || "Unknown"}
-        </p>
-        <p className="text-gray-500">
-          {ticket.requester_detail?.email ?? ticket.requester_email}
-        </p>
-      </div>
+      {/* Contact, or the requester of a ticket that has none */}
+      {ticket.contact_detail ? (
+        <ContactCard contact={ticket.contact_detail} ticket={ticket} />
+      ) : (
+        <>
+          <h2 className="mb-2 text-sm font-semibold text-gray-900">Requester</h2>
+          <div className="mb-6 space-y-1 text-sm">
+            <p className="text-gray-900">
+              {ticket.requester_detail
+                ? `${ticket.requester_detail.first_name} ${ticket.requester_detail.last_name}`
+                : ticket.requester_name || "Unknown"}
+            </p>
+            <p className="text-gray-500">
+              {ticket.requester_detail?.email ?? ticket.requester_email}
+            </p>
+          </div>
+        </>
+      )}
 
       {/* Technical Context */}
       {ticket.context_url && (
