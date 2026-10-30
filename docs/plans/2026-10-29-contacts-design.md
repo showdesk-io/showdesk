@@ -261,3 +261,14 @@ inbound sender).
   `npm run lint` (0 warnings), `npm test`, `npm run build`.
 - Widget: `email_hash` passed through from `data-user-email-hash` and `init()`,
   `company_hash` from `init()`.
+
+---
+
+## 8. Known limitations
+
+- An identified Contact with a blank `email` can't take a proven email currently
+  held by an email-only Contact, since there's no merge. No access is granted. To
+  resolve in the email channel PR, where history reunion needs it, by reassigning that
+  unverified Contact's tickets on proof, or with the planned manual merge.
+- An unsigned payload can link a Contact without a Company to any existing Company by
+  id. It's a claim shown to agents and grants no access.
