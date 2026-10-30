@@ -814,6 +814,14 @@ class TestNoContactUnlinksTheSession:
         session.refresh_from_db()
         assert session.contact is None
 
+    @pytest.mark.parametrize("external_id", ["email:a@x.io", "company\nc"])
+    def test_reserved_external_id_of_an_older_session(self, org, external_id):
+        session = _session(
+            org, external_user_id=external_id, email="a@x.io", name="Ann"
+        )
+        assert resolve_contact_for_widget_session(session) is None
+        assert not Contact.objects.filter(organization=org).exists()
+
     def test_identified_session_whose_contact_was_anonymized(self, org):
         anonymized = ContactFactory(
             organization=org, external_id="u1", is_anonymized=True

@@ -51,7 +51,11 @@ from django.core.validators import DomainNameValidator, validate_email
 from django.db import DatabaseError, IntegrityError, models, transaction
 from django.utils import timezone
 
-from apps.organizations.models import extract_email_domain, is_public_email_domain
+from apps.organizations.models import (
+    RESERVED_EXTERNAL_ID_PREFIXES,
+    extract_email_domain,
+    is_public_email_domain,
+)
 
 from .attributes import clean_attributes, is_storable
 from .models import Company, CompanyAttributeDef, Contact, ContactAttributeDef
@@ -338,9 +342,14 @@ def _resolve_session_once(
 
     if identified:
         external_id = _clean_external_id(session.external_user_id, _EXTERNAL_ID_MAX)
-        if external_id != session.external_user_id or not external_id:
-            # Not something we'd store as is, so it can't be looked up either.
-            # Don't fall back on the email: this session claimed an identity.
+        if (
+            not external_id
+            or external_id != session.external_user_id
+            or external_id.startswith(RESERVED_EXTERNAL_ID_PREFIXES)
+        ):
+            # Not something we'd store as is, so it can't be looked up either, or a
+            # hash from before those prefixes were reserved: it may sign something
+            # else. Don't fall back on the email: this session claimed an identity.
             contact = None
         else:
             proven_email = email if email_verified else ""

@@ -1,6 +1,7 @@
 """Back-fill of contacts from existing widget sessions and tickets."""
 
 from datetime import timedelta
+from unittest import mock
 
 import pytest
 from django.apps import apps as django_apps
@@ -8,9 +9,11 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from rest_framework.test import APIClient
 
-from apps.contacts.backfill import backfill, clean_email
+from apps.contacts.backfill import _analyze, backfill, clean_email
 from apps.contacts.models import Contact
+from apps.contacts.services import resolve_contact_for_widget_session
 from apps.tickets.models import Ticket, WidgetSession
 from tests.factories import ContactFactory, OrganizationFactory, TicketFactory
 
@@ -87,6 +90,7 @@ class TestIdentity:
 
     def test_ticket_of_an_external_id_declares_its_email(self):
         org = OrganizationFactory()
+        _session(org, external_user_id="u1")
         ticket = _ticket(org, external_user_id="u1", requester_email="A@x.io")
         _run()
         ticket.refresh_from_db()
@@ -146,6 +150,8 @@ class TestIdentity:
             _session(other, external_user_id="u1"),
             _session(org, email="a@x.io"),
             _session(other, email="a@x.io"),
+            _session(org, external_user_id="u2"),
+            _session(other, external_user_id="u2"),
             _ticket(org, external_user_id="u2"),
             _ticket(other, external_user_id="u2"),
             _ticket(org, requester_email="b@x.io"),
@@ -201,17 +207,37 @@ class TestUnusableValues:
         assert len(email) <= 254
         assert clean_email(email) == email
 
-    def test_blank_padded_external_id_claims_an_identity_it_cant_have(self):
+    @pytest.mark.parametrize("external_id", ["  ", " u1", "email:a@x.io", "company\nc"])
+    def test_session_with_an_id_it_cant_have_claims_an_identity_and_gets_none(
+        self, external_id
+    ):
         # Same rule as the service: it isn't stored as is, and the session doesn't
         # fall back on its email since it claimed an identity.
         org = OrganizationFactory()
-        session = _session(org, external_user_id="  ", email="a@x.io")
-        ticket = _ticket(org, external_user_id=" u1", requester_email="a@x.io")
+        session = _session(org, external_user_id=external_id, email="a@x.io")
+        followed = _ticket(org, widget_session=session, requester_email="a@x.io")
         _run()
-        _reload(session, ticket)
+        _reload(session, followed)
         assert session.contact is None
-        assert ticket.contact is None
+        assert followed.contact is None
         assert not Contact.objects.filter(organization=org).exists()
+
+    @pytest.mark.parametrize("external_id", [" u1", "email:a@x.io", "company\nc"])
+    def test_session_with_an_id_it_cant_have_vouches_for_nothing(self, external_id):
+        org = OrganizationFactory()
+        _session(org, external_user_id=external_id)
+        with_email = _ticket(
+            org, external_user_id=external_id, requester_email="a@x.io"
+        )
+        without = _ticket(org, external_user_id=external_id)
+        _run()
+        _reload(with_email, without)
+        assert (with_email.contact.email, with_email.contact.external_id) == (
+            "a@x.io",
+            "",
+        )
+        assert without.contact is None
+        assert Contact.objects.filter(organization=org).count() == 1
 
 
 @pytest.mark.django_db
@@ -379,19 +405,28 @@ class TestSessionAndItsTickets:
         assert old.contact == session.contact
         assert new.contact == session.contact
 
-    def test_session_without_identity_prefers_a_ticket_external_id(self):
+    def test_anonymous_session_never_takes_an_external_id_from_its_tickets(self):
+        # Nothing proves it, and the service wouldn't keep that link on a resume.
         org = OrganizationFactory()
-        now = timezone.now()
+        _session(org, external_user_id="u1")
         session = _session(org)
-        old = _ticket(org, external_user_id="u1", widget_session=session)
-        new = _ticket(org, requester_email="a@x.io", widget_session=session)
-        _dated(old, created_at=now - timedelta(days=2))
-        _dated(new, created_at=now - timedelta(days=1))
+        vouched = _ticket(org, external_user_id="u1", widget_session=session)
         _run()
-        _reload(session, old, new)
-        assert session.contact.external_id == "u1"
-        assert old.contact == session.contact
-        assert new.contact == session.contact
+        _reload(session, vouched)
+        assert session.contact is None
+        assert vouched.contact.external_id == "u1"
+
+    def test_ticket_with_an_email_decides_over_a_ticket_external_id(self):
+        org = OrganizationFactory()
+        _session(org, external_user_id="u1")
+        session = _session(org)
+        vouched = _ticket(org, external_user_id="u1", widget_session=session)
+        emailed = _ticket(org, requester_email="a@x.io", widget_session=session)
+        _run()
+        _reload(session, vouched, emailed)
+        assert session.contact.email == "a@x.io"
+        assert emailed.contact == session.contact
+        assert vouched.contact == session.contact
 
     def test_session_and_ticket_without_identity_stay_unlinked(self):
         org = OrganizationFactory()
@@ -546,23 +581,254 @@ class TestExistingRows:
 
 
 @pytest.mark.django_db
-def test_query_count_doesnt_grow_with_the_rows():
-    def rows(count, prefix):
-        org = OrganizationFactory()
-        for n in range(count):
-            session = _session(org, email=f"{prefix}{n}@x.io")
-            _ticket(org, widget_session=session)
-            _session(org, external_user_id=f"{prefix}{n}")
-            _ticket(org, external_user_id=f"{prefix}t{n}", requester_email="t@x.io")
-            _ticket(org, requester_email=f"{prefix}t{n}@x.io")
+class TestUnsignedIdentity:
+    """``widget_submit`` takes any external id: only a session proves one."""
 
-    rows(2, "few")
-    with CaptureQueriesContext(connection) as few:
+    def test_unvouched_ticket_falls_through_to_its_email(self):
+        org = OrganizationFactory()
+        ticket = _ticket(
+            org,
+            external_user_id="victim",
+            requester_email="A@x.io",
+            requester_name="Forged",
+        )
         _run()
-    rows(40, "many")
-    with CaptureQueriesContext(connection) as many:
+        ticket.refresh_from_db()
+        contact = ticket.contact
+        assert (contact.external_id, contact.email) == ("", "a@x.io")
+        assert contact.declared_email == ""
+        assert contact.name == ""
+
+    def test_unvouched_ticket_without_an_email_stays_unlinked(self):
+        org = OrganizationFactory()
+        ticket = _ticket(org, external_user_id="victim", requester_name="Forged")
         _run()
-    assert len(many) == len(few)
+        ticket.refresh_from_db()
+        assert ticket.contact is None
+        assert not Contact.objects.filter(organization=org).exists()
+
+    def test_unvouched_ticket_doesnt_reach_an_existing_contact_of_that_id(self):
+        org = OrganizationFactory()
+        victim = ContactFactory(organization=org, email="", external_id="victim")
+        ticket = _ticket(org, external_user_id="victim")
+        _run()
+        ticket.refresh_from_db()
+        assert ticket.contact is None
+        assert list(Contact.objects.filter(organization=org)) == [victim]
+
+    def test_session_of_another_organization_vouches_for_nothing(self):
+        org = OrganizationFactory()
+        _session(OrganizationFactory(), external_user_id="u1")
+        ticket = _ticket(org, external_user_id="u1", requester_email="a@x.io")
+        _run()
+        ticket.refresh_from_db()
+        assert (ticket.contact.external_id, ticket.contact.email) == ("", "a@x.io")
+
+    def test_vouched_ticket_reaches_the_contact_of_the_session(self):
+        org = OrganizationFactory()
+        session = _session(org, external_user_id="u1")
+        ticket = _ticket(org, external_user_id="u1", requester_name="Ann")
+        _run()
+        _reload(session, ticket)
+        assert ticket.contact == session.contact
+        assert session.contact.name == "Ann"
+
+    def test_unvouched_ticket_gives_a_followed_session_no_name_nor_email(self):
+        org = OrganizationFactory()
+        session = _session(org, external_user_id="u1")
+        ticket = _ticket(
+            org,
+            widget_session=session,
+            external_user_id="victim",
+            requester_name="Forged",
+            requester_email="forged@x.io",
+        )
+        _run()
+        _reload(session, ticket)
+        assert ticket.contact == session.contact
+        assert session.contact.name == ""
+        assert session.contact.declared_email == ""
+
+    def test_unvouched_ticket_keeps_seen_dates_and_a_signed_one_gives_the_name(self):
+        org = OrganizationFactory()
+        now = timezone.now()
+        session = _dated(
+            _session(org, external_user_id="u1"), last_seen_at=now - timedelta(days=9)
+        )
+        signed = _ticket(org, external_user_id="u1", requester_name="Ann")
+        forged = _ticket(
+            org, widget_session=session, external_user_id="x", requester_name="Forged"
+        )
+        _dated(signed, created_at=now - timedelta(days=2))
+        _dated(forged, created_at=now - timedelta(days=1))
+        _run()
+        session.refresh_from_db()
+        assert session.contact.name == "Ann"
+        assert session.contact.last_seen_at == forged.created_at
+
+    def test_ticket_without_an_external_id_still_names_an_email_contact(self):
+        org = OrganizationFactory()
+        ticket = _ticket(org, requester_email="a@x.io", requester_name="Bea")
+        _run()
+        ticket.refresh_from_db()
+        assert ticket.contact.name == "Bea"
+
+
+@pytest.mark.django_db
+class TestResumeOfASessionLinkedThroughItsTickets:
+    """The back-fill and the service must agree on what identifies a session."""
+
+    def _linked(self, org, **kwargs):
+        session = _session(org, **kwargs)
+        _ticket(org, widget_session=session, requester_email="A@x.io")
+        _run()
+        session.refresh_from_db()
+        assert session.contact.email == "a@x.io"
+        return session
+
+    @pytest.mark.parametrize("email", ["", "not an email", "   "])
+    def test_takes_the_email_that_identified_it(self, email):
+        session = self._linked(OrganizationFactory(), email=email)
+        assert session.email == "a@x.io"
+
+    def test_the_email_it_takes_proves_nothing(self):
+        session = self._linked(
+            OrganizationFactory(), email="", email_verified_at=timezone.now()
+        )
+        assert session.email_verified_at is None
+        assert session.contact.email_verified_at is None
+
+    def test_taking_the_email_bumps_no_date(self):
+        org = OrganizationFactory()
+        past = timezone.now() - timedelta(days=30)
+        session = _dated(_session(org), last_seen_at=past, updated_at=past)
+        _ticket(org, widget_session=session, requester_email="a@x.io")
+        _run()
+        session.refresh_from_db()
+        assert (session.last_seen_at, session.updated_at) == (past, past)
+
+    def test_keeps_its_contact_through_the_service(self):
+        session = self._linked(OrganizationFactory())
+        contact_id = session.contact_id
+        assert resolve_contact_for_widget_session(session).pk == contact_id
+        session.refresh_from_db()
+        assert session.contact_id == contact_id
+
+    def test_keeps_its_contact_on_resume_and_new_tickets_get_it(self):
+        org = OrganizationFactory()
+        session = self._linked(org)
+        contact_id = session.contact_id
+        client = APIClient()
+        headers = {"HTTP_X_WIDGET_TOKEN": org.api_token}
+        resume = client.post(
+            "/api/v1/tickets/widget_session/",
+            {"session_id": str(session.id)},
+            format="json",
+            **headers,
+        )
+        assert resume.status_code == 200
+        assert resume.data["session_id"] == str(session.id)
+        session.refresh_from_db()
+        assert session.contact_id == contact_id
+        message = client.post(
+            "/api/v1/tickets/widget_message/",
+            {"body": "Hello again"},
+            format="json",
+            HTTP_X_WIDGET_SESSION=str(session.id),
+            **headers,
+        )
+        assert message.status_code == 201
+        assert Ticket.objects.get(id=message.data["ticket_id"]).contact_id == contact_id
+
+    def test_session_whose_ticket_email_is_anonymized_is_left_as_it_was(self):
+        org = OrganizationFactory()
+        ContactFactory(organization=org, email="a@x.io", is_anonymized=True)
+        session = _session(org, email="not an email")
+        ticket = _ticket(org, widget_session=session, requester_email="a@x.io")
+        _run()
+        _reload(session, ticket)
+        assert session.contact is None
+        assert session.email == "not an email"
+        assert ticket.contact is None
+
+    def test_email_written_concurrently_is_left_alone(self):
+        org = OrganizationFactory()
+        winner = ContactFactory(organization=org)
+        session = _session(org)
+        _ticket(org, widget_session=session, requester_email="a@x.io")
+
+        def race():
+            WidgetSession.objects.filter(pk=session.pk).update(
+                contact=winner, email="winner@x.io"
+            )
+
+        wrapper = _before_statement('UPDATE "tickets_widgetsession"', race)
+        with connection.execute_wrapper(wrapper):
+            _run()
+        session.refresh_from_db()
+        assert (session.contact, session.email) == (winner, "winner@x.io")
+
+
+def _nameless_rows(count, prefix):
+    org = OrganizationFactory()
+    for n in range(count):
+        session = _session(org, email=f"{prefix}{n}@x.io")
+        _ticket(org, widget_session=session)
+        identified = _session(org, external_user_id=f"{prefix}{n}")
+        _ticket(org, external_user_id=f"{prefix}{n}", requester_email="t@x.io")
+        _ticket(org, widget_session=identified, requester_email="u@x.io")
+        _ticket(org, requester_email=f"{prefix}t{n}@x.io")
+
+
+@pytest.mark.django_db
+class TestCost:
+    def test_query_count_doesnt_grow_with_the_contacts(self):
+        _nameless_rows(2, "few")
+        with CaptureQueriesContext(connection) as few:
+            _run()
+        _nameless_rows(40, "many")
+        with CaptureQueriesContext(connection) as many:
+            _run()
+        assert Contact.objects.count() > 120
+        assert len(many) == len(few)
+
+    def test_contacts_are_filled_without_reading_rows_for_each_of_them(self):
+        # A correlated subquery is one statement and one scan per contact: the query
+        # count can't see it.
+        _nameless_rows(3, "a")
+        with CaptureQueriesContext(connection) as queries:
+            _run()
+        fills = [
+            q["sql"]
+            for q in queries
+            if q["sql"].startswith('UPDATE "contacts_contact"')
+        ]
+        assert fills
+        assert not [sql for sql in fills if "SELECT" in sql]
+
+    def test_statistics_are_refreshed_before_the_statements_relying_on_them(self):
+        _nameless_rows(1, "a")
+        with CaptureQueriesContext(connection) as queries:
+            _run()
+        statements = [q["sql"] for q in queries]
+
+        def first(prefix):
+            return next(n for n, sql in enumerate(statements) if sql.startswith(prefix))
+
+        analyze_sessions = first('ANALYZE "tickets_widgetsession"')
+        analyze_tickets = first('ANALYZE "tickets_ticket"')
+        assert first('UPDATE "tickets_widgetsession"') < analyze_sessions
+        assert analyze_sessions < first('UPDATE "tickets_ticket"')
+        assert first('UPDATE "tickets_ticket"') < analyze_tickets
+        assert analyze_tickets < first('UPDATE "contacts_contact"')
+
+    def test_no_statistics_are_refreshed_on_another_database(self):
+        schema_editor = mock.Mock()
+        schema_editor.connection.vendor = "sqlite"
+        with mock.patch("apps.contacts.backfill.connections") as fallback:
+            _analyze(schema_editor, "tickets_ticket")
+        schema_editor.connection.cursor.assert_not_called()
+        fallback.__getitem__.assert_not_called()
 
 
 @pytest.mark.django_db

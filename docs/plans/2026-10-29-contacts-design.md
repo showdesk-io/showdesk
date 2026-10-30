@@ -216,17 +216,40 @@ the widget and the email pipeline share it.
 
 ## 4. Data migration
 
-Per organization:
+Per organization, in one transaction, by `apps/contacts/backfill.py`:
 
-1. One Contact per distinct non-empty `external_user_id` (tickets + widget
-   sessions); name from the most recent session, and its email in `declared_email`,
-   not `email` (rule 1: nothing there is proven).
-2. One Contact per remaining distinct `requester_email` / `WidgetSession.email`
-   (lowercased).
-3. Link `Ticket.contact` and `WidgetSession.contact`.
+1. **What counts as an external id.** A session's was signed when the session was
+   created. A ticket's wasn't, since `widget_submit` takes any value, so it only counts
+   if a session of the same organization holds the same one. Otherwise the ticket is
+   treated as having none. An id with padding or a reserved prefix (`email:`,
+   `company\n`) is no identity anywhere and creates no Contact, and it vouches for
+   nothing.
+2. **Sessions.** One Contact per usable `external_user_id`, its email in
+   `declared_email`, not `email` (rule 1: nothing there is proven). Otherwise one Contact
+   per usable `WidgetSession.email` (lowercased). A session with an id it can't have
+   claimed an identity: it gets no Contact, and doesn't fall back on its email.
+3. **A session with no identity of its own** (anonymous, no usable email) takes the most
+   recent usable email of its tickets, and stores it in `WidgetSession.email` with no
+   proof. The service identifies an anonymous session by its own email on every resume
+   and would otherwise unlink it (rule 7), which would also leave its next tickets
+   without a Contact. It never takes an external id from them: only a valid hash gives
+   a session one.
+4. **Tickets.** A ticket follows its session, whatever its own values. A ticket with no
+   session of its organization, or whose session has no identity at all, goes by its
+   vouched external id or else its usable email, or stays unlinked. A ticket whose
+   session ended without a Contact (anonymized, or an id it can't have) stays without
+   one.
+5. **New Contacts** take their seen dates from every row linked to them, and their name
+   from the most recent session, or else the most recent ticket. Their `declared_email`
+   comes from their session, or else their most recent ticket. A ticket whose external
+   id isn't vouched for gives neither a name nor a `declared_email`.
 
-Emails are not marked verified by the migration. The migration is idempotent
-and batched.
+Emails are not marked verified. Existing Contacts are only linked to, never written.
+It's idempotent, and `manage.py backfill_contacts` can run it again after a deploy.
+
+Its cost is linear in the rows: new Contacts are filled from one ordered read per batch
+of Contacts, and `ANALYZE` runs on `tickets_widgetsession` after sessions are linked and
+on `tickets_ticket` before the fill (PostgreSQL only).
 
 ---
 
@@ -320,3 +343,8 @@ inbound sender).
 - The widget only sends its stored id on `init()`. `Showdesk.reset()` clears it, so a
   login following a reset can't move anything, and `setUser()` doesn't start a new
   session: identity only reaches the backend on the next `init()`.
+- A vouched external id on a ticket only proves that the id exists in the organization,
+  not that this ticket's sender holds it: `widget_submit` can still name a real user. The
+  back-fill can link such a ticket, and take a name or a `declared_email` from it, on a
+  Contact it creates. `sender_verified` stays false on it, as it has no session of that
+  Contact.
