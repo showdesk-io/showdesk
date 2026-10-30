@@ -224,63 +224,193 @@ def test_signed_traits_only_apply_to_a_new_company(api_client, org):
     assert created.attributes == {"tier": "free"}
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        {"email": ["a@x.io"]},
-        {"email": 42},
-        {"email": "x" * 250 + "@x.io"},
-        {"email": "\ud800@x.io"},
-        {"name": {"a": 1}},
-        {"name": 42},
-        {"name": "n" * 256},
-        {"external_user_id": True, "user_hash": "x"},
-        {"external_user_id": 1.5, "user_hash": "x"},
-        {"external_user_id": 2**63, "user_hash": "x"},
-        {"external_user_id": "x" * 256, "user_hash": "x"},
-        {"external_user_id": "\ud800", "user_hash": "x"},
-        {"name": "\ud800"},
-        {"user_hash": ["x"]},
-        {"email_hash": 1},
-        {"email_hash": "é"},
-        {"email_hash": "\ud800"},
-        {"company_hash": {"a": 1}},
-        {"company_hash": "x" * 129},
-    ],
-)
-def test_malformed_identity_is_refused_before_touching_the_session(
-    api_client, org, body
-):
-    # Raw JSON: DRF's test renderer can't encode the lone surrogates a real
-    # request can carry as "\ud800" escapes.
-    raw = {"data": json.dumps(body), "content_type": "application/json"}
-    session = WidgetSession.objects.create(organization=org, email="a@x.io", name="A")
-    res = api_client.patch(
-        URL,
-        **raw,
-        HTTP_X_WIDGET_TOKEN=str(org.api_token),
-        HTTP_X_WIDGET_SESSION=str(session.id),
-    )
-    assert res.status_code == 400
-    session.refresh_from_db()
-    assert (session.email, session.name) == ("a@x.io", "A")
-    res = api_client.post(URL, **raw, HTTP_X_WIDGET_TOKEN=str(org.api_token))
-    assert res.status_code == 400
-    assert WidgetSession.objects.filter(organization=org).count() == 1
-
-
-@pytest.mark.parametrize("field", ["name", "email", "external_user_id", "user_hash"])
-def test_deeply_nested_identity_field_is_a_400_not_a_crash(api_client, org, field):
-    # CharField calls str() on its input, which overflows the stack on this.
-    depth = 100_000
-    raw = f'{{"{field}": {"[" * depth}1{"]" * depth}}}'
-    res = api_client.post(
+def _send(api_client, method, org, raw, **headers):
+    """Send raw JSON: DRF's test renderer can't encode the lone surrogates a real
+    request can carry as "\\ud800" escapes."""
+    return getattr(api_client, method)(
         URL,
         data=raw,
         content_type="application/json",
         HTTP_X_WIDGET_TOKEN=str(org.api_token),
+        **headers,
     )
+
+
+def _nested(depth: int = 100_000) -> str:
+    # CharField calls str() on its input, which overflows the stack on this.
+    return f"{'[' * depth}1{']' * depth}"
+
+
+@pytest.mark.parametrize(
+    "external_user_id", [True, 1.5, 2**63, "x" * 256, "\ud800", ["x"], {"a": 1}]
+)
+def test_malformed_external_id_is_refused_before_touching_the_session(
+    api_client, org, external_user_id
+):
+    raw = json.dumps({"external_user_id": external_user_id, "user_hash": "x"})
+    session = WidgetSession.objects.create(organization=org, email="a@x.io", name="A")
+    res = _send(api_client, "patch", org, raw, HTTP_X_WIDGET_SESSION=str(session.id))
     assert res.status_code == 400
+    session.refresh_from_db()
+    assert (session.email, session.name) == ("a@x.io", "A")
+    assert _send(api_client, "post", org, raw).status_code == 400
+    assert WidgetSession.objects.filter(organization=org).count() == 1
+
+
+def test_deeply_nested_external_id_is_a_400_not_a_crash(api_client, org):
+    raw = f'{{"external_user_id": {_nested()}}}'
+    assert _send(api_client, "post", org, raw).status_code == 400
+
+
+BAD_HASHES = [1, 1.5, True, ["x"], {"a": 1}, "é", "\ud800", "x" * 129]
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+@pytest.mark.parametrize("field", ["email_hash", "company_hash"])
+def test_bad_shape_email_or_company_hash_counts_as_unsigned(
+    api_client, org, field, bad
+):
+    company = CompanyFactory(organization=org, external_id="c1", name="Old")
+    body = {
+        "external_user_id": "u1",
+        "user_hash": _sign("s3cret", "u1"),
+        "email": "a@x.io",
+        "company": {"id": "c1", "name": "New"},
+        field: bad,
+    }
+    res = _send(api_client, "post", org, json.dumps(body))
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert session.email_verified_at is None
+    company.refresh_from_db()
+    assert company.name == "Old"
+    res = _send(
+        api_client,
+        "patch",
+        org,
+        json.dumps({"name": "Bob", field: bad}),
+        HTTP_X_WIDGET_SESSION=str(session.id),
+    )
+    assert res.status_code == 200
+    assert res.data["name"] == "Bob"
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+def test_bad_shape_user_hash_is_a_wrong_hash_on_find_or_create(api_client, org, bad):
+    raw = json.dumps({"external_user_id": "u1", "user_hash": bad})
+    assert _send(api_client, "post", org, raw).status_code == 403
+    assert not WidgetSession.objects.filter(organization=org).exists()
+
+
+def test_deeply_nested_user_hash_is_a_wrong_hash_on_find_or_create(api_client, org):
+    raw = f'{{"external_user_id": "u1", "user_hash": {_nested()}}}'
+    assert _send(api_client, "post", org, raw).status_code == 403
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+def test_bad_shape_user_hash_is_ignored_when_resuming_anonymously(api_client, org, bad):
+    session = WidgetSession.objects.create(organization=org)
+    raw = json.dumps(
+        {"session_id": str(session.id), "external_user_id": "u1", "user_hash": bad}
+    )
+    res = _send(api_client, "post", org, raw)
+    assert res.status_code == 200
+    assert res.data["session_id"] == str(session.id)
+    session.refresh_from_db()
+    assert session.external_user_id == ""
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+def test_bad_shape_user_hash_without_an_id_is_ignored(api_client, org, bad):
+    res = _send(api_client, "post", org, json.dumps({"user_hash": bad}))
+    assert res.status_code == 201
+
+
+@pytest.mark.parametrize(
+    "field", ["name", "email", "email_hash", "company_hash", "user_hash", "session_id"]
+)
+def test_deeply_nested_field_doesnt_stop_the_widget(api_client, org, field):
+    raw = f'{{"{field}": {_nested()}}}'
+    res = _send(api_client, "post", org, raw)
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert (session.name, session.email) == ("", "")
+
+
+@pytest.mark.parametrize(
+    ("name", "stored"),
+    [
+        (42, "42"),
+        (1.5, "1.5"),
+        ("n" * 256, "n" * 255),
+        ("  Bob ", "Bob"),
+        # Not a name, and it would stick: a resume only fills a blank name.
+        (True, ""),
+        (False, ""),
+        (["x"], ""),
+        ({"a": 1}, ""),
+        ("\ud800", ""),
+        ("Bob\x00", ""),
+    ],
+)
+def test_non_text_name_doesnt_stop_the_widget(api_client, org, name, stored):
+    res = _send(api_client, "post", org, json.dumps({"name": name, "email": "a@x.io"}))
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert (session.name, session.email) == (stored, "a@x.io")
+
+
+def test_huge_number_as_a_name_is_truncated(api_client, org):
+    res = _send(api_client, "post", org, '{"name": ' + "1" * 4000 + "}")
+    assert res.status_code == 201
+    assert WidgetSession.objects.get(id=res.data["session_id"]).name == "1" * 255
+
+
+@pytest.mark.parametrize(
+    "email",
+    [
+        42,
+        1.5,
+        True,
+        ["a@x.io"],
+        {"a": 1},
+        "x" * 250 + "@x.io",
+        "\ud800@x.io",
+        "a\x00@x.io",
+    ],
+)
+def test_unusable_email_is_ignored_and_the_name_kept(api_client, org, email):
+    raw = json.dumps({"name": "Bob", "email": email})
+    res = _send(api_client, "post", org, raw)
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert (session.name, session.email) == ("Bob", "")
+    res = _send(api_client, "patch", org, raw, HTTP_X_WIDGET_SESSION=str(session.id))
+    assert res.status_code == 200
+    session.refresh_from_db()
+    assert (session.name, session.email) == ("Bob", "")
+
+
+@pytest.mark.parametrize("name", [["x"], {"a": 1}, True, "\ud800"])
+def test_patch_with_an_unusable_name_leaves_it_alone(api_client, org, name):
+    session = WidgetSession.objects.create(organization=org, name="A", email="a@x.io")
+    res = _send(
+        api_client,
+        "patch",
+        org,
+        json.dumps({"name": name}),
+        HTTP_X_WIDGET_SESSION=str(session.id),
+    )
+    assert res.status_code == 200
+    session.refresh_from_db()
+    assert (session.name, session.email) == ("A", "a@x.io")
+
+
+def test_patch_truncates_a_long_name(api_client, org):
+    session = WidgetSession.objects.create(organization=org)
+    assert _patch(api_client, org, session.id, name="n" * 300).status_code == 200
+    session.refresh_from_db()
+    assert session.name == "n" * 255
 
 
 @pytest.mark.parametrize("raw", ["[1, 2]", '"text"', "1"])
@@ -533,7 +663,9 @@ class TestRealClientPayloads:
         assert session.email == "bob@x.io"
         assert session.contact.email == "bob@x.io"
 
-    @pytest.mark.parametrize("session_id", ["not-a-uuid", 1.5, {"a": 1}, ["x"]])
+    @pytest.mark.parametrize(
+        "session_id", ["not-a-uuid", "\x00", 1, 1.5, True, {"a": 1}, ["x"]]
+    )
     def test_stored_session_id_that_isnt_one_starts_a_new_session(
         self, api_client, org, session_id
     ):

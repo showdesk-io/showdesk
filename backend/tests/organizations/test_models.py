@@ -198,3 +198,10 @@ def test_company_hash_refuses_a_newline_in_any_field(company_id, name, domain):
     org = OrganizationFactory(widget_secret="s3cret")
     message = f"company\n{company_id}\n{name}\n{domain}".encode()
     assert not org.verify_company_hash(company_id, name, domain, _sign(message))
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("message", ["email:a@b.io", "company\nc1\nA\n"])
+def test_verify_user_hash_refuses_a_message_of_another_hash(message):
+    org = OrganizationFactory(widget_secret="s3cret")
+    assert not org.verify_user_hash(message, _sign(message.encode()))

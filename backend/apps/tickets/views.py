@@ -29,7 +29,7 @@ from apps.notifications.signals import (
     notify_new_ticket,
     notify_ticket_update,
 )
-from apps.organizations.models import Organization
+from apps.organizations.models import RESERVED_EXTERNAL_ID_PREFIXES, Organization
 
 from .models import (
     CannedResponse,
@@ -42,7 +42,6 @@ from .models import (
     WidgetSession,
 )
 from .serializers import (
-    RESERVED_EXTERNAL_ID_PREFIXES,
     CannedResponseSerializer,
     PriorityLevelSerializer,
     SavedViewSerializer,
@@ -747,6 +746,8 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         # POST — create or resume
         session_id = request.data.get("session_id")
+        if not isinstance(session_id, str):
+            session_id = None  # str() on a deeply nested list overflows the stack.
         external_user_id = identity.get("external_user_id") or ""
         user_hash = identity.get("user_hash") or ""
         name = identity.get("name") or ""

@@ -3,6 +3,8 @@
 from rest_framework import serializers
 from rest_framework.fields import empty
 
+from apps.contacts.attributes import is_storable
+from apps.organizations.models import RESERVED_EXTERNAL_ID_PREFIXES
 from apps.organizations.serializers import UserSerializer
 
 from .models import (
@@ -443,22 +445,50 @@ class StrictCharField(serializers.CharField):
         return super().run_validation(data)
 
 
-class WidgetHashField(StrictCharField):
-    def __init__(self, **kwargs):
-        super().__init__(
-            required=False,
-            allow_null=True,
-            allow_blank=True,
-            max_length=128,
-            trim_whitespace=False,
-            **kwargs,
-        )
+class WidgetHashField(serializers.Field):
+    """A hash signed by the host app. An invalid one is ignored, never a 400.
+
+    A hash of a shape no signature has reads as ``bad_shape``.
+    """
+
+    def __init__(self, *, bad_shape: str = "", **kwargs):
+        self.bad_shape = bad_shape
+        super().__init__(required=False, allow_null=True, **kwargs)
 
     def to_internal_value(self, data):
-        value = super().to_internal_value(data)
-        if not value.isascii():  # hmac.compare_digest raises TypeError otherwise.
-            self.fail("invalid")
-        return value
+        if isinstance(data, str) and len(data) <= 128 and data.isascii():
+            return data
+        return self.bad_shape
+
+
+class WidgetNameField(serializers.Field):
+    """A display name. Whatever can't be one is ignored, so it reads as absent."""
+
+    def __init__(self, **kwargs):
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        # A boolean isn't one: it would stick, a resume only fills a blank name.
+        if isinstance(data, (int, float)) and not isinstance(data, bool):
+            data = str(data)
+        if not isinstance(data, str) or not is_storable(data):
+            return None
+        return data.strip()[: WidgetSession._meta.get_field("name").max_length]
+
+
+class WidgetEmailField(serializers.Field):
+    """An email, only checked as text. A cut one would be somebody else's address."""
+
+    def __init__(self, **kwargs):
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        if not isinstance(data, str) or not is_storable(data):
+            return None
+        email = data.strip()
+        if len(email) > WidgetSession._meta.get_field("email").max_length:
+            return None
+        return email
 
 
 class WidgetExternalIdField(StrictCharField):
@@ -480,28 +510,25 @@ class WidgetExternalIdField(StrictCharField):
         return super().run_validation(data)
 
 
-# ``Organization.verify_email_hash`` and ``verify_company_hash`` sign messages
-# starting with these, so a ``user_hash`` for such an id would double as one of them.
-RESERVED_EXTERNAL_ID_PREFIXES = ("email:", "company\n")
+# A value no signature can equal: a digest is hexadecimal. A ``user_hash`` of a
+# bad shape must stay a wrong hash, not read as an id sent without one.
+BAD_SHAPE_USER_HASH = "invalid"
 
 
 class WidgetIdentitySerializer(serializers.Serializer):
-    """Check the shape of the identity fields of a widget session payload.
+    """Read the identity fields of a widget session payload.
 
-    Null means absent. ``email`` is only checked as text: the widget's contact
-    form lets anything with an "@" through and a host page can pass anything, and
-    neither should stop the widget or lose the name sent with it. Stored as is, it
-    shows agents what was typed, and the identity service ignores what isn't valid.
+    Null means absent. Only ``external_user_id`` is ever refused: everything else
+    is display data or a signature, and a host page that gets it wrong must not
+    stop the widget. ``email`` is only checked as text, since the widget's contact
+    form lets anything with an "@" through. Stored as is, it shows agents what was
+    typed, and the identity service ignores what isn't valid.
     """
 
-    name = StrictCharField(
-        required=False, allow_null=True, allow_blank=True, max_length=255
-    )
-    email = StrictCharField(
-        required=False, allow_null=True, allow_blank=True, max_length=254
-    )
+    name = WidgetNameField()
+    email = WidgetEmailField()
     external_user_id = WidgetExternalIdField()
-    user_hash = WidgetHashField()
+    user_hash = WidgetHashField(bad_shape=BAD_SHAPE_USER_HASH)
     email_hash = WidgetHashField()
     company_hash = WidgetHashField()
 

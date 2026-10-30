@@ -18,6 +18,10 @@ from apps.core.models import TimestampedModel
 # by Showdesk staff via the in-app widget are scoped here.
 SHOWDESK_INTERNAL_ORG_SLUG = "showdesk-internal"
 
+# ``verify_email_hash`` and ``verify_company_hash`` sign messages starting with
+# these, so a ``user_hash`` for such an id would double as one of them.
+RESERVED_EXTERNAL_ID_PREFIXES = ("email:", "company\n")
+
 
 # Email domains where multiple unrelated companies share inboxes. Signups
 # from these domains never trigger the auto-join flow — each user creates
@@ -294,7 +298,15 @@ class Organization(TimestampedModel):
         return hmac.compare_digest(expected, signature)
 
     def verify_user_hash(self, external_user_id: Any, user_hash: Any) -> bool:
-        """Verify an HMAC-SHA256 user hash against the widget secret."""
+        """Verify an HMAC-SHA256 user hash against the widget secret.
+
+        An id starting with a reserved prefix never verifies: its hash would be
+        the signature of an email or a company.
+        """
+        if isinstance(external_user_id, str) and external_user_id.startswith(
+            RESERVED_EXTERNAL_ID_PREFIXES
+        ):
+            return False
         return self._verify_signature(external_user_id, user_hash)
 
     def verify_email_hash(self, email: Any, email_hash: Any) -> bool:
