@@ -205,7 +205,11 @@ class ContactNote(TimestampedModel):
 
     contact = models.ForeignKey(Contact, on_delete=models.CASCADE, related_name="notes")
     author = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+"
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
     )
     body = models.TextField()
 

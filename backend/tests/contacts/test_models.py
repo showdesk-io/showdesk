@@ -1,5 +1,7 @@
 """Tests for the contacts app models."""
 
+import uuid
+
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
@@ -228,11 +230,24 @@ def test_attribute_ordering_by_position_then_label_then_id():
     org = OrganizationFactory()
     second = ContactAttributeDefFactory(organization=org, position=1, label="A")
     first = ContactAttributeDefFactory(organization=org, position=0, label="Z")
+    # Ids are random UUIDs: pin them so that id order contradicts label order.
+    label_a = ContactAttributeDefFactory(
+        organization=org, position=2, label="A", id=uuid.UUID(int=2)
+    )
+    label_b = ContactAttributeDefFactory(
+        organization=org, position=2, label="B", id=uuid.UUID(int=1)
+    )
     ties = [
-        ContactAttributeDefFactory(organization=org, position=2, label="Same")
+        ContactAttributeDefFactory(organization=org, position=3, label="Same")
         for _ in range(5)
     ]
-    expected = [first.pk, second.pk, *sorted(attr.pk for attr in ties)]
+    expected = [
+        first.pk,
+        second.pk,
+        label_a.pk,
+        label_b.pk,
+        *sorted(attr.pk for attr in ties),
+    ]
     assert [
         attr.pk for attr in ContactAttributeDef.objects.filter(organization=org)
     ] == expected
@@ -248,3 +263,10 @@ def test_contact_note_survives_author_deletion():
     note.author.delete()
     note.refresh_from_db()
     assert note.author is None
+
+
+def test_contact_note_without_author_passes_validation():
+    note = ContactNoteFactory()
+    note.author.delete()
+    note.refresh_from_db()
+    note.full_clean()
