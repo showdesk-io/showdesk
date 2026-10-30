@@ -1,14 +1,57 @@
 """Serializers of the contacts API."""
 
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import DomainNameValidator
 from rest_framework import serializers
 
 from apps.tickets.serializers import TicketListSerializer
 
 from .attributes import clean_attributes
-from .models import Company, Contact, ContactAttributeDef, ContactNote
+from .models import (
+    Company,
+    CompanyAttributeDef,
+    Contact,
+    ContactAttributeDef,
+    ContactNote,
+)
 from .summary import CompanySummarySerializer
 
 EMAIL_TAKEN = "Another contact already uses this value."
+DOMAIN_TAKEN = "Another company already uses this domain."
+
+_domain_validator = DomainNameValidator()
+
+
+def _clean_attributes(definitions, value):
+    """Validate the ``attributes`` of a request, which have to be an object."""
+    if not isinstance(value, dict):
+        raise serializers.ValidationError("Expected an object.")
+    return clean_attributes(definitions, value)
+
+
+def _merged_attributes(instance, values) -> dict:
+    """Return ``values`` on top of what ``instance`` stores, whatever its shape."""
+    stored = instance.attributes
+    return {**(stored if isinstance(stored, dict) else {}), **values}
+
+
+def _write_changes(instance, validated_data):
+    """Apply a PATCH to ``instance``, the row the view locked.
+
+    Not ``ModelSerializer.update``: its full ``save()`` would write back every other
+    field as read. Only what really changes is written, and nothing at all if nothing
+    does.
+    """
+    changed = [
+        field
+        for field, value in validated_data.items()
+        if getattr(instance, field) != value
+    ]
+    if changed:
+        for field in changed:
+            setattr(instance, field, validated_data[field])
+        instance.save(update_fields=[*changed, "updated_at"])
+    return instance
 
 
 class ContactSerializer(serializers.ModelSerializer):
@@ -82,12 +125,10 @@ class ContactSerializer(serializers.ModelSerializer):
         return (value or "").strip().lower()
 
     def validate_attributes(self, value):
-        if not isinstance(value, dict):
-            raise serializers.ValidationError("Expected an object.")
         defs = ContactAttributeDef.objects.filter(
             organization=self.context["organization"]
         )
-        return clean_attributes(defs, value)
+        return _clean_attributes(defs, value)
 
     def validate(self, attrs):
         # On creation only: a widget contact may have nothing but its external id,
@@ -109,30 +150,88 @@ class ContactSerializer(serializers.ModelSerializer):
         return attrs
 
     def update(self, instance, validated_data):
-        """Apply a PATCH to ``instance``, the row the view locked.
-
-        Not ``ModelSerializer.update``: its full ``save()`` would write back every
-        other field as read. Only what really changes is written, and nothing at
-        all if nothing does.
-        """
         if "attributes" in validated_data:
-            stored = instance.attributes
-            validated_data["attributes"] = {
-                **(stored if isinstance(stored, dict) else {}),
-                **validated_data["attributes"],
-            }
+            validated_data["attributes"] = _merged_attributes(
+                instance, validated_data["attributes"]
+            )
         if "email" in validated_data and validated_data["email"] != instance.email:
             validated_data["email_verified_at"] = None  # The proof was of the old one.
-        changed = [
-            field
-            for field, value in validated_data.items()
-            if getattr(instance, field) != value
+        return _write_changes(instance, validated_data)
+
+
+class CompanySerializer(serializers.ModelSerializer):
+    """A company, in the organization given by ``context["organization"]``.
+
+    ``external_id`` is read-only, as on a contact: signed widget payloads upsert a
+    company on it and move their contacts there, and unsigned ones link to it.
+
+    Editing ``domain`` doesn't relink existing contacts, neither those linked to this
+    company nor those whose email matches the new domain. The domain only matters to
+    the identity service, when it next resolves a contact without a company.
+    """
+
+    contacts_count = serializers.IntegerField(read_only=True, default=0)
+    open_tickets_count = serializers.IntegerField(read_only=True, default=0)
+
+    class Meta:
+        model = Company
+        fields = [
+            "id",
+            "external_id",
+            "name",
+            "domain",
+            "logo_url",
+            "industry",
+            "size",
+            "website",
+            "plan",
+            "mrr_cents",
+            "health_score",
+            "signed_up_at",
+            "churned_at",
+            "attributes",
+            "contacts_count",
+            "open_tickets_count",
+            "created_at",
+            "updated_at",
         ]
-        if changed:
-            for field in changed:
-                setattr(instance, field, validated_data[field])
-            instance.save(update_fields=[*changed, "updated_at"])
-        return instance
+        read_only_fields = ["id", "external_id", "created_at", "updated_at"]
+
+    def validate_domain(self, value: str) -> str:
+        domain = value.strip().lower()
+        if not domain:
+            return ""
+        try:
+            _domain_validator(domain)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError("Enter a valid domain name.") from exc
+        # The validator allows one final dot, which is the same domain: left in, it
+        # would get round the uniqueness.
+        return domain.removesuffix(".")
+
+    def validate_attributes(self, value):
+        defs = CompanyAttributeDef.objects.filter(
+            organization=self.context["organization"]
+        )
+        return _clean_attributes(defs, value)
+
+    def validate(self, attrs):
+        if domain := attrs.get("domain"):
+            taken = Company.objects.filter(
+                organization=self.context["organization"], domain=domain
+            )
+            if self.instance:
+                taken = taken.exclude(pk=self.instance.pk)
+            if taken.exists():
+                raise serializers.ValidationError({"domain": DOMAIN_TAKEN})
+        return attrs
+
+    def update(self, instance, validated_data):
+        if "attributes" in validated_data:
+            validated_data["attributes"] = _merged_attributes(
+                instance, validated_data["attributes"]
+            )
+        return _write_changes(instance, validated_data)
 
 
 class ContactNoteSerializer(serializers.ModelSerializer):

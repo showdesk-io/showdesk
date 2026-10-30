@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from apps.contacts.models import (
     Company,
+    CompanyAttributeDef,
     Contact,
     ContactAttributeDef,
     ContactNote,
@@ -255,6 +256,18 @@ class ContactAttributeDefFactory(factory.django.DjangoModelFactory):
 
     class Meta:
         model = ContactAttributeDef
+
+    organization = factory.SubFactory(OrganizationFactory)
+    key = factory.Sequence(lambda n: f"attr_{n}")
+    label = factory.Sequence(lambda n: f"Attribute {n}")
+    type = "string"
+
+
+class CompanyAttributeDefFactory(factory.django.DjangoModelFactory):
+    """Factory for creating CompanyAttributeDef instances."""
+
+    class Meta:
+        model = CompanyAttributeDef
 
     organization = factory.SubFactory(OrganizationFactory)
     key = factory.Sequence(lambda n: f"attr_{n}")

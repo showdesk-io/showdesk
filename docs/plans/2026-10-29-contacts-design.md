@@ -286,6 +286,9 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   `is_anonymized = True`.
 - `GET/POST /api/v1/companies/`, `GET/PATCH/DELETE /api/v1/companies/{id}/`,
   `GET /api/v1/companies/{id}/contacts/`, `GET /api/v1/companies/{id}/tickets/`.
+  `external_id` is read-only, as on a Contact: it's what signed widget payloads upsert a
+  Company on. `domain` is format-checked and unique per organization; editing it doesn't
+  relink existing Contacts. DELETE is admin only and leaves the Contacts without a Company.
 - `/api/v1/contact-attributes/`, `/api/v1/company-attributes/` — CRUD of
   definitions (admin), archive instead of delete.
 

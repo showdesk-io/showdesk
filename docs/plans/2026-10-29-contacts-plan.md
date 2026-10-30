@@ -2363,6 +2363,8 @@ class CompanyViewSet(OrgScopedMixin, viewsets.ModelViewSet):
 
 Register `companies`.
 
+**As built, where it differs from the above:** `external_id` is read-only, as on a contact, so `validate` only checks `domain`; PATCH is locked and writes only what changed; no PUT; explicit `filter_backends`; ordering by name then id; attribute filters on the list only; the `contacts` action reuses the contact counts; both actions and the counts leave out rows of another organization; a final dot on a domain is dropped.
+
 **Step 4:** PASS. **Step 5: Commit** — `feat(backend): companies API`
 
 ---

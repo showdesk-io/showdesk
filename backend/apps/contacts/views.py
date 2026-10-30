@@ -23,10 +23,12 @@ from apps.core.permissions import get_active_org
 from apps.tickets.models import Ticket
 
 from .attributes import is_storable
-from .models import Contact
+from .models import Company, Contact
 from .permissions import IsOrganizationStaff, require_org_admin
 from .serializers import (
+    DOMAIN_TAKEN,
     EMAIL_TAKEN,
+    CompanySerializer,
     ContactNoteSerializer,
     ContactSerializer,
     ContactTicketSerializer,
@@ -36,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 OPEN_STATUSES = [Ticket.Status.OPEN, Ticket.Status.IN_PROGRESS, Ticket.Status.WAITING]
 TIMELINE_LIMIT = 100
+COMPANY_CONTACTS_LIMIT = 200
 
 _ATTRIBUTE_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 _NUMBER = re.compile(r"-?[0-9]+(\.[0-9]+)?")
@@ -45,6 +48,12 @@ class ContactAnonymized(APIException):
     status_code = status.HTTP_409_CONFLICT
     default_detail = "This contact has been anonymized."
     default_code = "contact_anonymized"
+
+
+class CompanyInUse(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "This company just got a new contact. Try again."
+    default_code = "company_in_use"
 
 
 class DirectoryPagination(PageNumberPagination):
@@ -125,6 +134,21 @@ def timeline_tickets(tickets):
     )
 
 
+def contacts_with_counts(contacts):
+    """Return the rows ``ContactSerializer`` shows, without an N+1.
+
+    It reads missing counts as 0, which would be wrong rather than absent.
+    """
+    return contacts.select_related("company").annotate(
+        tickets_count=Count("tickets", distinct=True),
+        open_tickets_count=Count(
+            "tickets",
+            filter=Q(tickets__status__in=OPEN_STATUSES),
+            distinct=True,
+        ),
+    )
+
+
 def _lock_writable_contact(pk) -> Contact:
     """Return the contact's committed row, locked, unless it can't be written to.
 
@@ -177,17 +201,8 @@ class ContactViewSet(OrgScopedMixin, viewsets.ModelViewSet):
     ordering = ["-last_seen_at", "-created_at"]
 
     def get_queryset(self):
-        return (
+        return contacts_with_counts(
             Contact.objects.filter(organization=get_active_org(self.request))
-            .select_related("company")
-            .annotate(
-                tickets_count=Count("tickets", distinct=True),
-                open_tickets_count=Count(
-                    "tickets",
-                    filter=Q(tickets__status__in=OPEN_STATUSES),
-                    distinct=True,
-                ),
-            )
         )
 
     def filter_queryset(self, queryset):
@@ -265,3 +280,116 @@ class ContactViewSet(OrgScopedMixin, viewsets.ModelViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         notes = contact.notes.select_related("author").order_by("-created_at", "-id")
         return Response(ContactNoteSerializer(notes, many=True).data)
+
+
+def _as_company_validation_error(exc: IntegrityError) -> ValidationError:
+    """Turn a conflict the serializer's checks couldn't see coming into a 400."""
+    if "unique_company_domain_per_org" in str(exc):
+        return ValidationError({"domain": [DOMAIN_TAKEN]})
+    logger.warning("Company write refused by the database: %s", type(exc).__name__)
+    return ValidationError({"non_field_errors": ["This company could not be saved."]})
+
+
+class CompanyViewSet(OrgScopedMixin, viewsets.ModelViewSet):
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+    serializer_class = CompanySerializer
+    pagination_class = DirectoryPagination
+    filter_backends = [SearchFilter, NullsLastOrderingFilter]
+    search_fields = ["name", "domain", "external_id"]
+    ordering_fields = ["name", "created_at", "mrr_cents"]
+    # Not left to Meta.ordering, which Django drops from a query with a GROUP BY.
+    ordering = ["name"]
+
+    def get_queryset(self):
+        # The counts only cover rows of the organization, as the actions below do.
+        return Company.objects.filter(
+            organization=get_active_org(self.request)
+        ).annotate(
+            contacts_count=Count(
+                "contacts",
+                filter=Q(contacts__organization=F("organization")),
+                distinct=True,
+            ),
+            open_tickets_count=Count(
+                "contacts__tickets",
+                filter=Q(
+                    contacts__organization=F("organization"),
+                    contacts__tickets__organization=F("organization"),
+                    contacts__tickets__status__in=OPEN_STATUSES,
+                ),
+                distinct=True,
+            ),
+        )
+
+    def filter_queryset(self, queryset):
+        # For the list only, as on contacts: see ContactViewSet.filter_queryset.
+        if self.action != "list":
+            return queryset
+        return filter_by_attributes(
+            super().filter_queryset(queryset), self.request.query_params
+        )
+
+    def perform_create(self, serializer):
+        try:
+            with transaction.atomic():
+                super().perform_create(serializer)
+        except IntegrityError as exc:
+            raise _as_company_validation_error(exc) from exc
+
+    def update(self, request, *args, **kwargs):
+        """Handle a PATCH (no PUT here): validate and write on the locked row.
+
+        NO KEY, the lock of the identity service: it lets contacts link to the company.
+        """
+        pk = self.get_object().pk
+        try:
+            with transaction.atomic():
+                company = (
+                    Company.objects.select_for_update(no_key=True).filter(pk=pk).first()
+                )
+                if company is None:
+                    raise NotFound
+                serializer = self.get_serializer(
+                    company, data=request.data, partial=True
+                )
+                serializer.is_valid(raise_exception=True)
+                serializer.save()
+                # The response needs the counts.
+                data = self.get_serializer(self.get_queryset().get(pk=pk)).data
+        except IntegrityError as exc:
+            raise _as_company_validation_error(exc) from exc
+        return Response(data)
+
+    def perform_destroy(self, instance):
+        """Delete the company; its contacts stay, without a company.
+
+        No lock on the company first: the identity service locks a contact, then
+        needs the company, so the other order could deadlock. A contact linked once
+        the delete has unlinked the others makes the foreign key refuse it at commit.
+        """
+        require_org_admin(self.request.user)
+        try:
+            instance.delete()
+        except IntegrityError as exc:
+            raise CompanyInUse from exc
+
+    @action(detail=True, methods=["get"])
+    def contacts(self, request, pk=None):
+        company = self.get_object()
+        contacts = contacts_with_counts(
+            company.contacts.filter(organization_id=company.organization_id)
+        ).order_by("name", "id")[:COMPANY_CONTACTS_LIMIT]
+        serializer = ContactSerializer(
+            contacts, many=True, context=self.get_serializer_context()
+        )
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["get"])
+    def tickets(self, request, pk=None):
+        company = self.get_object()
+        tickets = timeline_tickets(
+            Ticket.objects.filter(
+                organization_id=company.organization_id, contact__company=company
+            )
+        )
+        return Response(ContactTicketSerializer(tickets, many=True).data)
