@@ -135,6 +135,7 @@ export function SettingsPage() {
 
 function AgentsTab({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient();
+  const { data: currentUser } = useCurrentUser();
   const { data: agents, isLoading } = useQuery({
     queryKey: ["agents"],
     queryFn: fetchAgents,
@@ -308,7 +309,7 @@ function AgentsTab({ isAdmin }: { isAdmin: boolean }) {
                 <p className="text-xs text-gray-500">{agent.email}</p>
               </div>
 
-              {isAdmin ? (
+              {isAdmin && agent.id !== currentUser?.id ? (
                 <select
                   value={agent.role}
                   onChange={(e) =>
@@ -343,7 +344,7 @@ function AgentsTab({ isAdmin }: { isAdmin: boolean }) {
                 title={agent.is_available ? "Available" : "Unavailable"}
               />
 
-              {isAdmin && (
+              {isAdmin && agent.id !== currentUser?.id && (
                 <button
                   onClick={() => toggleMutation.mutate(agent.id)}
                   disabled={toggleMutation.isPending}
@@ -1229,6 +1230,7 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
   }
 
   const snippet = `<script src="${window.location.origin}/cdn/widget.js" data-token="${org.api_token}"></script>`;
+  const widgetSecret = org.widget_secret;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -1380,35 +1382,37 @@ function WidgetTab({ isAdmin }: { isAdmin: boolean }) {
         </div>
 
         {/* Widget Secret (private) */}
-        <div className="mb-5">
-          <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-            Widget Secret{" "}
-            <span className="font-normal normal-case text-red-500">
-              (private — never expose client-side)
-            </span>
-          </label>
-          <p className="mb-2 text-xs text-gray-400">
-            Used server-side to compute{" "}
-            <code className="rounded-sm bg-gray-100 px-1">
-              HMAC-SHA256(secret, user_id)
-            </code>{" "}
-            for identity verification in the widget.
-          </p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 rounded-lg bg-gray-100 px-4 py-2 text-sm font-mono text-gray-700">
-              {org.widget_secret}
-            </code>
-            <button
-              onClick={() => {
-                void navigator.clipboard.writeText(org.widget_secret);
-                toast.success("Widget secret copied!");
-              }}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
-            >
-              Copy
-            </button>
+        {widgetSecret && (
+          <div className="mb-5">
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+              Widget Secret{" "}
+              <span className="font-normal normal-case text-red-500">
+                (private — never expose client-side)
+              </span>
+            </label>
+            <p className="mb-2 text-xs text-gray-400">
+              Used server-side to compute{" "}
+              <code className="rounded-sm bg-gray-100 px-1">
+                HMAC-SHA256(secret, user_id)
+              </code>{" "}
+              for identity verification in the widget.
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 rounded-lg bg-gray-100 px-4 py-2 text-sm font-mono text-gray-700">
+                {widgetSecret}
+              </code>
+              <button
+                onClick={() => {
+                  void navigator.clipboard.writeText(widgetSecret);
+                  toast.success("Widget secret copied!");
+                }}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
+              >
+                Copy
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Revoke & Regenerate */}
         {isAdmin && (

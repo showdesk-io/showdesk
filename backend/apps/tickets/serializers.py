@@ -194,6 +194,12 @@ class TicketMessageSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "author", "created_at", "updated_at"]
 
 
+# Who a ticket can be assigned to, as in the bulk_update action.
+ASSIGNABLE_AGENTS = User.objects.filter(
+    role__in=[User.Role.AGENT, User.Role.ADMIN], is_active=True
+)
+
+
 class TicketSerializer(serializers.ModelSerializer):
     """Serializer for the Ticket model."""
 
@@ -214,7 +220,7 @@ class TicketSerializer(serializers.ModelSerializer):
     )
     requester_detail = UserSerializer(source="requester", read_only=True)
     assigned_agent = OrgScopedPrimaryKeyRelatedField(
-        queryset=User.objects.all(), required=False, allow_null=True
+        queryset=ASSIGNABLE_AGENTS, required=False, allow_null=True
     )
     assigned_agent_detail = UserSerializer(source="assigned_agent", read_only=True)
     assigned_team = OrgScopedPrimaryKeyRelatedField(
@@ -277,7 +283,7 @@ class TicketAssignSerializer(serializers.Serializer):
     """Validates the body of the ticket ``assign`` action."""
 
     agent_id = OrgScopedPrimaryKeyRelatedField(
-        queryset=User.objects.all(), required=False, allow_null=True
+        queryset=ASSIGNABLE_AGENTS, required=False, allow_null=True
     )
     team_id = OrgScopedPrimaryKeyRelatedField(
         queryset=Team.objects.all(), required=False, allow_null=True

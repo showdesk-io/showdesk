@@ -3,7 +3,7 @@
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 # What ``Model.objects.get(id=<client value>)`` raises when no row matches: a
 # malformed UUID doesn't raise DoesNotExist but Django's ValidationError.
@@ -27,6 +27,35 @@ class IsOrgStaff(BasePermission):
         return user.is_authenticated and (
             user.is_agent or user.is_staff or user.is_superuser
         )
+
+
+def is_org_admin(user) -> bool:
+    """Return whether ``user`` administers their active organization.
+
+    ``get_active_org`` ties a non-superuser to their own organization, so the
+    role is enough. Superusers administer whichever one they impersonate.
+    """
+    return user.is_authenticated and (user.role == "admin" or user.is_superuser)
+
+
+class IsOrgAdmin(BasePermission):
+    """Allow organization admins and superusers."""
+
+    message = "Only admins can do this."
+
+    def has_permission(self, request, view):
+        return is_org_admin(request.user)
+
+
+class IsOrgAdminOrReadOnly(BasePermission):
+    """Let staff read, and admins write."""
+
+    message = "Only admins can do this."
+
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return IsOrgStaff().has_permission(request, view)
+        return is_org_admin(request.user)
 
 
 def has_feature(feature: str) -> type[BasePermission]:

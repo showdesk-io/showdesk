@@ -5,7 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import get_active_org, require_active_org
+from apps.core.permissions import IsOrgStaff, get_active_org, require_active_org
 
 from .models import Article, Category
 from .serializers import ArticleSerializer, CategorySerializer
@@ -15,7 +15,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
     """ViewSet for managing knowledge base categories."""
 
     serializer_class = CategorySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
 
     def get_queryset(self):
         """Filter categories by the active organization."""
@@ -33,7 +33,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
     """ViewSet for managing knowledge base articles."""
 
     serializer_class = ArticleSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
     filterset_fields = ["category", "status"]
     search_fields = ["title", "body"]
 

@@ -27,7 +27,8 @@ vi.mock("react-router", async () => {
 });
 
 import * as usersApi from "@/api/users";
-import type { Organization } from "@/types";
+import { useAuthStore } from "@/store/authStore";
+import type { Organization, User } from "@/types";
 import { OnboardingPage } from "../OnboardingPage";
 
 
@@ -108,6 +109,24 @@ describe("OnboardingPage", () => {
     ).toBeInTheDocument();
     // The embed snippet uses the api_token.
     expect(screen.getByText(/abc-123/)).toBeInTheDocument();
+  });
+
+  it("redirects agents to /: the wizard only has admin steps", async () => {
+    useAuthStore.setState({ isAuthenticated: true });
+    vi.mocked(usersApi.fetchOrganization).mockResolvedValue(makeOrg());
+    vi.mocked(usersApi.fetchCurrentUser).mockResolvedValue({
+      role: "agent",
+      is_superuser: false,
+    } as User);
+    renderOnboarding();
+
+    await waitFor(() => {
+      expect(usersApi.fetchCurrentUser).toHaveBeenCalled();
+      expect(
+        screen.queryByRole("heading", { name: /welcome to showdesk/i }),
+      ).not.toBeInTheDocument();
+    });
+    useAuthStore.setState({ isAuthenticated: false });
   });
 
   it("redirects to / when onboarding has already been completed", async () => {

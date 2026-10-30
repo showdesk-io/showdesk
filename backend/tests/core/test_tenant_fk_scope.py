@@ -275,18 +275,18 @@ def _without_ids(response) -> str:
 @pytest.mark.usefixtures("local_media")
 class TestRoutesTakingIds:
     @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
-    def test_same_org_id_is_accepted(self, authenticated_client, own, case) -> None:
-        res = _call(authenticated_client, case, own, own)
+    def test_same_org_id_is_accepted(self, admin_client, own, case) -> None:
+        res = _call(admin_client, case, own, own)
         assert res.status_code in (200, 201), res.data
 
     @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
     def test_other_org_id_is_refused_like_an_unknown_id(
-        self, authenticated_client, own, foreign, case
+        self, admin_client, own, foreign, case
     ) -> None:
-        res = _call(authenticated_client, case, own, foreign)
+        res = _call(admin_client, case, own, foreign)
         assert res.status_code == 400, f"cross-org write got {res.status_code}"
 
-        unknown = _call(authenticated_client, case, own, _unknown_refs())
+        unknown = _call(admin_client, case, own, _unknown_refs())
         assert unknown.status_code == 400
         assert _without_ids(res) == _without_ids(unknown)
 
@@ -405,10 +405,10 @@ class TestActionsFrontendShapes:
     ids=["tickets", "teams", "kb-categories", "kb-articles", "users"],
 )
 def test_organization_in_an_update_is_ignored(
-    authenticated_client, own, foreign, path, factory_row, model
+    admin_client, own, foreign, path, factory_row, model
 ) -> None:
     row = factory_row(own)
-    res = authenticated_client.patch(
+    res = admin_client.patch(
         f"/api/v1/{path}/{row.id}/",
         {"organization": str(foreign.org.id)},
         format="json",
@@ -428,8 +428,8 @@ CREATES = {
 
 @pytest.mark.parametrize("path", CREATES)
 class TestOrganizationInACreate:
-    def test_is_ignored(self, authenticated_client, own, foreign, path) -> None:
-        res = authenticated_client.post(
+    def test_is_ignored(self, admin_client, own, foreign, path) -> None:
+        res = admin_client.post(
             f"/api/v1/{path}/",
             {**CREATES[path], "organization": str(foreign.org.id)},
             format="json",
@@ -437,10 +437,8 @@ class TestOrganizationInACreate:
         assert res.status_code == 201, res.data
         assert res.data.get("organization") == own.org.id
 
-    def test_is_not_needed(self, authenticated_client, own, path) -> None:
-        res = authenticated_client.post(
-            f"/api/v1/{path}/", CREATES[path], format="json"
-        )
+    def test_is_not_needed(self, admin_client, own, path) -> None:
+        res = admin_client.post(f"/api/v1/{path}/", CREATES[path], format="json")
         assert res.status_code == 201, res.data
         assert res.data.get("organization") == own.org.id
 
@@ -464,16 +462,12 @@ class TestOrganizationInACreate:
     ids=["teams", "kb-categories", "kb-articles", "tags"],
 )
 def test_duplicate_in_the_organization_is_a_400(
-    authenticated_client, own, foreign, path, row, payload
+    admin_client, own, foreign, path, row, payload
 ) -> None:
-    res = authenticated_client.post(
-        f"/api/v1/{path}/", payload(row(own)), format="json"
-    )
+    res = admin_client.post(f"/api/v1/{path}/", payload(row(own)), format="json")
     assert res.status_code == 400
     # The same value in another organization isn't a duplicate.
-    res = authenticated_client.post(
-        f"/api/v1/{path}/", payload(row(foreign)), format="json"
-    )
+    res = admin_client.post(f"/api/v1/{path}/", payload(row(foreign)), format="json")
     assert res.status_code == 201, res.data
 
 

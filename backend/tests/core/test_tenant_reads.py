@@ -113,7 +113,8 @@ def test_organizations_only_list_the_active_one(
     assert [row["id"] for row in res.data["results"]] == [str(organization.id)]
     foreign_url = f"/api/v1/organizations/{foreign_agent.organization.id}/"
     assert authenticated_client.get(foreign_url).status_code == 404
-    assert authenticated_client.delete(foreign_url).status_code == 404
+    assert authenticated_client.patch(foreign_url, {}).status_code == 403
+    assert authenticated_client.delete(foreign_url).status_code == 405
 
 
 def test_platform_routes_refuse_tenants(authenticated_client) -> None:

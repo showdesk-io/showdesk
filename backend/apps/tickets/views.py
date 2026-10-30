@@ -13,6 +13,8 @@ from rest_framework.response import Response
 
 from apps.core.permissions import (
     LOOKUP_ERRORS,
+    IsOrgAdmin,
+    IsOrgAdminOrReadOnly,
     IsOrgStaff,
     get_active_org,
     has_feature,
@@ -1213,10 +1215,19 @@ class TicketAttachmentViewSet(viewsets.ModelViewSet):
 
 
 class TagViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing tags."""
+    """Tags of the active organization.
+
+    Agents create them on the fly from a ticket. Changing or deleting one, which
+    affects every ticket wearing it, is for admins.
+    """
 
     serializer_class = TagSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
+
+    def get_permissions(self):
+        if self.action in ("update", "partial_update", "destroy"):
+            return [IsAuthenticated(), IsOrgAdmin()]
+        return super().get_permissions()
 
     def get_queryset(self):
         """Filter tags by the active organization."""
@@ -1234,7 +1245,7 @@ class PriorityLevelViewSet(viewsets.ModelViewSet):
     """ViewSet for managing custom priority levels."""
 
     serializer_class = PriorityLevelSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgAdminOrReadOnly]
 
     def get_queryset(self):
         """Filter priority levels by the active organization."""
@@ -1258,7 +1269,7 @@ class SLAPolicyViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = SLAPolicySerializer
-    permission_classes = [IsAuthenticated, has_feature("sla_policies")]
+    permission_classes = [IsAuthenticated, IsOrgStaff, has_feature("sla_policies")]
 
     def get_queryset(self):
         org = get_active_org(self.request)
@@ -1300,7 +1311,7 @@ class SavedViewViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = SavedViewSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
 
     def get_queryset(self):
         """Return personal views + shared views from the active org."""
@@ -1346,7 +1357,7 @@ class CannedResponseViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = CannedResponseSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "shortcut", "body"]
 

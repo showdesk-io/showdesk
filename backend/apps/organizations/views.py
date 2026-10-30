@@ -4,15 +4,25 @@ import logging
 import uuid
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.core.email import send_branded_email
-from apps.core.permissions import IsPlatformAdmin, get_active_org, require_active_org
+from apps.core.permissions import (
+    IsOrgAdmin,
+    IsOrgAdminOrReadOnly,
+    IsOrgStaff,
+    IsPlatformAdmin,
+    get_active_org,
+    is_org_admin,
+    require_active_org,
+)
 
 from . import services
 from .models import (
@@ -38,11 +48,19 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
-class OrganizationViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing organizations (tenant-scoped)."""
+class OrganizationViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+    """The active organization. Creating and deleting are platform routes."""
 
     serializer_class = OrganizationSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
+
+    # All that agents may write: the wizard's progress, not the settings.
+    AGENT_WRITABLE_FIELDS = frozenset({"onboarding_step", "onboarding_completed_at"})
 
     # Fields that require the ``custom_branding`` feature flag to mutate.
     # Read-only orgs (free plan) keep the defaults (Showdesk brand) but
@@ -57,16 +75,18 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         return Organization.objects.none()
 
     def update(self, request, *args, **kwargs):
+        self._reject_writes_by_agents(request)
         self._reject_branding_writes_without_flag(request)
         return super().update(request, *args, **kwargs)
 
-    def partial_update(self, request, *args, **kwargs):
-        self._reject_branding_writes_without_flag(request)
-        return super().partial_update(request, *args, **kwargs)
+    def _reject_writes_by_agents(self, request) -> None:
+        if is_org_admin(request.user):
+            return
+        fields = set(request.data)
+        if not fields or fields - self.AGENT_WRITABLE_FIELDS:
+            raise PermissionDenied("Only admins can change the organization.")
 
     def _reject_branding_writes_without_flag(self, request) -> None:
-        from rest_framework.exceptions import PermissionDenied
-
         org = get_active_org(request)
         if org is None or org.has_feature("custom_branding"):
             return
@@ -89,7 +109,7 @@ class OrganizationViewSet(viewsets.ModelViewSet):
             )
         org.api_token = uuid.uuid4()
         org.save(update_fields=["api_token"])
-        return Response(OrganizationSerializer(org).data)
+        return Response(self.get_serializer(org).data)
 
     @action(detail=True, methods=["post"])
     def revoke_credentials(self, request, pk=None):
@@ -107,14 +127,75 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         org.api_token = uuid.uuid4()
         org.widget_secret = Organization.generate_widget_secret()
         org.save(update_fields=["api_token", "widget_secret"])
-        return Response(OrganizationSerializer(org).data)
+        return Response(self.get_serializer(org).data)
+
+
+# What anybody may change on their own row.
+SELF_EDITABLE_USER_FIELDS = frozenset(
+    {"first_name", "last_name", "avatar", "phone", "timezone", "is_available"}
+)
+# What nobody may change on their own row, admins and superusers included.
+NEVER_SELF_EDITABLE_USER_FIELDS = frozenset({"role", "is_active"})
+
+
+def _check_user_edit(actor: User, target: User, changed: set[str]) -> None:
+    """Refuse an update of ``target`` that ``actor`` isn't entitled to."""
+    if target.is_superuser and not actor.is_superuser:
+        raise PermissionDenied("Only a superuser can change a superuser.")
+    if actor.pk != target.pk:
+        if not is_org_admin(actor):
+            raise PermissionDenied("Only admins can change other users.")
+        return
+    if is_org_admin(actor):
+        refused = changed & NEVER_SELF_EDITABLE_USER_FIELDS
+    else:
+        refused = changed - SELF_EDITABLE_USER_FIELDS
+    if refused:
+        raise PermissionDenied(
+            f"You cannot change your own {', '.join(sorted(refused))}."
+        )
+
+
+def _check_keeps_an_admin(target: User) -> None:
+    """Refuse to take away the last active admin of ``target``'s organization.
+
+    Call it in a transaction, before the change: the row locks make concurrent
+    removals of two admins wait for each other. A superuser that holds an admin
+    role in the organization doesn't count: it isn't one of its own admins.
+    """
+    if (
+        target.is_superuser
+        or target.role != User.Role.ADMIN
+        or not target.is_active
+        or target.organization_id is None
+    ):
+        return
+    admins = User.objects.select_for_update().filter(
+        organization_id=target.organization_id,
+        role=User.Role.ADMIN,
+        is_active=True,
+        is_superuser=False,
+    )
+    if not [admin for admin in admins if admin.pk != target.pk]:
+        raise ValidationError(
+            {"error": "An organization needs at least one active admin."}
+        )
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing users."""
+    """Users of the active organization.
+
+    Agents read their colleagues and edit their own profile. The rest is for
+    admins of the organization and superusers.
+    """
 
     serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
+
+    def get_permissions(self):
+        if self.action in ("create", "destroy"):
+            return [IsAuthenticated(), IsOrgAdmin()]
+        return super().get_permissions()
 
     def get_queryset(self):
         """Filter users by the current user's organization.
@@ -141,7 +222,33 @@ class UserViewSet(viewsets.ModelViewSet):
         """Create the user in the active organization."""
         serializer.save(organization=require_active_org(self.request))
 
-    @action(detail=False, methods=["get"])
+    def perform_update(self, serializer) -> None:
+        target = serializer.instance
+        changed = {
+            name
+            for name, value in serializer.validated_data.items()
+            if getattr(target, name) != value
+        }
+        _check_user_edit(self.request.user, target, changed)
+        removes_admin = serializer.validated_data.get(
+            "role", target.role
+        ) != User.Role.ADMIN or not serializer.validated_data.get(
+            "is_active", target.is_active
+        )
+        with transaction.atomic():
+            if removes_admin:
+                _check_keeps_an_admin(target)
+            serializer.save()
+
+    def perform_destroy(self, instance: User) -> None:
+        if instance.is_superuser and not self.request.user.is_superuser:
+            raise PermissionDenied("Only a superuser can delete a superuser.")
+        with transaction.atomic():
+            _check_keeps_an_admin(instance)
+            instance.delete()
+
+    # End users have no agents' routes, but they do have an account.
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
     def me(self, request):
         """Return the currently authenticated user."""
         return Response(UserSerializer(request.user).data)
@@ -227,8 +334,12 @@ class UserViewSet(viewsets.ModelViewSet):
                 {"error": "You cannot deactivate yourself."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        user.is_active = not user.is_active
-        user.save(update_fields=["is_active"])
+        if user.is_superuser and not request.user.is_superuser:
+            raise PermissionDenied("Only a superuser can change a superuser.")
+        with transaction.atomic():
+            _check_keeps_an_admin(user)
+            user.is_active = not user.is_active
+            user.save(update_fields=["is_active"])
         return Response(UserSerializer(user).data)
 
 
@@ -247,7 +358,7 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = OrganizationDomainSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
 
     def get_queryset(self):
         org = get_active_org(self.request)
@@ -400,7 +511,7 @@ class TeamViewSet(viewsets.ModelViewSet):
     """ViewSet for managing teams."""
 
     serializer_class = TeamSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgAdminOrReadOnly]
 
     def get_queryset(self):
         """Filter teams by the active organization."""
@@ -620,7 +731,7 @@ class JoinRequestViewSet(
     """
 
     serializer_class = OrgJoinRequestSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgAdmin]
 
     def get_queryset(self):
         org = get_active_org(self.request)
@@ -632,20 +743,9 @@ class JoinRequestViewSet(
             qs = qs.filter(status=status_filter)
         return qs
 
-    def _check_admin(self, request) -> Response | None:
-        if request.user.role != User.Role.ADMIN and not request.user.is_superuser:
-            return Response(
-                {"error": "Only admins can manage join requests."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        return None
-
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
         """Approve a pending join request: create the user and notify them."""
-        if (forbidden := self._check_admin(request)) is not None:
-            return forbidden
-
         join_request = self.get_object()
         if join_request.status != OrgJoinRequest.Status.PENDING:
             return Response(
@@ -656,9 +756,11 @@ class JoinRequestViewSet(
         org = join_request.organization
         existing = User.objects.filter(email__iexact=join_request.email).first()
 
-        if existing and existing.organization_id not in (None, org.id):
+        if existing and (
+            existing.is_superuser or existing.organization_id not in (None, org.id)
+        ):
             # The requester created or joined another org between request and
-            # decision. Auto-reject; we cannot move them.
+            # decision, or runs the platform. Auto-reject; we cannot move them.
             join_request.status = OrgJoinRequest.Status.REJECTED
             join_request.decided_at = timezone.now()
             join_request.decided_by = request.user
@@ -739,9 +841,6 @@ class JoinRequestViewSet(
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
         """Reject a pending join request and notify the requester."""
-        if (forbidden := self._check_admin(request)) is not None:
-            return forbidden
-
         join_request = self.get_object()
         if join_request.status != OrgJoinRequest.Status.PENDING:
             return Response(
