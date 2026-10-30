@@ -1,17 +1,21 @@
 /**
- * The "Add contact" and "Add company" modals' frame and inputs.
+ * The frame and inputs of the modals around contacts and companies: adding, confirming.
  *
  * `noValidate`: an invalid email reaches the API, whose errors show on their field like
  * all the others. A closed modal is unmounted, which is what clears it.
  */
 
 import { useEffect, useId, type FormEvent, type ReactNode } from "react";
+import { clsx } from "clsx";
 import type { FormErrors } from "./formErrors";
 
 export function FormModal({
   title,
   errors,
   isSubmitting,
+  submitLabel = title,
+  canSubmit = true,
+  danger = false,
   onClose,
   onSubmit,
   children,
@@ -19,6 +23,10 @@ export function FormModal({
   title: string;
   errors: FormErrors;
   isSubmitting: boolean;
+  submitLabel?: string;
+  /** A confirmation not given yet. */
+  canSubmit?: boolean;
+  danger?: boolean;
   onClose: () => void;
   onSubmit: () => void;
   children: ReactNode;
@@ -81,10 +89,13 @@ export function FormModal({
             </button>
             <button
               type="submit"
-              disabled={isSubmitting}
-              className="rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-50"
+              disabled={isSubmitting || !canSubmit}
+              className={clsx(
+                "rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50",
+                danger ? "bg-red-600 hover:bg-red-700" : "bg-primary-500 hover:bg-primary-600",
+              )}
             >
-              {title}
+              {submitLabel}
             </button>
           </div>
         </form>

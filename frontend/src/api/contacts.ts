@@ -8,6 +8,9 @@
 import { apiClient } from "./client";
 import type { Contact, ContactNote, PaginatedResponse, TicketListItem } from "@/types";
 
+/** The API's cap on a timeline's tickets, the latest ones. A full list may be cut off. */
+export const TIMELINE_TICKETS_LIMIT = 100;
+
 export interface ContactFilters {
   search?: string;
   company?: string;

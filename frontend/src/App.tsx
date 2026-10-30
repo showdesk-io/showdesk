@@ -10,6 +10,7 @@ import { TicketDetailPage } from "./pages/TicketDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AdminPage } from "./pages/AdminPage";
 import { TeamPage } from "./pages/TeamPage";
+import { ContactDetailPage } from "./pages/ContactDetailPage";
 import { ContactsPage } from "./pages/ContactsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SetupPage } from "./pages/SetupPage";
@@ -42,10 +43,7 @@ export function App() {
         <Route path="tickets" element={<TicketListPage />} />
         <Route path="tickets/:id" element={<TicketDetailPage />} />
         <Route path="contacts" element={<ContactsPage />} />
-        <Route
-          path="contacts/:id"
-          element={<DetailPlaceholder backTo="/contacts" backLabel="contacts" />}
-        />
+        <Route path="contacts/:id" element={<ContactDetailPage />} />
         <Route path="companies" element={<ContactsPage />} />
         <Route
           path="companies/:id"

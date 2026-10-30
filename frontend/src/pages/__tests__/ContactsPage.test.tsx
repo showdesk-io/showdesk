@@ -226,26 +226,37 @@ describe("contacts table", () => {
     );
   });
 
-  it("marks an anonymized contact and doesn't open it", async () => {
+  it("marks an anonymized contact, which opens read-only like any other", async () => {
     const user = userEvent.setup();
     contacts = [
       contact({
-        name: "",
-        email: "",
-        display_name: "Anonymous contact",
+        name: "Anonymized contact",
+        email: "anonymized-1@anonymized.invalid",
+        email_verified: false,
+        display_name: "Anonymized contact",
         is_anonymized: true,
       }),
     ];
     renderPage();
 
-    const name = await screen.findByText("Anonymous contact");
+    const name = await screen.findByRole("link", { name: "Anonymized contact" });
+    expect(name).toHaveAttribute("href", "/contacts/c1");
     const row = name.closest("tr")!;
     expect(within(row).getByText("Anonymized")).toBeInTheDocument();
-    expect(row).toHaveAttribute("aria-disabled", "true");
-    expect(within(row).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(row).queryByText(/anonymized-1@/)).not.toBeInTheDocument();
+    expect(within(row).queryByText("Unverified")).not.toBeInTheDocument();
 
-    await user.click(name);
-    expect(location()).toBe("/contacts");
+    await user.click(within(row).getByText("Anonymized"));
+    expect(location()).toBe("/contacts/c1");
+  });
+
+  it("doesn't render an avatar that isn't http(s)", async () => {
+    contacts = [contact({ avatar_url: "javascript:alert(1)" })];
+    const { container } = renderPage();
+
+    await screen.findByText("Ada Lovelace");
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("AL")).toBeInTheDocument();
   });
 });
 

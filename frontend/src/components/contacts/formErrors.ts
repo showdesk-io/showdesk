@@ -28,3 +28,20 @@ export function readFormErrors(
   if (known.length === 0 && general.length === 0) return null;
   return { fields: Object.fromEntries(known), general };
 }
+
+const SAVE_FAILED = ["Could not save this change."];
+
+/** What to show next to a field whose save was refused, sent alone. */
+export function fieldErrors(error: unknown, field: string): string[] {
+  const { message, fields } = parseApiError(error);
+  const own = fields[field];
+  if (own?.length) return own;
+  const others = [...(message ? [message] : []), ...Object.values(fields).flat()];
+  return others.length > 0 ? others : SAVE_FAILED;
+}
+
+/** What to show next to a custom attribute whose save was refused, sent alone. */
+export function attributeErrors(error: unknown, key: string): string[] {
+  const { attributes } = parseApiError(error);
+  return attributes[key]?.length ? attributes[key] : fieldErrors(error, "attributes");
+}

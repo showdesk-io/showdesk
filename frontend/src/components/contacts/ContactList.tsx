@@ -4,6 +4,7 @@
 
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
+import { clsx } from "clsx";
 import { formatDistanceToNow } from "date-fns";
 import toast from "react-hot-toast";
 import { parseApiError } from "@/api/errors";
@@ -26,7 +27,7 @@ import {
   SearchInput,
   TH_CLASS,
 } from "./ListParts";
-import { UnverifiedBadge } from "./UnverifiedBadge";
+import { AnonymizedBadge, UnverifiedBadge } from "./UnverifiedBadge";
 
 const SEARCH_DEBOUNCE_MS = 300;
 const FORM_FIELDS = ["name", "email", "phone"] as const;
@@ -200,33 +201,28 @@ function ContactRow({ contact }: { contact: Contact }) {
 
   return (
     <tr
-      aria-disabled={anonymized || undefined}
-      className={anonymized ? "bg-gray-50" : "cursor-pointer hover:bg-gray-50"}
-      onClick={anonymized ? undefined : () => navigate(`/contacts/${contact.id}`)}
+      className={clsx("cursor-pointer hover:bg-gray-50", anonymized && "bg-gray-50")}
+      onClick={() => navigate(`/contacts/${contact.id}`)}
     >
       <td className="whitespace-nowrap px-6 py-4">
         <div className="flex items-center gap-3">
           <Avatar url={contact.avatar_url} name={contact.display_name} />
-          {anonymized ? (
-            <>
-              <span className="text-sm font-medium text-gray-500">{contact.display_name}</span>
-              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-                Anonymized
-              </span>
-            </>
-          ) : (
-            <Link
-              to={`/contacts/${contact.id}`}
-              onClick={(e) => e.stopPropagation()}
-              className="text-sm font-medium text-gray-900 hover:text-primary-700"
-            >
-              {contact.display_name}
-            </Link>
-          )}
+          <Link
+            to={`/contacts/${contact.id}`}
+            onClick={(e) => e.stopPropagation()}
+            className={clsx(
+              "text-sm font-medium hover:text-primary-700",
+              anonymized ? "text-gray-500" : "text-gray-900",
+            )}
+          >
+            {contact.display_name}
+          </Link>
+          {anonymized && <AnonymizedBadge />}
         </div>
       </td>
       <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-        {contact.email && (
+        {/* An anonymized contact's email is a placeholder, about nobody. */}
+        {contact.email && !anonymized && (
           <div className="flex items-center gap-2">
             <span>{contact.email}</span>
             {!contact.email_verified && <UnverifiedBadge />}

@@ -87,7 +87,9 @@ export function useUpdateContact() {
   return useMutation({
     mutationFn: ({ id, ...data }: { id: string } & ContactWrite) =>
       updateContact(id, data),
-    onSuccess: (_data, { id }) => {
+    onSuccess: (contact, { id }) => {
+      // At once: what the server made of it can differ, as a changed email's verification.
+      queryClient.setQueryData(["contact", id], contact);
       void queryClient.invalidateQueries({ queryKey: ["contact", id] });
       invalidateWhatShowsContacts(queryClient);
     },
@@ -129,7 +131,8 @@ export function useAnonymizeContact() {
 
   return useMutation({
     mutationFn: anonymizeContact,
-    onSuccess: (_data, id) => {
+    onSuccess: (contact, id) => {
+      queryClient.setQueryData(["contact", id], contact);
       void queryClient.invalidateQueries({ queryKey: ["contact", id] });
       invalidateWhatShowsContacts(queryClient);
     },

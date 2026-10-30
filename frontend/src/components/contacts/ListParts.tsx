@@ -6,6 +6,7 @@
 import { useState, type ReactNode } from "react";
 import { NavLink } from "react-router";
 import { clsx } from "clsx";
+import { safeHttpUrl } from "./safeUrl";
 
 export const FILTER_SELECT_CLASS =
   "rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-hidden";
@@ -91,9 +92,12 @@ export function SearchInput({
   );
 }
 
-/** An image next to a name, so with no alternative text. Initials if it's absent or broken. */
+/**
+ * An image next to a name, so with no alternative text. Initials if it's absent, broken or
+ * not http(s). Someone else chose this URL: it isn't told who's looking.
+ */
 export function Avatar({
-  url,
+  url: rawUrl,
   name,
   square = false,
 }: {
@@ -103,12 +107,14 @@ export function Avatar({
 }) {
   const [brokenUrl, setBrokenUrl] = useState<string | null>(null);
   const shape = square ? "rounded-lg" : "rounded-full";
+  const url = safeHttpUrl(rawUrl);
 
   if (url && url !== brokenUrl) {
     return (
       <img
         src={url}
         alt=""
+        referrerPolicy="no-referrer"
         onError={() => setBrokenUrl(url)}
         className={`h-8 w-8 shrink-0 object-cover ${shape}`}
       />
