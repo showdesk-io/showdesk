@@ -14,12 +14,14 @@ from apps.contacts.models import (
     Contact,
     ContactAttributeDef,
 )
+from apps.tickets.models import WidgetSession
 from tests.factories import (
     CompanyFactory,
     ContactAttributeDefFactory,
     ContactFactory,
     ContactNoteFactory,
     OrganizationFactory,
+    TicketFactory,
 )
 
 pytestmark = pytest.mark.django_db
@@ -270,3 +272,37 @@ def test_contact_note_without_author_passes_validation():
     note.author.delete()
     note.refresh_from_db()
     note.full_clean()
+
+
+def test_ticket_contact_set_null_on_contact_delete():
+    contact = ContactFactory()
+    ticket = TicketFactory(organization=contact.organization, contact=contact)
+    contact.delete()
+    ticket.refresh_from_db()
+    assert ticket.contact is None
+
+
+def test_widget_session_contact_set_null_on_contact_delete():
+    contact = ContactFactory()
+    session = WidgetSession.objects.create(
+        organization=contact.organization, contact=contact
+    )
+    contact.delete()
+    session.refresh_from_db()
+    assert session.contact is None
+
+
+def test_contact_reverse_relations_to_tickets_and_sessions():
+    contact = ContactFactory()
+    ticket = TicketFactory(organization=contact.organization, contact=contact)
+    session = WidgetSession.objects.create(
+        organization=contact.organization, contact=contact
+    )
+    assert list(contact.tickets.all()) == [ticket]
+    assert list(contact.sessions.all()) == [session]
+
+
+def test_widget_session_email_verified_at_defaults_to_none():
+    session = WidgetSession.objects.create(organization=OrganizationFactory())
+    session.refresh_from_db()
+    assert session.email_verified_at is None

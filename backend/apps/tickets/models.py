@@ -161,6 +161,18 @@ class WidgetSession(TimestampedModel):
     email = models.EmailField(blank=True)
     user_agent = models.TextField(blank=True)
     last_seen_at = models.DateTimeField(auto_now=True)
+    contact = models.ForeignKey(
+        "contacts.Contact",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sessions",
+    )
+    email_verified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set when this session proved ownership of its email.",
+    )
 
     class Meta:
         indexes = [
@@ -258,6 +270,13 @@ class Ticket(TimestampedModel):
         blank=True,
         related_name="requested_tickets",
         help_text="The end-user who submitted this ticket.",
+    )
+    contact = models.ForeignKey(
+        "contacts.Contact",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tickets",
     )
     assigned_agent = models.ForeignKey(
         settings.AUTH_USER_MODEL,
