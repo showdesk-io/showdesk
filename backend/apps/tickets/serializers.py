@@ -334,7 +334,8 @@ class TicketListSerializer(serializers.ModelSerializer):
 def ticket_list_rows(tickets):
     """Return the rows ``TicketListSerializer`` shows, without an N+1.
 
-    Distinct: filtering on several tags joins them, one row per tag matched.
+    Distinct: filtering on several tags joins them, one row per tag matched. Ordered
+    here, as Django drops ``Meta.ordering`` from a query with a GROUP BY.
     """
     return (
         tickets.select_related(
@@ -342,6 +343,7 @@ def ticket_list_rows(tickets):
         )
         .prefetch_related("tags")
         .annotate(message_count=Count("messages", distinct=True))
+        .order_by("-created_at", "-id")
     )
 
 
