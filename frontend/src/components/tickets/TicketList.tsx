@@ -137,7 +137,7 @@ function PriorityMenu({ ticket }: { ticket: TicketListItem }) {
 
 // ── Assign Menu ───────────────────────────────────────────────────────
 
-function AssignMenu({ ticket }: { ticket: TicketListItem }) {
+export function AssignMenu({ ticket }: { ticket: TicketListItem }) {
   const { open, setOpen, ref } = useDropdown();
   const assignTicket = useAssignTicket();
   const { data: agents } = useQuery({
@@ -148,7 +148,7 @@ function AssignMenu({ ticket }: { ticket: TicketListItem }) {
 
   const handleAssign = (agentId: string | null) => {
     assignTicket.mutate(
-      { ticketId: ticket.id, agent_id: agentId ?? undefined },
+      { ticketId: ticket.id, agent_id: agentId },
       {
         onSuccess: () => {
           toast.success(agentId ? "Ticket assigned" : "Ticket unassigned");

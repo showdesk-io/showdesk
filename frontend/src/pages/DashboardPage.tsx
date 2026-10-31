@@ -23,7 +23,10 @@ export function DashboardPage() {
     queryFn: fetchTicketStats,
   });
   const { data: recentTickets } = useTickets({ page: 1 });
-  const showOnboardingNudge = !!org && !org.onboarding_completed_at;
+  const showOnboardingNudge =
+    !!org &&
+    !org.onboarding_completed_at &&
+    (user?.role === "admin" || !!user?.is_superuser);
 
   const statCards = [
     {

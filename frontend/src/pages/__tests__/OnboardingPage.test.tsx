@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.mock("@/api/users");
@@ -27,7 +27,8 @@ vi.mock("react-router", async () => {
 });
 
 import * as usersApi from "@/api/users";
-import type { Organization } from "@/types";
+import { useAuthStore } from "@/store/authStore";
+import type { Organization, User } from "@/types";
 import { OnboardingPage } from "../OnboardingPage";
 
 
@@ -108,6 +109,35 @@ describe("OnboardingPage", () => {
     ).toBeInTheDocument();
     // The embed snippet uses the api_token.
     expect(screen.getByText(/abc-123/)).toBeInTheDocument();
+  });
+
+  it("redirects agents opening the URL to /: the wizard only has admin steps", async () => {
+    useAuthStore.setState({ isAuthenticated: true });
+    vi.mocked(usersApi.fetchOrganization).mockResolvedValue(makeOrg());
+    vi.mocked(usersApi.fetchCurrentUser).mockResolvedValue({
+      role: "agent",
+      is_superuser: false,
+    } as User);
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <MemoryRouter initialEntries={["/onboarding"]}>
+          <Routes>
+            <Route path="/" element={<div>dashboard</div>} />
+            <Route path="/onboarding" element={<OnboardingPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("dashboard")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /customize your widget/i }),
+    ).not.toBeInTheDocument();
+    useAuthStore.setState({ isAuthenticated: false });
   });
 
   it("redirects to / when onboarding has already been completed", async () => {

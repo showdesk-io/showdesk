@@ -2,6 +2,12 @@
 
 from rest_framework import serializers
 
+from apps.core.permissions import get_active_org
+from apps.core.serializers import (
+    OrgScopedPrimaryKeyRelatedField,
+    read_only_organization_field,
+)
+from apps.organizations.models import Team, User
 from apps.organizations.serializers import UserSerializer
 
 from .models import (
@@ -20,6 +26,8 @@ from .models import (
 class PriorityLevelSerializer(serializers.ModelSerializer):
     """Serializer for the PriorityLevel model."""
 
+    organization = read_only_organization_field()
+
     class Meta:
         model = PriorityLevel
         fields = [
@@ -33,16 +41,18 @@ class PriorityLevelSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "organization", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
 
 
 class TagSerializer(serializers.ModelSerializer):
     """Serializer for the Tag model."""
 
+    organization = read_only_organization_field()
+
     class Meta:
         model = Tag
         fields = ["id", "organization", "name", "color", "created_at"]
-        read_only_fields = ["id", "organization", "created_at"]
+        read_only_fields = ["id", "created_at"]
 
 
 class SLAPolicySerializer(serializers.ModelSerializer):
@@ -71,8 +81,6 @@ class SLAPolicySerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "organization", "created_at", "updated_at"]
 
     def validate_priority(self, value: str) -> str:
-        from apps.core.permissions import get_active_org
-
         request = self.context.get("request")
         if request is None:
             return value
@@ -91,6 +99,14 @@ class SLAPolicySerializer(serializers.ModelSerializer):
 
 class TicketAttachmentSerializer(serializers.ModelSerializer):
     """Serializer for ticket attachments with file validation."""
+
+    ticket = OrgScopedPrimaryKeyRelatedField(queryset=Ticket.objects.all())
+    message = OrgScopedPrimaryKeyRelatedField(
+        queryset=TicketMessage.objects.all(),
+        org_field="ticket__organization",
+        required=False,
+        allow_null=True,
+    )
 
     # Max 20 MB per file
     MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -132,7 +148,7 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
             "file_size",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "uploaded_by", "created_at"]
 
     def validate_file(self, value):
         """Validate file size and type."""
@@ -154,6 +170,7 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
 class TicketMessageSerializer(serializers.ModelSerializer):
     """Serializer for ticket messages."""
 
+    ticket = OrgScopedPrimaryKeyRelatedField(queryset=Ticket.objects.all())
     author_detail = UserSerializer(source="author", read_only=True)
     attachments = TicketAttachmentSerializer(many=True, read_only=True)
     sender_name = serializers.CharField(read_only=True)
@@ -174,7 +191,13 @@ class TicketMessageSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "author", "created_at", "updated_at"]
+
+
+# Who a ticket can be assigned to, as in the bulk_update action.
+ASSIGNABLE_AGENTS = User.objects.filter(
+    role__in=[User.Role.AGENT, User.Role.ADMIN], is_active=True
+)
 
 
 class TicketSerializer(serializers.ModelSerializer):
@@ -185,15 +208,27 @@ class TicketSerializer(serializers.ModelSerializer):
     messages = TicketMessageSerializer(many=True, read_only=True)
     videos = VideoRecordingSerializer(many=True, read_only=True)
     tags_detail = TagSerializer(source="tags", many=True, read_only=True)
-    tag_ids = serializers.PrimaryKeyRelatedField(
+    tag_ids = OrgScopedPrimaryKeyRelatedField(
         many=True,
         queryset=Tag.objects.all(),
         source="tags",
         write_only=True,
         required=False,
     )
+    requester = OrgScopedPrimaryKeyRelatedField(
+        queryset=User.objects.all(), required=False, allow_null=True
+    )
     requester_detail = UserSerializer(source="requester", read_only=True)
+    assigned_agent = OrgScopedPrimaryKeyRelatedField(
+        queryset=ASSIGNABLE_AGENTS, required=False, allow_null=True
+    )
     assigned_agent_detail = UserSerializer(source="assigned_agent", read_only=True)
+    assigned_team = OrgScopedPrimaryKeyRelatedField(
+        queryset=Team.objects.all(), required=False, allow_null=True
+    )
+    sla_policy = OrgScopedPrimaryKeyRelatedField(
+        queryset=SLAPolicy.objects.all(), required=False, allow_null=True
+    )
 
     class Meta:
         model = Ticket
@@ -234,6 +269,7 @@ class TicketSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "organization",
             "reference",
             "first_response_at",
             "resolved_at",
@@ -241,6 +277,25 @@ class TicketSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class TicketAssignSerializer(serializers.Serializer):
+    """Validates the body of the ticket ``assign`` action."""
+
+    agent_id = OrgScopedPrimaryKeyRelatedField(
+        queryset=ASSIGNABLE_AGENTS, required=False, allow_null=True
+    )
+    team_id = OrgScopedPrimaryKeyRelatedField(
+        queryset=Team.objects.all(), required=False, allow_null=True
+    )
+
+
+class TicketSetTagsSerializer(serializers.Serializer):
+    """Validates the body of the ticket ``set_tags`` action."""
+
+    tag_ids = OrgScopedPrimaryKeyRelatedField(
+        many=True, queryset=Tag.objects.all(), required=False
+    )
 
 
 class TicketListSerializer(serializers.ModelSerializer):
@@ -272,6 +327,7 @@ class TicketListSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        read_only_fields = fields
 
     def get_message_count(self, obj: Ticket) -> int:
         """Return the number of messages on this ticket."""
@@ -365,12 +421,10 @@ class SavedViewSerializer(serializers.ModelSerializer):
     def validate_name(self, value):
         """Ensure the name is unique within the organization."""
         request = self.context.get("request")
-        if not request or not request.user.organization:
+        org = get_active_org(request) if request else None
+        if not org:
             return value
-        qs = SavedView.objects.filter(
-            organization=request.user.organization,
-            name=value,
-        )
+        qs = SavedView.objects.filter(organization=org, name=value)
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():
@@ -412,8 +466,6 @@ class CannedResponseSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request:
             return value
-        from apps.core.permissions import get_active_org
-
         org = get_active_org(request)
         if not org:
             return value

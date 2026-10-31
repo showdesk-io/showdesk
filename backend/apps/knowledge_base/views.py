@@ -1,11 +1,13 @@
 """Views for knowledge base models."""
 
+from django_filters import rest_framework as django_filters
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import get_active_org
+from apps.core.filters import active_org_rows
+from apps.core.permissions import IsOrgStaff, get_active_org, require_active_org
 
 from .models import Article, Category
 from .serializers import ArticleSerializer, CategorySerializer
@@ -15,7 +17,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
     """ViewSet for managing knowledge base categories."""
 
     serializer_class = CategorySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
 
     def get_queryset(self):
         """Filter categories by the active organization."""
@@ -24,13 +26,27 @@ class CategoryViewSet(viewsets.ModelViewSet):
             return Category.objects.filter(organization=org)
         return Category.objects.none()
 
+    def perform_create(self, serializer) -> None:
+        """Set organization from the active org."""
+        serializer.save(organization=require_active_org(self.request))
+
+
+class ArticleFilter(django_filters.FilterSet):
+    """Article filters. Ids only resolve in the active organization."""
+
+    category = django_filters.ModelChoiceFilter(queryset=active_org_rows(Category))
+
+    class Meta:
+        model = Article
+        fields = ("category", "status")
+
 
 class ArticleViewSet(viewsets.ModelViewSet):
     """ViewSet for managing knowledge base articles."""
 
     serializer_class = ArticleSerializer
-    permission_classes = [IsAuthenticated]
-    filterset_fields = ["category", "status"]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
+    filterset_class = ArticleFilter
     search_fields = ["title", "body"]
 
     def get_queryset(self):
@@ -39,6 +55,13 @@ class ArticleViewSet(viewsets.ModelViewSet):
         if org:
             return Article.objects.filter(organization=org)
         return Article.objects.none()
+
+    def perform_create(self, serializer) -> None:
+        """Set organization and author."""
+        serializer.save(
+            organization=require_active_org(self.request),
+            author=self.request.user,
+        )
 
     @action(detail=True, methods=["post"], permission_classes=[AllowAny])
     def helpful(self, request, pk=None):

@@ -1,5 +1,7 @@
 """API tests for ticket endpoints."""
 
+from unittest.mock import patch
+
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
@@ -10,6 +12,7 @@ from tests.factories import (
     OrganizationFactory,
     PriorityLevelFactory,
     TagFactory,
+    TeamFactory,
     TicketFactory,
     UserFactory,
 )
@@ -111,6 +114,58 @@ class TestTicketAPI:
         )
         assert response.status_code == status.HTTP_200_OK
         assert response.data["status"] == "in_progress"
+
+    def test_unassign_agent(self, authenticated_client, organization) -> None:
+        """An explicit null removes the agent and leaves the status alone."""
+        agent = UserFactory(organization=organization, role="agent")
+        ticket = TicketFactory(
+            organization=organization,
+            assigned_agent=agent,
+            status=Ticket.Status.WAITING,
+        )
+        with patch("apps.tickets.views.send_ticket_assigned_email.delay") as email:
+            response = authenticated_client.post(
+                f"/api/v1/tickets/{ticket.id}/assign/",
+                {"agent_id": None},
+                format="json",
+            )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["assigned_agent"] is None
+        assert response.data["status"] == "waiting"
+        email.assert_not_called()
+
+    def test_unassign_team_keeps_the_agent(
+        self, authenticated_client, organization
+    ) -> None:
+        agent = UserFactory(organization=organization, role="agent")
+        team = TeamFactory(organization=organization)
+        ticket = TicketFactory(
+            organization=organization,
+            assigned_agent=agent,
+            assigned_team=team,
+            status=Ticket.Status.OPEN,
+        )
+        response = authenticated_client.post(
+            f"/api/v1/tickets/{ticket.id}/assign/", {"team_id": None}, format="json"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["assigned_team"] is None
+        assert response.data["assigned_agent"] == agent.id
+        assert response.data["status"] == "open"
+
+    def test_assign_without_a_target_changes_nothing(
+        self, authenticated_client, organization
+    ) -> None:
+        agent = UserFactory(organization=organization, role="agent")
+        ticket = TicketFactory(
+            organization=organization, assigned_agent=agent, status=Ticket.Status.OPEN
+        )
+        response = authenticated_client.post(
+            f"/api/v1/tickets/{ticket.id}/assign/", {}, format="json"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["assigned_agent"] == agent.id
+        assert response.data["status"] == "open"
 
     def test_reopen_ticket(self, authenticated_client, organization) -> None:
         """Agents can reopen a resolved ticket."""
@@ -261,20 +316,20 @@ class TestTagAPI:
         assert response.data["color"] == "#EF4444"
         assert str(response.data["organization"]) == str(organization.id)
 
-    def test_update_tag(self, authenticated_client, organization) -> None:
-        """Agents can update a tag."""
+    def test_update_tag(self, admin_client, organization) -> None:
+        """Admins can update a tag."""
         tag = TagFactory(organization=organization, name="Old Name")
-        response = authenticated_client.patch(
+        response = admin_client.patch(
             f"/api/v1/tags/{tag.id}/",
             {"name": "New Name"},
         )
         assert response.status_code == status.HTTP_200_OK
         assert response.data["name"] == "New Name"
 
-    def test_delete_tag(self, authenticated_client, organization) -> None:
-        """Agents can delete a tag."""
+    def test_delete_tag(self, admin_client, organization) -> None:
+        """Admins can delete a tag."""
         tag = TagFactory(organization=organization)
-        response = authenticated_client.delete(f"/api/v1/tags/{tag.id}/")
+        response = admin_client.delete(f"/api/v1/tags/{tag.id}/")
         assert response.status_code == status.HTTP_204_NO_CONTENT
 
     def test_set_tags_on_ticket(self, authenticated_client, organization) -> None:
@@ -417,9 +472,9 @@ class TestPriorityLevelAPI:
         assert "high" in slugs
         assert "urgent" in slugs
 
-    def test_create_custom_priority(self, authenticated_client, organization) -> None:
-        """Agents can create custom priority levels."""
-        response = authenticated_client.post(
+    def test_create_custom_priority(self, admin_client, organization) -> None:
+        """Admins can create custom priority levels."""
+        response = admin_client.post(
             "/api/v1/priorities/",
             {
                 "name": "Blocker",
@@ -434,27 +489,27 @@ class TestPriorityLevelAPI:
         assert response.data["color"] == "#DC2626"
         assert str(response.data["organization"]) == str(organization.id)
 
-    def test_update_priority_color(self, authenticated_client, organization) -> None:
-        """Agents can update a priority level's color."""
+    def test_update_priority_color(self, admin_client, organization) -> None:
+        """Admins can update a priority level's color."""
         priority = PriorityLevel.objects.get(
             organization=organization,
             slug="high",
         )
-        response = authenticated_client.patch(
+        response = admin_client.patch(
             f"/api/v1/priorities/{priority.id}/",
             {"color": "#FF0000"},
         )
         assert response.status_code == status.HTTP_200_OK
         assert response.data["color"] == "#FF0000"
 
-    def test_delete_custom_priority(self, authenticated_client, organization) -> None:
-        """Agents can delete a priority level."""
+    def test_delete_custom_priority(self, admin_client, organization) -> None:
+        """Admins can delete a priority level."""
         priority = PriorityLevelFactory(
             organization=organization,
             name="Temporary",
             slug="temporary",
         )
-        response = authenticated_client.delete(f"/api/v1/priorities/{priority.id}/")
+        response = admin_client.delete(f"/api/v1/priorities/{priority.id}/")
         assert response.status_code == status.HTTP_204_NO_CONTENT
 
     def test_priorities_filtered_by_organization(

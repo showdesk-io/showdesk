@@ -37,7 +37,11 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.core.email import send_branded_email
-from apps.core.throttling import SignupCheckThrottle
+from apps.core.throttling import (
+    OTP_REQUEST_THROTTLES,
+    OTP_VERIFY_THROTTLES,
+    SignupCheckThrottle,
+)
 
 from . import services
 from .models import (
@@ -277,7 +281,7 @@ class SignupRequestOTPView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [SignupCheckThrottle]
+    throttle_classes = OTP_REQUEST_THROTTLES
 
     def post(self, request: Request) -> Response:
         serializer = SignupRequestOTPSerializer(data=request.data)
@@ -340,7 +344,7 @@ class SignupVerifyOTPView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    throttle_classes = [SignupCheckThrottle]
+    throttle_classes = OTP_VERIFY_THROTTLES
 
     @transaction.atomic
     def post(self, request: Request) -> Response:
@@ -349,12 +353,7 @@ class SignupVerifyOTPView(APIView):
         email = serializer.validated_data["email"].lower().strip()
         code = serializer.validated_data["code"]
 
-        otp = (
-            OTPCode.objects.filter(email=email, code=code, used_at__isnull=True)
-            .order_by("-created_at")
-            .first()
-        )
-        if not otp or not otp.is_valid:
+        if OTPCode.redeem(email, code) is None:
             return Response(
                 {"detail": "Invalid or expired code.", "code": "invalid_otp"},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -367,8 +366,6 @@ class SignupVerifyOTPView(APIView):
                 {"detail": "Invalid or expired code.", "code": "invalid_otp"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-
-        otp.mark_used()
 
         if user is None:
             full_name = cache.get(f"signup_pending_name:{email}", "") or ""

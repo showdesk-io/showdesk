@@ -12,6 +12,8 @@ from channels.middleware import BaseMiddleware
 from django.contrib.auth.models import AnonymousUser
 from rest_framework_simplejwt.tokens import AccessToken
 
+from apps.core.permissions import LOOKUP_ERRORS
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,7 +63,7 @@ def get_widget_session(token_str: str, session_id: str):
     try:
         org = Organization.objects.get(api_token=token_str, is_active=True)
         return WidgetSession.objects.get(id=session_id, organization=org)
-    except (Organization.DoesNotExist, WidgetSession.DoesNotExist, ValueError):
+    except LOOKUP_ERRORS:
         logger.debug("WebSocket widget authentication failed.")
         return None
 

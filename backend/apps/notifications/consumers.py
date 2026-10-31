@@ -10,6 +10,8 @@ from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
+from apps.core.permissions import LOOKUP_ERRORS
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,14 +30,21 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
             await self.close()
             return
 
+        # End users have no access to their organization's tickets.
+        if not (user.is_agent or user.is_superuser):
+            logger.warning("TicketConsumer: rejecting end user %s", user.pk)
+            await self.close()
+            return
+
         # Superusers may impersonate an org via ?org=<uuid>, matching the
         # X-Showdesk-Org header used on HTTP requests. Otherwise fall back
         # to the user's own organization.
         query_string = self.scope.get("query_string", b"").decode("utf-8")
         requested_org = (parse_qs(query_string).get("org") or [None])[0]
+        org_id = None
         if requested_org and getattr(user, "is_superuser", False):
-            org_id = requested_org
-        else:
+            org_id = await self._get_existing_organization_id(requested_org)
+        if not org_id:
             org_id = await self._get_organization_id(user)
 
         if org_id:
@@ -84,6 +93,16 @@ class TicketConsumer(AsyncJsonWebsocketConsumer):
     async def ticket_message_deleted(self, event: dict) -> None:
         """Send message deletion notification to the WebSocket client."""
         await self.send_json(event["data"])
+
+    @database_sync_to_async
+    def _get_existing_organization_id(self, org_id: str) -> str | None:
+        """Return ``org_id`` normalized, or None if it names no organization."""
+        from apps.organizations.models import Organization
+
+        try:
+            return str(Organization.objects.only("id").get(id=org_id).id)
+        except LOOKUP_ERRORS:
+            return None
 
     @database_sync_to_async
     def _get_organization_id(self, user) -> str | None:

@@ -2,12 +2,18 @@
 
 from rest_framework import serializers
 
+from apps.core.serializers import (
+    OrgScopedPrimaryKeyRelatedField,
+    read_only_organization_field,
+)
+
 from .models import Article, Category
 
 
 class CategorySerializer(serializers.ModelSerializer):
     """Serializer for the Category model."""
 
+    organization = read_only_organization_field()
     article_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -35,6 +41,10 @@ class CategorySerializer(serializers.ModelSerializer):
 class ArticleSerializer(serializers.ModelSerializer):
     """Serializer for the Article model."""
 
+    organization = read_only_organization_field()
+    category = OrgScopedPrimaryKeyRelatedField(
+        queryset=Category.objects.all(), required=False, allow_null=True
+    )
     category_name = serializers.CharField(source="category.name", read_only=True)
 
     class Meta:
@@ -58,6 +68,7 @@ class ArticleSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "author",
             "view_count",
             "helpful_count",
             "not_helpful_count",

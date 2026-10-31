@@ -63,6 +63,10 @@
     {% else %}
       <p class="subtitle">Sign in with your email</p>
 
+      {% if error %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+
       <form method="post">
         {% csrf_token %}
         <input type="hidden" name="step" value="email">

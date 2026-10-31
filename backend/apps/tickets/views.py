@@ -4,6 +4,7 @@ import logging
 
 from django.db import models
 from django.utils import timezone
+from django_filters import rest_framework as django_filters
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
@@ -11,7 +12,16 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from apps.core.permissions import get_active_org, has_feature
+from apps.core.filters import active_org_rows
+from apps.core.permissions import (
+    LOOKUP_ERRORS,
+    IsOrgAdmin,
+    IsOrgAdminOrReadOnly,
+    IsOrgStaff,
+    get_active_org,
+    has_feature,
+    require_active_org,
+)
 from apps.core.throttling import (
     WidgetMessageThrottle,
     WidgetSessionThrottle,
@@ -24,7 +34,7 @@ from apps.notifications.signals import (
     notify_new_ticket,
     notify_ticket_update,
 )
-from apps.organizations.models import Organization
+from apps.organizations.models import Organization, Team, User
 
 from .models import (
     CannedResponse,
@@ -42,11 +52,13 @@ from .serializers import (
     SavedViewSerializer,
     SLAPolicySerializer,
     TagSerializer,
+    TicketAssignSerializer,
     TicketAttachmentSerializer,
     TicketCreateFromWidgetSerializer,
     TicketListSerializer,
     TicketMessageSerializer,
     TicketSerializer,
+    TicketSetTagsSerializer,
     WidgetConversationListSerializer,
     WidgetMessageCreateSerializer,
     WidgetMessageSerializer,
@@ -75,7 +87,7 @@ def _get_widget_org(request):
         )
     try:
         org = Organization.objects.get(api_token=token, is_active=True)
-    except Organization.DoesNotExist:
+    except LOOKUP_ERRORS:
         return None, Response(
             {"error": "Invalid or inactive organization token."},
             status=status.HTTP_401_UNAUTHORIZED,
@@ -106,12 +118,32 @@ def _get_widget_session(request, organization):
         )
     try:
         session = WidgetSession.objects.get(id=session_id, organization=organization)
-    except (WidgetSession.DoesNotExist, ValueError):
+    except LOOKUP_ERRORS:
         return None, Response(
             {"error": "Invalid session."},
             status=status.HTTP_401_UNAUTHORIZED,
         )
     return session, None
+
+
+class TicketFilter(django_filters.FilterSet):
+    """Ticket filters. Ids only resolve in the active organization."""
+
+    assigned_agent = django_filters.ModelChoiceFilter(queryset=active_org_rows(User))
+    assigned_team = django_filters.ModelChoiceFilter(queryset=active_org_rows(Team))
+    tags = django_filters.ModelMultipleChoiceFilter(queryset=active_org_rows(Tag))
+
+    class Meta:
+        model = Ticket
+        fields = (
+            "status",
+            "priority",
+            "assigned_agent",
+            "assigned_team",
+            "source",
+            "tags",
+            "external_user_id",
+        )
 
 
 class TicketViewSet(viewsets.ModelViewSet):
@@ -121,21 +153,13 @@ class TicketViewSet(viewsets.ModelViewSet):
     and a special widget submission endpoint.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
     filter_backends = [
         DjangoFilterBackend,
         filters.SearchFilter,
         filters.OrderingFilter,
     ]
-    filterset_fields = [
-        "status",
-        "priority",
-        "assigned_agent",
-        "assigned_team",
-        "source",
-        "tags",
-        "external_user_id",
-    ]
+    filterset_class = TicketFilter
     search_fields = ["title", "description", "reference", "requester_email"]
     ordering_fields = ["created_at", "updated_at", "priority", "status"]
 
@@ -154,7 +178,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Set organization and reference on creation."""
-        org = get_active_org(self.request)
+        org = require_active_org(self.request)
         ticket = serializer.save(
             organization=org,
             reference=org.next_ticket_reference(),
@@ -253,7 +277,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         try:
             organization = Organization.objects.get(api_token=token, is_active=True)
-        except Organization.DoesNotExist:
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Invalid or inactive organization token."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -301,7 +325,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         try:
             organization = Organization.objects.get(api_token=token, is_active=True)
-        except Organization.DoesNotExist:
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Invalid or inactive organization token."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -318,7 +342,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         try:
             ticket = Ticket.objects.get(id=ticket_id, organization=organization)
-        except Ticket.DoesNotExist:
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -332,7 +356,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 "content_type": uploaded_file.content_type
                 or "application/octet-stream",
                 "file_size": uploaded_file.size,
-            }
+            },
+            context={"organization": organization},
         )
         serializer.is_valid(raise_exception=True)
         serializer.save(uploaded_by=None)
@@ -361,7 +386,7 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         try:
             organization = Organization.objects.get(api_token=token, is_active=True)
-        except Organization.DoesNotExist:
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Invalid or inactive organization token."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -408,17 +433,24 @@ class TicketViewSet(viewsets.ModelViewSet):
     def assign(self, request, pk=None):
         """Assign a ticket to an agent or team."""
         ticket = self.get_object()
-        agent_id = request.data.get("agent_id")
-        team_id = request.data.get("team_id")
+        serializer = TicketAssignSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
+        serializer.is_valid(raise_exception=True)
+        # A missing key leaves the assignment alone, an explicit null clears it.
+        data = serializer.validated_data
+        agent = data.get("agent_id")
+        team = data.get("team_id")
 
-        if agent_id:
-            ticket.assigned_agent_id = agent_id
-        if team_id:
-            ticket.assigned_team_id = team_id
-        if not ticket.first_response_at and agent_id:
+        if "agent_id" in data:
+            ticket.assigned_agent = agent
+        if "team_id" in data:
+            ticket.assigned_team = team
+        if not ticket.first_response_at and agent:
             ticket.first_response_at = timezone.now()
 
-        ticket.status = Ticket.Status.IN_PROGRESS
+        if agent or team:
+            ticket.status = Ticket.Status.IN_PROGRESS
         ticket.save()
 
         # Notify
@@ -426,7 +458,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             notify_ticket_update(ticket)
         except Exception:
             logger.exception("WebSocket notification failed for %s", ticket.reference)
-        if agent_id:
+        if agent:
             send_ticket_assigned_email.delay(str(ticket.id))
 
         return Response(TicketSerializer(ticket).data)
@@ -483,14 +515,11 @@ class TicketViewSet(viewsets.ModelViewSet):
     def set_tags(self, request, pk=None):
         """Set tags on a ticket (replaces existing tags)."""
         ticket = self.get_object()
-        tag_ids = request.data.get("tag_ids", [])
-
-        # Validate that tags belong to the same org
-        tags = Tag.objects.filter(
-            id__in=tag_ids,
-            organization=ticket.organization,
+        serializer = TicketSetTagsSerializer(
+            data=request.data, context=self.get_serializer_context()
         )
-        ticket.tags.set(tags)
+        serializer.is_valid(raise_exception=True)
+        ticket.tags.set(serializer.validated_data.get("tag_ids", []))
 
         try:
             notify_ticket_update(ticket)
@@ -503,7 +532,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         detail=False,
         methods=["post"],
         url_path="bulk_update",
-        permission_classes=[IsAuthenticated, has_feature("bulk_actions")],
+        permission_classes=[IsAuthenticated, IsOrgStaff, has_feature("bulk_actions")],
     )
     def bulk_update(self, request):
         """Apply a single update to many tickets at once.
@@ -548,14 +577,15 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         org = get_active_org(request)
         if new_agent_id:
-            from apps.organizations.models import User
-
-            agent_in_org = User.objects.filter(
-                id=new_agent_id,
-                organization=org,
-                role__in=[User.Role.AGENT, User.Role.ADMIN],
-                is_active=True,
-            ).exists()
+            try:
+                agent_in_org = User.objects.filter(
+                    id=new_agent_id,
+                    organization=org,
+                    role__in=[User.Role.AGENT, User.Role.ADMIN],
+                    is_active=True,
+                ).exists()
+            except LOOKUP_ERRORS:
+                agent_in_org = False
             if not agent_in_org:
                 return Response(
                     {"error": "Assigned agent must belong to the active organization."},
@@ -565,7 +595,13 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Org-scoped queryset already filters out anything outside the
         # active org, so a hostile or stale id list is a no-op rather
         # than a leak.
-        tickets = list(self.get_queryset().filter(id__in=ids))
+        try:
+            tickets = list(self.get_queryset().filter(id__in=ids))
+        except LOOKUP_ERRORS:
+            return Response(
+                {"error": "'ids' must be an array of ticket ids."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if not tickets:
             return Response({"updated": 0, "ids": []})
 
@@ -655,7 +691,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         if session_id:
             try:
                 session = WidgetSession.objects.get(id=session_id, organization=org)
-            except (WidgetSession.DoesNotExist, ValueError):
+            except LOOKUP_ERRORS:
                 session = None
 
             # Identity mismatch (e.g. a different user logged into the same
@@ -760,7 +796,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                     organization=org,
                     widget_session=session,
                 )
-            except Ticket.DoesNotExist:
+            except LOOKUP_ERRORS:
                 return Response(
                     {"error": "Ticket not found."},
                     status=status.HTTP_404_NOT_FOUND,
@@ -868,7 +904,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                     organization=org,
                     widget_session=session,
                 )
-            except Ticket.DoesNotExist:
+            except LOOKUP_ERRORS:
                 return Response(
                     {"error": "Ticket not found."},
                     status=status.HTTP_404_NOT_FOUND,
@@ -913,7 +949,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 "content_type": uploaded_file.content_type
                 or "application/octet-stream",
                 "file_size": uploaded_file.size,
-            }
+            },
+            context={"organization": org},
         )
         att_serializer.is_valid(raise_exception=True)
         att_serializer.save(uploaded_by=None)
@@ -980,7 +1017,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 organization=org,
                 widget_session=session,
             )
-        except (Ticket.DoesNotExist, ValueError):
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -1062,7 +1099,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 organization=org,
                 widget_session=session,
             )
-        except (Ticket.DoesNotExist, ValueError):
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -1104,7 +1141,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 widget_session=session,
                 ticket__organization=org,
             )
-        except (TicketMessage.DoesNotExist, ValueError):
+        except LOOKUP_ERRORS:
             return Response(
                 {"error": "Message not found."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -1139,7 +1176,7 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ticket messages."""
 
     serializer_class = TicketMessageSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
 
     def get_queryset(self):
         """Filter messages by the active organization's tickets."""
@@ -1178,7 +1215,7 @@ class TicketAttachmentViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ticket attachments."""
 
     serializer_class = TicketAttachmentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
 
     def get_queryset(self):
         """Filter attachments by the active organization's tickets."""
@@ -1193,10 +1230,19 @@ class TicketAttachmentViewSet(viewsets.ModelViewSet):
 
 
 class TagViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing tags."""
+    """Tags of the active organization.
+
+    Agents create them on the fly from a ticket. Changing or deleting one, which
+    affects every ticket wearing it, is for admins.
+    """
 
     serializer_class = TagSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
+
+    def get_permissions(self):
+        if self.action in ("update", "partial_update", "destroy"):
+            return [IsAuthenticated(), IsOrgAdmin()]
+        return super().get_permissions()
 
     def get_queryset(self):
         """Filter tags by the active organization."""
@@ -1207,14 +1253,14 @@ class TagViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Set organization from the active org."""
-        serializer.save(organization=get_active_org(self.request))
+        serializer.save(organization=require_active_org(self.request))
 
 
 class PriorityLevelViewSet(viewsets.ModelViewSet):
     """ViewSet for managing custom priority levels."""
 
     serializer_class = PriorityLevelSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgAdminOrReadOnly]
 
     def get_queryset(self):
         """Filter priority levels by the active organization."""
@@ -1225,7 +1271,7 @@ class PriorityLevelViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Set organization from the active org."""
-        serializer.save(organization=get_active_org(self.request))
+        serializer.save(organization=require_active_org(self.request))
 
 
 class SLAPolicyViewSet(viewsets.ModelViewSet):
@@ -1238,7 +1284,7 @@ class SLAPolicyViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = SLAPolicySerializer
-    permission_classes = [IsAuthenticated, has_feature("sla_policies")]
+    permission_classes = [IsAuthenticated, IsOrgStaff, has_feature("sla_policies")]
 
     def get_queryset(self):
         org = get_active_org(self.request)
@@ -1253,15 +1299,13 @@ class SLAPolicyViewSet(viewsets.ModelViewSet):
     def _require_admin(self) -> None:
         from rest_framework.exceptions import PermissionDenied
 
-        from apps.organizations.models import User
-
         user = self.request.user
         if user.role != User.Role.ADMIN and not user.is_superuser:
             raise PermissionDenied("Only admins can manage SLA policies.")
 
     def perform_create(self, serializer) -> None:
         self._require_admin()
-        serializer.save(organization=get_active_org(self.request))
+        serializer.save(organization=require_active_org(self.request))
 
     def perform_update(self, serializer) -> None:
         self._require_admin()
@@ -1280,7 +1324,7 @@ class SavedViewViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = SavedViewSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
 
     def get_queryset(self):
         """Return personal views + shared views from the active org."""
@@ -1297,7 +1341,7 @@ class SavedViewViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:
         """Set organization and creator."""
         serializer.save(
-            organization=get_active_org(self.request),
+            organization=require_active_org(self.request),
             created_by=self.request.user,
         )
 
@@ -1326,7 +1370,7 @@ class CannedResponseViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = CannedResponseSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrgStaff]
     filter_backends = [filters.SearchFilter]
     search_fields = ["name", "shortcut", "body"]
 
@@ -1345,7 +1389,7 @@ class CannedResponseViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:
         """Set organization and creator."""
         serializer.save(
-            organization=get_active_org(self.request),
+            organization=require_active_org(self.request),
             created_by=self.request.user,
         )
 
