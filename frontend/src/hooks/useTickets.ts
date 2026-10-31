@@ -2,7 +2,12 @@
  * React Query hooks for ticket operations.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import {
   assignTicket,
   bulkUpdateTickets,
@@ -18,6 +23,12 @@ import {
   type CreateTicketData,
   type TicketFilters,
 } from "@/api/tickets";
+
+/** A ticket also shows on its contact's and its company's timeline, with its status. */
+function invalidateTimelines(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: ["contact"] });
+  void queryClient.invalidateQueries({ queryKey: ["company"] });
+}
 
 export function useTickets(filters: TicketFilters = {}) {
   return useQuery({
@@ -41,6 +52,7 @@ export function useCreateTicket() {
   return useMutation({
     mutationFn: (data: CreateTicketData) => createTicket(data),
     onSuccess: () => {
+      invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
       void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
     },
@@ -59,6 +71,7 @@ export function useUpdateTicket() {
       [key: string]: unknown;
     }) => updateTicket(ticketId, data as Record<string, unknown>),
     onSuccess: (_data, variables) => {
+      invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({
         queryKey: ["ticket", variables.ticketId],
       });
@@ -75,6 +88,7 @@ export function useCreateMessage(ticketId: string) {
     mutationFn: (data: { body: string; message_type: string }) =>
       createMessage(ticketId, data),
     onSuccess: () => {
+      invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
     },
   });
@@ -93,6 +107,7 @@ export function useAssignTicket() {
       team_id?: string | null;
     }) => assignTicket(ticketId, data),
     onSuccess: (ticket) => {
+      invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
     },
@@ -105,6 +120,7 @@ export function useResolveTicket() {
   return useMutation({
     mutationFn: resolveTicket,
     onSuccess: (ticket) => {
+      invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
       void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
@@ -118,6 +134,7 @@ export function useCloseTicket() {
   return useMutation({
     mutationFn: closeTicket,
     onSuccess: (ticket) => {
+      invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
       void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
@@ -131,6 +148,7 @@ export function useReopenTicket() {
   return useMutation({
     mutationFn: reopenTicket,
     onSuccess: (ticket) => {
+      invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticket.id] });
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
       void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
@@ -144,6 +162,7 @@ export function useBulkUpdateTickets() {
   return useMutation({
     mutationFn: bulkUpdateTickets,
     onSuccess: () => {
+      invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
       void queryClient.invalidateQueries({ queryKey: ["ticketStats"] });
     },
@@ -156,6 +175,7 @@ export function useDeleteMessage(ticketId: string) {
   return useMutation({
     mutationFn: deleteMessage,
     onSuccess: () => {
+      invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
       void queryClient.invalidateQueries({ queryKey: ["tickets"] });
     },

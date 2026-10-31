@@ -16,5 +16,5 @@
     "lib": ["ES2020", "DOM", "DOM.Iterable"]
   },
   "include": ["src"],
-  "exclude": ["src/ui/legacy"]
+  "exclude": ["src/ui/legacy", "src/**/__tests__"]
 }

@@ -35,7 +35,7 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
         return VideoRecording.objects.none()
 
     def perform_create(self, serializer) -> None:
-        """Record who uploaded the video."""
+        """Record who uploaded it: anonymizing a contact takes those with no user."""
         serializer.save(recorded_by=self.request.user)
 
     @action(
@@ -70,6 +70,13 @@ class VideoRecordingViewSet(viewsets.ModelViewSet):
             data=request.data, context={"organization": organization}
         )
         serializer.is_valid(raise_exception=True)
+        # No session here to have lost the ticket: see contacts.gdpr.
+        contact = serializer.validated_data["ticket"].contact
+        if contact is not None and contact.is_anonymized:
+            return Response(
+                {"error": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         # Compute expiration based on organization settings
         expiration_days = organization.video_expiration_days

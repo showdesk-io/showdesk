@@ -21,6 +21,13 @@ from django.urls import get_resolver
 from rest_framework import serializers
 from rest_framework.test import APIClient
 
+from apps.contacts.serializers import (
+    CompanyAttributeDefSerializer,
+    CompanySerializer,
+    ContactAttributeDefSerializer,
+    ContactNoteSerializer,
+    ContactSerializer,
+)
 from apps.core.serializers import OrgScopedPrimaryKeyRelatedField
 from apps.knowledge_base.models import Article, Category
 from apps.organizations.models import Team, User
@@ -569,8 +576,15 @@ def _app_serializers() -> set[type]:
     return {
         cls
         for cls in _all_subclasses(serializers.Serializer)
-        if cls.__module__.startswith("apps.")
+        if cls.__module__.startswith("apps.") and not _is_abstract(cls)
     }
+
+
+def _is_abstract(cls: type) -> bool:
+    """A base left to its subclasses to name a model. Those are walked instead."""
+    return issubclass(cls, serializers.ModelSerializer) and not hasattr(
+        getattr(cls, "Meta", None), "model"
+    )
 
 
 def _unscoped_relations(cls: type) -> list[str]:
@@ -589,7 +603,16 @@ def _unscoped_relations(cls: type) -> list[str]:
 def test_every_writable_relation_is_org_scoped() -> None:
     """A new foreign key in a serializer can't be left out by mistake."""
     found = _app_serializers()
-    assert found >= {TicketSerializer, TicketAssignSerializer, TeamSerializer}
+    assert found >= {
+        TicketSerializer,
+        TicketAssignSerializer,
+        TeamSerializer,
+        ContactSerializer,
+        CompanySerializer,
+        ContactNoteSerializer,
+        ContactAttributeDefSerializer,
+        CompanyAttributeDefSerializer,
+    }
     assert [name for cls in found for name in _unscoped_relations(cls)] == []
 
 

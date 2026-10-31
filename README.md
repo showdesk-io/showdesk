@@ -196,7 +196,81 @@ document.getElementById("my-help-btn").addEventListener("click", () => {
 | `data-user-id` / `user.id` | — | External user ID for ticket tracking |
 | `data-user-name` / `user.name` | — | Pre-fill contact name |
 | `data-user-email` / `user.email` | — | Pre-fill contact email |
-| `data-user-hash` / `user.hash` | — | HMAC-SHA256 for identity verification |
+| `data-user-hash` / `user.hash` | — | HMAC-SHA256 of the user id, identifies the user (see below) |
+| `data-user-email-hash` / `user.emailHash` | — | HMAC-SHA256 proving the email (see below) |
+| `user.traits` | — | Custom contact attributes, by key (Settings → Contact attributes) |
+| `company` | — | The user's company: `{ id, name, domain?, traits?, hash? }` |
+
+#### Identity Verification
+
+Page JavaScript can send anything, so only what your server signs is trusted. Sign with HMAC-SHA256 and your organization's widget secret, **on your server**: the secret must never reach the browser.
+
+| Sent as | Signed message |
+|---|---|
+| `user.hash` | the user id |
+| `user.emailHash` | `"email:" + lowercase(email)` |
+| `company.hash` | `"company\n" + id + "\n" + name + "\n" + lowercase(domain)`, with `domain` empty if absent (`\n` is a line feed) |
+
+```javascript
+// On your server (Node.js)
+const crypto = require("node:crypto");
+const sign = (message) =>
+  crypto.createHmac("sha256", process.env.SHOWDESK_WIDGET_SECRET).update(message, "utf8").digest("hex");
+
+const widgetIdentity = {
+  user: {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    hash: sign(String(user.id)),
+    emailHash: sign("email:" + user.email.toLowerCase()),
+    traits: { plan: user.plan },
+  },
+  company: {
+    id: company.id,
+    name: company.name,
+    domain: company.domain,
+    hash: sign(["company", company.id, company.name, (company.domain || "").toLowerCase()].join("\n")),
+  },
+};
+```
+
+```javascript
+// In the page, with what your server computed
+Showdesk.init({ token: "your-organization-api-token", ...widgetIdentity });
+```
+
+Sign the exact id and name given to the widget, as UTF-8. A numeric id is accepted, and signed as its decimal string. An id, name or domain containing a line feed never verifies.
+
+- **A valid hash is required on every init**, not only the first. A stored session sent without one starts a new anonymous session, without the user's history. The same goes for an anonymous session with a proven email, unless `emailHash` comes again. A wrong `user.hash` is refused (403), except when resuming an anonymous session without a proven email, where it is ignored.
+- **Reserved prefixes**: user ids starting with `email:` or `company\n` are refused (400), since those prefixes belong to the other two hashes.
+- **Without `emailHash`** an identified user's email stays declared: agents see it as unverified, and it never becomes the contact's email.
+- **Without `company.hash`** a company can be created or linked once, never updated, and a contact already in a company is never moved. With it, the name and domain of an existing company are updated and the contact may be moved.
+- **`user.traits`** apply to identified users and to anonymous sessions with a proven email. **`company`** is only honoured for identified users.
+- **`company.traits`** aren't signed. They apply when the payload creates a company, signed or not, and never to an existing one: update those from the Companies API or the UI.
+
+An invalid `emailHash` or `company.hash` is ignored rather than refused: the value simply counts as unsigned.
+
+#### Login and Logout Without a Reload
+
+```javascript
+// After a login: server-computed values, as above
+Showdesk.setUser(widgetIdentity.user, widgetIdentity.company);
+
+// After a logout
+Showdesk.setUser(); // The widget stays, on a new anonymous session
+
+// Or, if the widget should go away until the next init()
+Showdesk.reset();
+```
+
+- `setUser(user, company)` with an id and a hash creates the session again, and the identified session returned replaces the stored one. An anonymous conversation carries on under it, in the panel and for agents. If another user was identified, their conversation leaves the screen first. If the request fails, an anonymous session stays as it was, and the next `init()` or `setUser()` tries again. `company` replaces the current one: leaving it out sends none. Calling it again with the same values sends nothing, so it's safe on every render; after a failed request, the same call tries again.
+- `setUser({ id, name, ... })` with the current user's id and no hash is a profile update: the session and the conversation stay. It only changes the local config, and reaches the server at the next `init()` or with the next signed `setUser()`.
+- `setUser()` without an identity, or without a hash and with no id or another user's, once a user was identified starts over with a new anonymous session. The stored session is forgotten and the previous conversation leaves the screen at once, even if the request then fails: opening the panel tries again. The panel stays as it was, and a later `setUser(user, company)` logs in as above. A name or an email given here goes with the new session.
+- A recording still running in the page when the user changes is sent on the session it started on, and doesn't show in the new view. The one exception is an anonymous visitor logging in: their conversation moved, and the recording follows it.
+- If the user is already known when the widget loads, pass `user` to `init()` rather than calling `init()` and then `setUser()`: `init()` alone creates an anonymous session, which the login then leaves behind, empty.
+- `setUser()` on a visitor who is already anonymous leaves their session and conversation alone, so a logged-out page can call it on every render. A name or an email without a hash only pre-fills them, and reaches the server at the next `init()`.
+- `reset()` removes the widget and forgets the stored session, so the next `init()` can't resume the previous user's conversation. Call `init()` to bring the widget back: `setUser()` does nothing until then. `init()` reads the `data-user-*` attributes again if it isn't given a `user`, so remove them from the script tag when the user logs out.
 
 #### Multi-Page Sites (MPA Mode)
 

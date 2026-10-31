@@ -5,7 +5,8 @@ from unittest import mock
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from tests.factories import OrganizationFactory, TicketFactory
+from apps.videos.models import VideoRecording
+from tests.factories import OrganizationFactory, TicketFactory, UserFactory
 
 pytestmark = pytest.mark.django_db
 URL = "/api/v1/videos/widget_upload/"
@@ -76,3 +77,42 @@ def test_another_organizations_ticket_reads_as_an_unknown_ticket(
     }
     assert not ticket.videos.exists()
     process_video.delay.assert_not_called()
+
+
+def test_an_agents_upload_is_recorded_as_theirs(
+    authenticated_client, agent, organization
+):
+    """Anonymizing a contact takes the recordings with no user: this one isn't theirs."""
+    ticket = TicketFactory(organization=organization)
+    res = authenticated_client.post(
+        "/api/v1/videos/",
+        {
+            "ticket": str(ticket.id),
+            "original_file": SimpleUploadedFile(
+                "a.webm", b"x", content_type="video/webm"
+            ),
+        },
+        format="multipart",
+    )
+    assert res.status_code == 201, res.data
+    assert VideoRecording.objects.get(pk=res.data["id"]).recorded_by == agent
+
+
+def test_an_upload_cant_be_recorded_as_someone_elses(
+    authenticated_client, agent, organization
+):
+    other = UserFactory(organization=organization, role="agent")
+    ticket = TicketFactory(organization=organization)
+    res = authenticated_client.post(
+        "/api/v1/videos/",
+        {
+            "ticket": str(ticket.id),
+            "recorded_by": str(other.id),
+            "original_file": SimpleUploadedFile(
+                "a.webm", b"x", content_type="video/webm"
+            ),
+        },
+        format="multipart",
+    )
+    assert res.status_code == 201, res.data
+    assert VideoRecording.objects.get(pk=res.data["id"]).recorded_by == agent

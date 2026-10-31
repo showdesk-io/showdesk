@@ -63,6 +63,8 @@ async function loadHistory(
 
   try {
     const conversations = await fetchHistory(config, session.sessionId);
+    // The user changed meanwhile: this is no longer theirs to see.
+    if (store.state.session?.sessionId !== session.sessionId) return;
     store.update({ conversations });
 
     listEl.innerHTML = "";
@@ -143,6 +145,7 @@ async function openConversation(
       session.sessionId,
       conv.id,
     );
+    if (store.state.session?.sessionId !== session.sessionId) return;
     store.update({
       activeTab: "chat",
       activeTicketId: data.ticketId,

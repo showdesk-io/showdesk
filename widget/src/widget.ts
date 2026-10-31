@@ -15,7 +15,8 @@
  *           data-user-id="user-123"
  *           data-user-name="John Doe"
  *           data-user-email="john@example.com"
- *           data-user-hash="hmac-sha256-hex">
+ *           data-user-hash="hmac-sha256-hex"
+ *           data-user-email-hash="hmac-sha256-hex">
  *   </script>
  *
  * For multi-page sites (non-SPA), add data-navigation-mode="mpa"
@@ -24,6 +25,9 @@
  * Or programmatically:
  *   Showdesk.init({ token: "org-api-token", navigationMode: "mpa" });
  *   Showdesk.open(); // Bind to your own button
+ *
+ * With a known user, pass `user` to init() rather than calling setUser() right after it:
+ * init() alone creates an anonymous session, which would be left behind empty.
  */
 
 import { installConsoleCollector } from "./collectors/console-collector";
@@ -35,11 +39,23 @@ installConsoleCollector();
 installNetworkCollector();
 
 import { createButton, updateBadge } from "./ui/button";
-import { createModal, destroyModal, getStore, initSession } from "./ui/modal";
+import {
+  createModal,
+  destroyModal,
+  getStore,
+  initSession,
+  restartAnonymousSession,
+  switchSession,
+} from "./ui/modal";
 import { reattachPopupIfNeeded } from "./ui/chat/chat-view";
 import { injectStyles } from "./ui/styles";
 import { clearSession as clearStoredSession } from "./session/session-manager";
-import type { NavigationMode, ShowdeskConfig, ShowdeskUserIdentity } from "./types";
+import type {
+  NavigationMode,
+  ShowdeskCompany,
+  ShowdeskConfig,
+  ShowdeskUserIdentity,
+} from "./types";
 
 let isInitialized = false;
 let config: ShowdeskConfig;
@@ -79,8 +95,9 @@ function buildUserFromDataAttrs(
   const name = el.dataset["userName"];
   const email = el.dataset["userEmail"];
   const hash = el.dataset["userHash"];
+  const emailHash = el.dataset["userEmailHash"];
   if (!id && !name && !email) return undefined;
-  return { id, name, email, hash };
+  return { id, name, email, hash, emailHash };
 }
 
 /**
@@ -112,6 +129,7 @@ function init(userConfig: Partial<ShowdeskConfig> = {}): void {
       "How can we help you?",
     hideButton: userConfig.hideButton ?? false,
     user: userConfig.user ?? buildUserFromDataAttrs(scriptTag),
+    company: userConfig.company,
     navigationMode:
       userConfig.navigationMode ??
       (scriptTag?.dataset["navigationMode"] as NavigationMode) ??
@@ -166,13 +184,60 @@ function open(): void {
 
 /**
  * Set or update user identity after initialization.
+ *
+ * - With an id and a hash (a login without a reload): the session is created again
+ *   and replaces the stored one. An anonymous conversation carries on under the
+ *   identified session; another user's is taken off the screen. Calling it again with the
+ *   same values sends nothing, so it can run on every render.
+ * - With the current user's id and no hash (a profile update): the session stays. Only the
+ *   local config changes, sent to the server by the next init().
+ * - Without a hash when a user was identified, and with no id or another one (a logout):
+ *   starts over with a new anonymous session. The stored id is cleared and the previous
+ *   conversation leaves the screen, while the widget stays usable. Whatever name or email
+ *   was given goes with the new session.
+ * - Without a hash on an anonymous visitor: their session and conversation stay as they
+ *   are, so a logged-out page can call this on every render. Only the local config
+ *   changes, sent to the server by the next init().
+ *
+ * `company` belongs to this user: leaving it out sends none, so that a user can't
+ * inherit the company of the previous one.
  */
-function setUser(user: ShowdeskUserIdentity): void {
+function setUser(
+  user?: ShowdeskUserIdentity | null,
+  company?: ShowdeskCompany,
+): void {
   if (!isInitialized) {
     console.warn("[Showdesk] Call init() before setUser()");
     return;
   }
-  config.user = user;
+  const id = String(user?.id ?? "");
+  const hasIdentity = Boolean(id && user?.hash);
+  const isEmpty = !id && !user?.name && !user?.email;
+  const previous = config.user;
+  const session = getStore().state.session;
+  // Whom the session belongs to, or will: the hash covers one still being created.
+  const owner = previous?.hash ? String(previous.id ?? "") : session?.externalUserId;
+  if (user && !hasIdentity && id && id === owner) {
+    // Still signed, should the session have to be created again.
+    config.user = {
+      ...user,
+      hash: previous?.hash,
+      emailHash:
+        user.emailHash ?? (user.email === previous?.email ? previous?.emailHash : undefined),
+    };
+    config.company = company ?? config.company;
+    return;
+  }
+  const wasIdentified = Boolean(previous?.hash || session?.externalUserId);
+  config.user = (isEmpty ? undefined : user) ?? undefined;
+  config.company = company;
+  if (!hasIdentity && wasIdentified) {
+    void restartAnonymousSession(config);
+    return;
+  }
+  if (hasIdentity) {
+    void switchSession(config);
+  }
 }
 
 /**
@@ -191,6 +256,8 @@ function destroy(): void {
  * Reset the widget: destroy the UI AND clear the stored session id.
  * Call this when the embedding app's user identity changes (e.g. logout)
  * so the next init() does not resume the previous user's conversation.
+ * Call init() to bring the widget back. To keep the widget through a logout, call
+ * setUser() without an identity instead.
  */
 function reset(): void {
   destroy();

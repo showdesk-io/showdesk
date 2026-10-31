@@ -1,0 +1,9 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}The data of {{ contact_name }} is attached{% endblock %}
+
+{% block content %}
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">Your contact export is ready</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">The data held about <strong>{{ contact_name }}</strong> is attached to this email as a ZIP file: their profile, notes and tickets.</p>
+<p class="sd-muted" style="margin:20px 0 0 0;font-size:14px;line-height:22px;color:{{ brand.muted_color }};">It holds personal data, and the notes agents wrote about this contact are included. Internal notes on tickets are not. Share it only with this person, and delete it once that's done.</p>
+{% endblock %}

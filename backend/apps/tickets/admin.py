@@ -37,6 +37,7 @@ class TicketAdmin(admin.ModelAdmin):
     list_filter = ["status", "priority", "organization", "source"]
     search_fields = ["reference", "title", "description", "requester_email"]
     readonly_fields = ["id", "reference", "created_at", "updated_at"]
+    autocomplete_fields = ["contact"]
     inlines = [TicketMessageInline, TicketAttachmentInline]
 
 

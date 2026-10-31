@@ -238,6 +238,10 @@ export interface Ticket {
   requester_detail: User | null;
   requester_name: string;
   requester_email: string;
+  contact: string | null;
+  contact_detail: ContactSummary | null;
+  /** Null when there's no outside sender to verify: an agent-created ticket. */
+  sender_verified: boolean | null;
   assigned_agent: string | null;
   assigned_agent_detail: User | null;
   assigned_team: string | null;
@@ -277,12 +281,107 @@ export interface TicketListItem {
   requester_detail: User | null;
   requester_name: string;
   requester_email: string;
+  contact: string | null;
+  contact_detail: ContactSummary | null;
+  /** Null when there's no outside sender to verify: an agent-created ticket. */
+  sender_verified: boolean | null;
   assigned_agent_detail: User | null;
   assigned_team: string | null;
   tags_detail: Tag[];
   message_count: number;
   created_at: string;
   updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Contacts & Companies
+// ---------------------------------------------------------------------------
+
+export interface CompanySummary {
+  id: string;
+  name: string;
+  domain: string;
+  logo_url: string;
+  plan: string;
+}
+
+export interface Company extends CompanySummary {
+  /** Read-only: signed widget payloads upsert a company on it. */
+  external_id: string;
+  industry: string;
+  size: string;
+  website: string;
+  mrr_cents: number | null;
+  health_score: number | null;
+  signed_up_at: string | null;
+  churned_at: string | null;
+  attributes: Record<string, unknown>;
+  contacts_count: number;
+  open_tickets_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContactSummary {
+  id: string;
+  display_name: string;
+  name: string;
+  email: string;
+  email_verified: boolean;
+  /** Read-only: an unproven email given by an identified widget session. */
+  declared_email: string;
+  avatar_url: string;
+  company_detail: CompanySummary | null;
+  is_anonymized: boolean;
+}
+
+export interface Contact extends ContactSummary {
+  email_verified_at: string | null;
+  /** Read-only: the identity a host app signs. */
+  external_id: string;
+  phone: string;
+  job_title: string;
+  locale: string;
+  timezone: string;
+  company: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  last_contacted_at: string | null;
+  is_unsubscribed: boolean;
+  attributes: Record<string, unknown>;
+  tickets_count: number;
+  open_tickets_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContactNote {
+  id: string;
+  body: string;
+  author: string | null;
+  author_name: string;
+  created_at: string;
+}
+
+export type AttributeDefEntity = "contact" | "company";
+
+export type AttributeDefType =
+  | "string"
+  | "number"
+  | "boolean"
+  | "date"
+  | "enum"
+  | "url";
+
+export interface AttributeDef {
+  id: string;
+  key: string;
+  label: string;
+  type: AttributeDefType;
+  description: string;
+  options: string[];
+  is_archived: boolean;
+  position: number;
 }
 
 // ---------------------------------------------------------------------------

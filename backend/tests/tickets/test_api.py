@@ -213,8 +213,9 @@ class TestWidgetSubmit:
         )
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data["reference"].startswith("SD-")
-        assert response.data["source"] == "widget"
-        assert response.data["requester_email"] == "jane@customer.example"
+        ticket = Ticket.objects.get(pk=response.data["id"])
+        assert ticket.source == "widget"
+        assert ticket.requester_email == "jane@customer.example"
 
     def test_widget_submit_missing_token(self, api_client) -> None:
         """Widget submit fails without a token."""

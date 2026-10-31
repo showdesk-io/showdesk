@@ -13,11 +13,12 @@ import {
   rejectJoinRequest,
 } from "@/api/joinRequests";
 import { useCurrentUser } from "@/hooks/useAuth";
+import { isOrgAdmin } from "@/lib/permissions";
 
 export function TeamPage() {
   const queryClient = useQueryClient();
   const { data: currentUser } = useCurrentUser();
-  const isAdmin = currentUser?.role === "admin";
+  const isAdmin = isOrgAdmin(currentUser);
   const { data: agents, isLoading: agentsLoading } = useQuery({
     queryKey: ["agents"],
     queryFn: fetchAgents,

@@ -9,6 +9,16 @@ import type {
   WidgetSession,
 } from "../types";
 
+/** A refusal from the API, whose status says what it means. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 function headers(
   config: ShowdeskConfig,
   sessionId?: string,
@@ -27,12 +37,20 @@ export async function createOrResumeSession(
   config: ShowdeskConfig,
   sessionId?: string | null,
 ): Promise<WidgetSession> {
-  const body: Record<string, string> = {};
+  const body: Record<string, unknown> = {};
   if (sessionId) body.session_id = sessionId;
-  if (config.user?.id) body.external_user_id = config.user.id;
+  const userId = String(config.user?.id ?? "");
+  if (userId) body.external_user_id = userId;
   if (config.user?.hash) body.user_hash = config.user.hash;
   if (config.user?.name) body.name = config.user.name;
   if (config.user?.email) body.email = config.user.email;
+  if (config.user?.emailHash) body.email_hash = config.user.emailHash;
+  if (config.user?.traits) body.traits = config.user.traits;
+  if (config.company) {
+    const { hash, ...company } = config.company;
+    body.company = company;
+    if (hash) body.company_hash = hash;
+  }
 
   const res = await fetch(`${config.apiUrl}/tickets/widget_session/`, {
     method: "POST",
@@ -159,7 +177,7 @@ export async function fetchConversation(
     { headers: headers(config, sessionId) },
   );
 
-  if (!res.ok) throw new Error(`Fetch conversation error: ${res.status}`);
+  if (!res.ok) throw new ApiError(`Fetch conversation error: ${res.status}`, res.status);
   const data = await res.json();
   return {
     ticketId: data.ticket_id,

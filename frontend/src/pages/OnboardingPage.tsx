@@ -20,6 +20,7 @@ import {
   updateOrganization,
 } from "@/api/users";
 import { useCurrentUser } from "@/hooks/useAuth";
+import { isOrgAdmin } from "@/lib/permissions";
 import type { Organization } from "@/types";
 
 const STEP_LABELS = ["Widget", "Teammates", "Embed"] as const;
@@ -61,7 +62,7 @@ export function OnboardingPage() {
     return <Navigate to="/" replace />;
   }
   // Every step edits settings or invites people, which only admins can do.
-  if (currentUser && currentUser.role !== "admin" && !currentUser.is_superuser) {
+  if (currentUser && !isOrgAdmin(currentUser)) {
     return <Navigate to="/" replace />;
   }
   if (org.onboarding_completed_at) {

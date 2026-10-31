@@ -1,0 +1,1244 @@
+"""Tests for the identity service wired into the widget endpoints."""
+
+import hashlib
+import hmac
+import json
+from unittest import mock
+
+import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import DatabaseError, IntegrityError, OperationalError, connection
+from django.db.models import QuerySet
+from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
+from rest_framework.test import APIClient
+
+from apps.contacts.models import Company, CompanyAttributeDef, Contact
+from apps.tickets.models import Ticket, WidgetSession
+from tests.factories import (
+    CompanyFactory,
+    ContactFactory,
+    OrganizationFactory,
+    TicketFactory,
+    UserFactory,
+)
+
+pytestmark = pytest.mark.django_db
+URL = "/api/v1/tickets/widget_session/"
+
+
+def _sign(secret: str, value: str) -> str:
+    return hmac.new(secret.encode(), value.encode(), hashlib.sha256).hexdigest()
+
+
+@pytest.fixture
+def org():
+    return OrganizationFactory(widget_secret="s3cret")
+
+
+def _post(api_client, org, **body):
+    return api_client.post(
+        URL, body, format="json", HTTP_X_WIDGET_TOKEN=str(org.api_token)
+    )
+
+
+def _patch(api_client, org, session_id, **body):
+    return api_client.patch(
+        URL,
+        body,
+        format="json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token),
+        HTTP_X_WIDGET_SESSION=str(session_id),
+    )
+
+
+def _session_updates(queries) -> list[str]:
+    """Return the SET clause of every UPDATE on the session table."""
+    return [
+        query["sql"].split(" WHERE ")[0]
+        for query in queries
+        if query["sql"].startswith('UPDATE "tickets_widgetsession"')
+    ]
+
+
+def test_identified_session_creates_contact(api_client, org):
+    res = _post(
+        api_client,
+        org,
+        external_user_id="u1",
+        user_hash=_sign("s3cret", "u1"),
+        email="alice@startup.com",
+        name="Alice",
+    )
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert session.contact.external_id == "u1"
+    assert session.contact.email == ""
+    assert session.contact.declared_email == "alice@startup.com"
+    assert session.contact.email_verified_at is None
+
+
+def test_signed_email_verifies_contact(api_client, org):
+    res = _post(
+        api_client,
+        org,
+        external_user_id="u1",
+        user_hash=_sign("s3cret", "u1"),
+        email="alice@startup.com",
+        email_hash=_sign("s3cret", "email:alice@startup.com"),
+    )
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert session.email_verified_at is not None
+    assert session.contact.email == "alice@startup.com"
+    assert session.contact.email_verified_at is not None
+
+
+def test_user_hash_of_the_email_does_not_prove_it(api_client, org):
+    res = _post(
+        api_client,
+        org,
+        email="alice@startup.com",
+        email_hash=_sign("s3cret", "alice@startup.com"),
+    )
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert session.email_verified_at is None
+
+
+def test_forged_email_hash_is_ignored_not_rejected(api_client, org):
+    res = _post(api_client, org, email="alice@startup.com", email_hash="forged")
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert session.email_verified_at is None
+
+
+def test_company_is_stored_for_identified(api_client, org):
+    res = _post(
+        api_client,
+        org,
+        external_user_id="u2",
+        user_hash=_sign("s3cret", "u2"),
+        company={"id": "c1", "name": "Startup Inc", "domain": "startup.com"},
+    )
+    contact = WidgetSession.objects.get(id=res.data["session_id"]).contact
+    assert contact.company.name == "Startup Inc"
+    assert contact.company.domain == ""  # Unsigned, and no proven email.
+
+
+def test_signed_company_is_upserted_and_forged_hash_is_not(api_client, org):
+    company = CompanyFactory(organization=org, external_id="c1", name="Old")
+    identity = {"external_user_id": "u2", "user_hash": _sign("s3cret", "u2")}
+    payload = {"id": "c1", "name": "New"}
+    _post(api_client, org, **identity, company=payload, company_hash="forged")
+    company.refresh_from_db()
+    assert company.name == "Old"
+    _post(
+        api_client,
+        org,
+        **identity,
+        company=payload,
+        company_hash=_sign("s3cret", "company\nc1\nNew\n"),
+    )
+    company.refresh_from_db()
+    assert company.name == "New"
+
+
+def test_numeric_company_id_can_be_signed(api_client, org):
+    company = CompanyFactory(organization=org, external_id="42", name="Old")
+    _post(
+        api_client,
+        org,
+        external_user_id="u2",
+        user_hash=_sign("s3cret", "u2"),
+        company={"id": 42, "name": "New"},
+        company_hash=_sign("s3cret", "company\n42\nNew\n"),
+    )
+    company.refresh_from_db()
+    assert company.name == "New"
+
+
+def test_company_with_a_newline_counts_as_unsigned(api_client, org):
+    company = CompanyFactory(organization=org, external_id="c1", name="Old")
+    res = _post(
+        api_client,
+        org,
+        external_user_id="u2",
+        user_hash=_sign("s3cret", "u2"),
+        company={"id": "c1", "name": "New\n"},
+        company_hash=_sign("s3cret", "company\nc1\nNew\n\n"),
+    )
+    assert res.status_code == 201
+    company.refresh_from_db()
+    assert company.name == "Old"
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        {"id": "c1", "name": "Forged", "domain": "real.io"},
+        {"id": "c1", "name": "Real", "domain": "forged.io"},
+        {"id": "c1", "name": "Real"},
+    ],
+)
+def test_company_hash_cant_be_replayed_with_another_name_or_domain(
+    api_client, org, forged
+):
+    company = CompanyFactory(organization=org, external_id="c1", name="Old", domain="")
+    other = CompanyFactory(organization=org, external_id="other")
+    contact = ContactFactory(organization=org, external_id="u2", company=other)
+    res = _post(
+        api_client,
+        org,
+        external_user_id="u2",
+        user_hash=_sign("s3cret", "u2"),
+        company=forged,
+        company_hash=_sign("s3cret", "company\nc1\nReal\nreal.io"),
+    )
+    assert res.status_code == 201
+    company.refresh_from_db()
+    contact.refresh_from_db()
+    assert (company.name, company.domain) == ("Old", "")
+    assert contact.company == other  # Unsigned, so a contact with a company stays put.
+
+
+def test_signed_traits_only_apply_to_a_new_company(api_client, org):
+    CompanyAttributeDef.objects.create(
+        organization=org, key="tier", label="Tier", type="string"
+    )
+    company = CompanyFactory(
+        organization=org, external_id="c1", name="N", attributes={"tier": "gold"}
+    )
+    identity = {"external_user_id": "u2", "user_hash": _sign("s3cret", "u2")}
+    _post(
+        api_client,
+        org,
+        **identity,
+        company={"id": "c1", "name": "N", "traits": {"tier": "free"}},
+        company_hash=_sign("s3cret", "company\nc1\nN\n"),
+    )
+    company.refresh_from_db()
+    assert company.attributes == {"tier": "gold"}
+    _post(
+        api_client,
+        org,
+        **identity,
+        company={"id": "c2", "name": "N", "traits": {"tier": "free"}},
+        company_hash=_sign("s3cret", "company\nc2\nN\n"),
+    )
+    created = Company.objects.get(organization=org, external_id="c2")
+    assert created.attributes == {"tier": "free"}
+
+
+def _send(api_client, method, org, raw, **headers):
+    """Send raw JSON: DRF's test renderer can't encode the lone surrogates a real
+    request can carry as "\\ud800" escapes."""
+    return getattr(api_client, method)(
+        URL,
+        data=raw,
+        content_type="application/json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token),
+        **headers,
+    )
+
+
+def _nested(depth: int = 100_000) -> str:
+    # CharField calls str() on its input, which overflows the stack on this.
+    return f"{'[' * depth}1{']' * depth}"
+
+
+@pytest.mark.parametrize("external_user_id", [True, 2**63, "x" * 256, ["x"]])
+def test_malformed_external_id_is_refused_before_touching_the_session(
+    api_client, org, external_user_id
+):
+    raw = json.dumps({"external_user_id": external_user_id, "user_hash": "x"})
+    session = WidgetSession.objects.create(organization=org, email="a@x.io", name="A")
+    res = _send(api_client, "patch", org, raw, HTTP_X_WIDGET_SESSION=str(session.id))
+    assert res.status_code == 400
+    session.refresh_from_db()
+    assert (session.email, session.name) == ("a@x.io", "A")
+    assert _send(api_client, "post", org, raw).status_code == 400
+    assert WidgetSession.objects.filter(organization=org).count() == 1
+
+
+def test_deeply_nested_external_id_is_a_400_not_a_crash(api_client, org):
+    raw = f'{{"external_user_id": {_nested()}}}'
+    assert _send(api_client, "post", org, raw).status_code == 400
+
+
+BAD_HASHES = [["x"], "é"]  # Not text, and text compare_digest refuses.
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+@pytest.mark.parametrize("field", ["email_hash", "company_hash"])
+def test_bad_shape_email_or_company_hash_counts_as_unsigned(
+    api_client, org, field, bad
+):
+    company = CompanyFactory(organization=org, external_id="c1", name="Old")
+    body = {
+        "external_user_id": "u1",
+        "user_hash": _sign("s3cret", "u1"),
+        "email": "a@x.io",
+        "company": {"id": "c1", "name": "New"},
+        field: bad,
+    }
+    res = _send(api_client, "post", org, json.dumps(body))
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert session.email_verified_at is None
+    company.refresh_from_db()
+    assert company.name == "Old"
+    res = _send(
+        api_client,
+        "patch",
+        org,
+        json.dumps({"name": "Bob", field: bad}),
+        HTTP_X_WIDGET_SESSION=str(session.id),
+    )
+    assert res.status_code == 200
+    assert res.data["name"] == "Bob"
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+def test_bad_shape_user_hash_is_a_wrong_hash_on_find_or_create(api_client, org, bad):
+    raw = json.dumps({"external_user_id": "u1", "user_hash": bad})
+    assert _send(api_client, "post", org, raw).status_code == 403
+    assert not WidgetSession.objects.filter(organization=org).exists()
+
+
+def test_deeply_nested_user_hash_is_a_wrong_hash_on_find_or_create(api_client, org):
+    raw = f'{{"external_user_id": "u1", "user_hash": {_nested()}}}'
+    assert _send(api_client, "post", org, raw).status_code == 403
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+def test_bad_shape_user_hash_is_ignored_when_resuming_anonymously(api_client, org, bad):
+    session = WidgetSession.objects.create(organization=org)
+    raw = json.dumps(
+        {"session_id": str(session.id), "external_user_id": "u1", "user_hash": bad}
+    )
+    res = _send(api_client, "post", org, raw)
+    assert res.status_code == 200
+    assert res.data["session_id"] == str(session.id)
+    session.refresh_from_db()
+    assert session.external_user_id == ""
+
+
+@pytest.mark.parametrize("bad", BAD_HASHES)
+def test_bad_shape_user_hash_without_an_id_is_ignored(api_client, org, bad):
+    res = _send(api_client, "post", org, json.dumps({"user_hash": bad}))
+    assert res.status_code == 201
+
+
+@pytest.mark.parametrize("field", ["name", "user_hash", "session_id"])
+def test_deeply_nested_field_doesnt_stop_the_widget(api_client, org, field):
+    raw = f'{{"{field}": {_nested()}}}'
+    res = _send(api_client, "post", org, raw)
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert (session.name, session.email) == ("", "")
+
+
+@pytest.mark.parametrize(
+    ("name", "stored"),
+    [
+        (42, "42"),
+        ("n" * 256, "n" * 255),
+        ("  Bob ", "Bob"),
+        # Not a name, and it would stick: a resume only fills a blank name.
+        (True, ""),
+        ("Bob\x00", ""),
+    ],
+)
+def test_non_text_name_doesnt_stop_the_widget(api_client, org, name, stored):
+    res = _send(api_client, "post", org, json.dumps({"name": name, "email": "a@x.io"}))
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert (session.name, session.email) == (stored, "a@x.io")
+
+
+def test_huge_number_as_a_name_is_truncated(api_client, org):
+    res = _send(api_client, "post", org, '{"name": ' + "1" * 4000 + "}")
+    assert res.status_code == 201
+    assert WidgetSession.objects.get(id=res.data["session_id"]).name == "1" * 255
+
+
+@pytest.mark.parametrize("email", [42, "x" * 250 + "@x.io", "a\x00@x.io"])
+def test_unusable_email_is_ignored_and_the_name_kept(api_client, org, email):
+    raw = json.dumps({"name": "Bob", "email": email})
+    res = _send(api_client, "post", org, raw)
+    assert res.status_code == 201
+    session = WidgetSession.objects.get(id=res.data["session_id"])
+    assert (session.name, session.email) == ("Bob", "")
+    res = _send(api_client, "patch", org, raw, HTTP_X_WIDGET_SESSION=str(session.id))
+    assert res.status_code == 200
+    session.refresh_from_db()
+    assert (session.name, session.email) == ("Bob", "")
+
+
+@pytest.mark.parametrize("name", [["x"], {"a": 1}, True, "\ud800"])
+def test_patch_with_an_unusable_name_leaves_it_alone(api_client, org, name):
+    session = WidgetSession.objects.create(organization=org, name="A", email="a@x.io")
+    res = _send(
+        api_client,
+        "patch",
+        org,
+        json.dumps({"name": name}),
+        HTTP_X_WIDGET_SESSION=str(session.id),
+    )
+    assert res.status_code == 200
+    session.refresh_from_db()
+    assert (session.name, session.email) == ("A", "a@x.io")
+
+
+def test_patch_truncates_a_long_name(api_client, org):
+    session = WidgetSession.objects.create(organization=org)
+    assert _patch(api_client, org, session.id, name="n" * 300).status_code == 200
+    session.refresh_from_db()
+    assert session.name == "n" * 255
+
+
+@pytest.mark.parametrize("raw", ["[1, 2]", '"text"', "1"])
+def test_body_that_isnt_an_object_is_a_400(api_client, org, raw):
+    res = api_client.post(
+        URL,
+        data=raw,
+        content_type="application/json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token),
+    )
+    assert res.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "company",
+    [
+        {"id": "\ud800", "name": "C"},
+        {"id": "c1", "name": "\ud800"},
+        {"id": "c1", "name": "C", "domain": "\ud800"},
+    ],
+)
+def test_lone_surrogate_in_a_signed_company_is_ignored_not_raised(
+    api_client, org, company
+):
+    # ``company`` isn't an identity field: as with any invalid payload, the
+    # widget goes on and the value counts as unsigned.
+    body = {
+        "external_user_id": "u2",
+        "user_hash": _sign("s3cret", "u2"),
+        "company": company,
+        "company_hash": "a" * 64,
+    }
+    res = api_client.post(
+        URL,
+        json.dumps(body),
+        content_type="application/json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token),
+    )
+    assert res.status_code == 201
+    assert not Company.objects.filter(organization=org).exclude(name="C").exists()
+
+
+@pytest.mark.parametrize("prefix", ["email:", "company\n"])
+def test_external_id_that_could_double_as_another_hash_is_refused(
+    api_client, org, prefix
+):
+    external_id = f"{prefix}alice@startup.com"
+    res = _post(
+        api_client,
+        org,
+        external_user_id=external_id,
+        user_hash=_sign("s3cret", external_id),
+    )
+    assert res.status_code == 400
+    assert not Contact.objects.filter(organization=org).exists()
+    assert not WidgetSession.objects.filter(organization=org).exists()
+
+
+def test_company_hash_cant_be_replayed_as_a_user_hash(api_client, org):
+    message = "company\nc1\nAcme\n"
+    res = _post(
+        api_client, org, external_user_id=message, user_hash=_sign("s3cret", message)
+    )
+    assert res.status_code == 400
+
+
+def test_a_colon_after_company_is_an_ordinary_external_id(api_client, org):
+    # Nothing is signed with that prefix since company_hash moved to newlines.
+    res = _post(
+        api_client,
+        org,
+        external_user_id="company:7",
+        user_hash=_sign("s3cret", "company:7"),
+    )
+    assert res.status_code == 201
+
+
+def test_email_hash_cant_be_replayed_as_a_user_hash(api_client, org):
+    email_hash = _sign("s3cret", "email:alice@startup.com")
+    res = _post(
+        api_client,
+        org,
+        external_user_id="email:alice@startup.com",
+        user_hash=email_hash,
+    )
+    assert res.status_code == 400
+
+
+@pytest.mark.parametrize("prefix", ["email:", "company\n"])
+def test_ticket_history_refuses_reserved_external_ids(api_client, org, prefix):
+    external_id = f"{prefix}alice@startup.com"
+    res = api_client.get(
+        "/api/v1/tickets/widget_tickets/",
+        {"external_user_id": external_id, "user_hash": _sign("s3cret", external_id)},
+        HTTP_X_WIDGET_TOKEN=str(org.api_token),
+    )
+    assert res.status_code == 400
+
+
+class TestRealClientPayloads:
+    """What the widget and older integrations really send must keep working."""
+
+    def test_empty_body(self, api_client, org):
+        assert _post(api_client, org).status_code == 201
+
+    def test_stored_session_id_only(self, api_client, org):
+        session = WidgetSession.objects.create(organization=org)
+        res = _post(api_client, org, session_id=str(session.id))
+        assert res.status_code == 200
+        assert res.data["session_id"] == str(session.id)
+
+    @pytest.mark.parametrize("field", ["session_id", "traits"])
+    def test_null_field_on_post(self, api_client, org, field):
+        assert _post(api_client, org, **{field: None}).status_code == 201
+
+    def test_every_field_null_on_post(self, api_client, org):
+        res = _post(
+            api_client,
+            org,
+            session_id=None,
+            name=None,
+            email=None,
+            external_user_id=None,
+            user_hash=None,
+            email_hash=None,
+            company_hash=None,
+            company=None,
+            traits=None,
+        )
+        assert res.status_code == 201
+        session = WidgetSession.objects.get(id=res.data["session_id"])
+        assert (session.name, session.email, session.external_user_id) == ("", "", "")
+
+    def test_null_fields_when_resuming(self, api_client, org):
+        session = WidgetSession.objects.create(
+            organization=org, name="A", email="a@x.io"
+        )
+        res = _post(api_client, org, session_id=str(session.id), name=None, email=None)
+        assert res.status_code == 200
+        session.refresh_from_db()
+        assert (session.name, session.email) == ("A", "a@x.io")
+
+    def test_null_fields_on_an_hmac_user(self, api_client, org):
+        res = _post(
+            api_client,
+            org,
+            external_user_id="u1",
+            user_hash=_sign("s3cret", "u1"),
+            name=None,
+            email=None,
+            email_hash=None,
+            company=None,
+            company_hash=None,
+        )
+        assert res.status_code == 201
+        assert WidgetSession.objects.get(id=res.data["session_id"]).name == ""
+
+    def test_null_fields_on_patch_change_nothing(self, api_client, org):
+        session = WidgetSession.objects.create(
+            organization=org, name="A", email="a@x.io"
+        )
+        res = _patch(
+            api_client, org, session.id, name=None, email=None, email_hash=None
+        )
+        assert res.status_code == 200
+        session.refresh_from_db()
+        assert (session.name, session.email) == ("A", "a@x.io")
+
+    @pytest.mark.parametrize("email", ["a@b", "a b@x.io"])
+    def test_contact_nudge_with_an_email_the_widget_lets_through(
+        self, api_client, org, email
+    ):
+        # The form only checks for an "@", and doesn't look at the response.
+        session = WidgetSession.objects.create(organization=org)
+        res = _patch(api_client, org, session.id, name="Bob", email=email)
+        assert res.status_code == 200
+        session.refresh_from_db()
+        assert (session.name, session.email) == ("Bob", email)
+        assert session.contact is None
+        assert not Contact.objects.filter(organization=org).exists()
+
+    def test_host_page_email_that_isnt_one_doesnt_break_init(self, api_client, org):
+        res = _post(api_client, org, email="not-an-email", name="Bob")
+        assert res.status_code == 201
+        session = WidgetSession.objects.get(id=res.data["session_id"])
+        assert session.name == "Bob"
+        assert session.contact is None
+
+    def test_invalid_email_on_an_hmac_user_creates_no_declared_email(
+        self, api_client, org
+    ):
+        res = _post(
+            api_client,
+            org,
+            external_user_id="u1",
+            user_hash=_sign("s3cret", "u1"),
+            email="not-an-email",
+        )
+        assert res.status_code == 201
+        contact = WidgetSession.objects.get(id=res.data["session_id"]).contact
+        assert contact.declared_email == ""
+
+    def test_numeric_user_id_with_its_hash(self, api_client, org):
+        # init({user: {id: 42}}) from plain JavaScript.
+        res = _post(
+            api_client, org, external_user_id=42, user_hash=_sign("s3cret", "42")
+        )
+        assert res.status_code == 201
+        assert res.data["external_user_id"] == "42"
+        contact = WidgetSession.objects.get(id=res.data["session_id"]).contact
+        assert contact.external_id == "42"
+
+    def test_numeric_user_id_resumes_its_own_session(self, api_client, org):
+        session = WidgetSession.objects.create(organization=org, external_user_id="42")
+        res = _post(
+            api_client,
+            org,
+            session_id=str(session.id),
+            external_user_id=42,
+            user_hash=_sign("s3cret", "42"),
+        )
+        assert res.status_code == 200
+        assert res.data["session_id"] == str(session.id)
+
+    def test_numeric_user_id_without_hash_stays_anonymous(self, api_client, org):
+        res = _post(api_client, org, external_user_id=42)
+        assert res.status_code == 201
+        assert res.data["external_user_id"] == ""
+
+    def test_numeric_user_id_with_a_wrong_hash(self, api_client, org):
+        res = _post(api_client, org, external_user_id=42, user_hash="forged")
+        assert res.status_code == 403
+
+    def test_whitespace_around_the_email_is_dropped(self, api_client, org):
+        res = _post(api_client, org, email="  bob@x.io ")
+        session = WidgetSession.objects.get(id=res.data["session_id"])
+        assert session.email == "bob@x.io"
+        assert session.contact.email == "bob@x.io"
+
+    @pytest.mark.parametrize("session_id", ["not-a-uuid", 1])
+    def test_stored_session_id_that_isnt_one_starts_a_new_session(
+        self, api_client, org, session_id
+    ):
+        res = _post(api_client, org, session_id=session_id)
+        assert res.status_code == 201
+
+    def test_session_header_that_isnt_a_uuid_is_a_401(self, api_client, org):
+        res = _patch(api_client, org, "not-a-uuid", name="Bob")
+        assert res.status_code == 401
+
+
+@pytest.mark.parametrize("resume_by", ["session_id", "external_user_id"])
+def test_resume_writes_only_what_changed(api_client, org, resume_by):
+    """A full save would restore personal data wiped by a concurrent anonymization."""
+    session = WidgetSession.objects.create(
+        organization=org, external_user_id="u1", name="", email=""
+    )
+    body = {"session_id": str(session.id)} if resume_by == "session_id" else {}
+    with CaptureQueriesContext(connection) as queries:
+        res = _post(
+            api_client,
+            org,
+            external_user_id="u1",
+            user_hash=_sign("s3cret", "u1"),
+            name="Alice",
+            **body,
+        )
+    assert res.status_code == 200
+    updates = _session_updates(queries)
+    assert updates
+    assert any('"name"' in sql for sql in updates)
+    for sql in updates:
+        assert '"external_user_id"' not in sql
+        assert '"email_verified_at"' not in sql
+        assert '"email"' not in sql
+
+
+def test_resume_still_records_the_visit(api_client, org):
+    session = WidgetSession.objects.create(organization=org)
+    before = session.last_seen_at
+    _post(api_client, org, session_id=str(session.id))
+    session.refresh_from_db()
+    assert session.last_seen_at > before
+
+
+def test_patch_writes_only_the_fields_it_was_given(api_client, org):
+    session = WidgetSession.objects.create(organization=org, email="a@x.io")
+    with CaptureQueriesContext(connection) as queries:
+        _patch(api_client, org, session.id, name="Bob")
+    updates = _session_updates(queries)
+    assert any('"name"' in sql for sql in updates)
+    assert not any('"email"' in sql for sql in updates)
+
+
+def test_contact_nudge_links_the_tickets_already_opened(api_client, org):
+    session_id = _post(api_client, org).data["session_id"]
+    api_client.post(
+        "/api/v1/tickets/widget_message/",
+        {"body": "Help"},
+        format="json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token),
+        HTTP_X_WIDGET_SESSION=session_id,
+    )
+    ticket = Ticket.objects.get(widget_session_id=session_id)
+    assert ticket.contact is None
+    _patch(api_client, org, session_id, email="bob@x.io")
+    ticket.refresh_from_db()
+    assert ticket.contact.email == "bob@x.io"
+
+
+def test_linking_leaves_a_ticket_with_a_contact_alone(api_client, org):
+    other = ContactFactory(organization=org)
+    session_id = _post(api_client, org).data["session_id"]
+    ticket = TicketFactory(
+        organization=org, widget_session_id=session_id, contact=other
+    )
+    _patch(api_client, org, session_id, email="bob@x.io")
+    ticket.refresh_from_db()
+    assert ticket.contact == other
+
+
+def test_patch_changing_the_email_clears_its_verification(api_client, org):
+    res = _post(
+        api_client,
+        org,
+        email="alice@x.io",
+        email_hash=_sign("s3cret", "email:alice@x.io"),
+    )
+    session_id = res.data["session_id"]
+    _patch(api_client, org, session_id, email="ALICE@x.io")
+    assert WidgetSession.objects.get(id=session_id).email_verified_at is not None
+    _patch(api_client, org, session_id, email="other@x.io")
+    assert WidgetSession.objects.get(id=session_id).email_verified_at is None
+
+
+def test_patch_can_prove_the_email_it_sets(api_client, org):
+    session_id = _post(api_client, org).data["session_id"]
+    _patch(
+        api_client,
+        org,
+        session_id,
+        email="alice@x.io",
+        email_hash=_sign("s3cret", "email:alice@x.io"),
+    )
+    session = WidgetSession.objects.get(id=session_id)
+    assert session.email_verified_at is not None
+    assert session.contact.email_verified_at is not None
+
+
+@pytest.mark.parametrize("error", [IntegrityError, OperationalError, DatabaseError])
+def test_database_error_never_breaks_widget_init(api_client, org, error):
+    with mock.patch(
+        "apps.tickets.views.resolve_contact_for_widget_session", side_effect=error
+    ):
+        assert _post(api_client, org, email="a@x.io").status_code == 201
+
+
+def test_database_error_doesnt_log_the_session_id(api_client, org, caplog):
+    """A session id is a bearer token: only its digest may reach the logs."""
+    with mock.patch(
+        "apps.tickets.views.resolve_contact_for_widget_session",
+        side_effect=DatabaseError,
+    ):
+        res = _post(api_client, org, email="a@x.io")
+    session_id = str(res.data["session_id"])
+    assert session_id not in caplog.text
+    assert hashlib.sha256(session_id.encode()).hexdigest() in caplog.text
+
+
+def test_database_error_linking_tickets_never_breaks_widget_init(api_client, org):
+    with mock.patch(
+        "apps.tickets.views.Ticket.objects.filter", side_effect=OperationalError
+    ):
+        assert _post(api_client, org, email="a@x.io").status_code == 201
+
+
+def test_patch_email_links_contact(api_client, org):
+    session_id = _post(api_client, org).data["session_id"]
+    _patch(api_client, org, session_id, email="bob@x.io")
+    assert WidgetSession.objects.get(id=session_id).contact.email == "bob@x.io"
+
+
+def test_resume_links_contact(api_client, org):
+    session = WidgetSession.objects.create(organization=org, email="bob@x.io")
+    _post(api_client, org, session_id=str(session.id))
+    session.refresh_from_db()
+    assert session.contact.email == "bob@x.io"
+
+
+def test_first_widget_message_links_ticket_to_contact(api_client, org):
+    session_id = _post(
+        api_client, org, external_user_id="u3", user_hash=_sign("s3cret", "u3")
+    ).data["session_id"]
+    api_client.post(
+        "/api/v1/tickets/widget_message/",
+        {"body": "Help"},
+        format="json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token),
+        HTTP_X_WIDGET_SESSION=session_id,
+    )
+    assert Ticket.objects.get(widget_session_id=session_id).contact.external_id == "u3"
+
+
+def test_first_attachment_links_ticket_to_contact(api_client, org, settings):
+    settings.STORAGES = {
+        **settings.STORAGES,
+        "default": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
+    }
+    session_id = _post(
+        api_client, org, external_user_id="u3", user_hash=_sign("s3cret", "u3")
+    ).data["session_id"]
+    res = api_client.post(
+        "/api/v1/tickets/widget_message_attachment/",
+        {"file": SimpleUploadedFile("a.txt", b"x"), "body_type": "file"},
+        format="multipart",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token),
+        HTTP_X_WIDGET_SESSION=session_id,
+    )
+    assert res.status_code == 201
+    assert Ticket.objects.get(widget_session_id=session_id).contact.external_id == "u3"
+
+
+def _submit(api_client, org, **overrides):
+    payload = {
+        "title": "Bug",
+        "description": "Broken",
+        "requester_name": "Carol",
+        "requester_email": "carol@x.io",
+        **overrides,
+    }
+    return api_client.post(
+        "/api/v1/tickets/widget_submit/",
+        payload,
+        format="json",
+        HTTP_X_WIDGET_TOKEN=str(org.api_token),
+    )
+
+
+def test_widget_submit_links_contact_by_email(api_client, org):
+    ContactFactory(organization=org, email="carol@x.io")
+    res = _submit(api_client, org)
+    assert res.status_code == 201
+    assert Ticket.objects.get(id=res.data["id"]).contact.email == "carol@x.io"
+    assert Contact.objects.filter(organization=org).count() == 1
+
+
+def test_widget_submit_creates_the_contact(api_client, org):
+    res = _submit(api_client, org)
+    contact = Ticket.objects.get(id=res.data["id"]).contact
+    assert (contact.email, contact.name) == ("carol@x.io", "Carol")
+
+
+def test_widget_submit_doesnt_link_an_anonymized_contact(api_client, org):
+    ContactFactory(organization=org, email="carol@x.io", is_anonymized=True)
+    res = _submit(api_client, org)
+    assert res.status_code == 201
+    assert Ticket.objects.get(id=res.data["id"]).contact is None
+
+
+def test_database_error_never_loses_a_submitted_ticket(api_client, org):
+    with mock.patch(
+        "apps.tickets.views.resolve_contact_for_email", side_effect=OperationalError
+    ):
+        res = _submit(api_client, org)
+    assert res.status_code == 201
+    assert Ticket.objects.get(id=res.data["id"]).contact is None
+
+
+def test_agent_clearing_a_ticket_contact_stays_cleared(api_client, org):
+    session_id = _post(api_client, org, email="bob@x.io").data["session_id"]
+    ticket = TicketFactory(
+        organization=org, widget_session_id=session_id, contact=None, requester=None
+    )
+    _post(api_client, org, session_id=session_id)
+    _patch(api_client, org, session_id, name="Bob")
+    ticket.refresh_from_db()
+    assert ticket.contact is None
+
+
+def test_a_new_contact_links_the_tickets_without_one(api_client, org):
+    session_id = _post(api_client, org, email="a@x.io").data["session_id"]
+    contactless = TicketFactory(
+        organization=org, widget_session_id=session_id, contact=None, requester=None
+    )
+    other = ContactFactory(organization=org)
+    linked = TicketFactory(
+        organization=org, widget_session_id=session_id, contact=other, requester=None
+    )
+    _patch(api_client, org, session_id, email="b@x.io")
+    contactless.refresh_from_db()
+    linked.refresh_from_db()
+    assert contactless.contact.email == "b@x.io"
+    assert linked.contact == other
+
+
+def test_ticket_link_stays_in_the_organization(api_client, org):
+    session = WidgetSession.objects.create(organization=org)
+    foreign = TicketFactory(
+        organization=OrganizationFactory(),
+        widget_session=session,
+        contact=None,
+        requester=None,
+    )
+    _patch(api_client, org, session.id, email="b@x.io")
+    foreign.refresh_from_db()
+    assert foreign.contact is None
+
+
+def test_failing_to_link_tickets_leaves_it_to_the_next_init(api_client, org):
+    session = WidgetSession.objects.create(organization=org, email="bob@x.io")
+    ticket = TicketFactory(
+        organization=org, widget_session=session, contact=None, requester=None
+    )
+    with mock.patch(
+        "apps.tickets.views.Ticket.objects.filter", side_effect=OperationalError
+    ):
+        assert _post(api_client, org, session_id=str(session.id)).status_code == 200
+    session.refresh_from_db()
+    assert session.contact is None
+    _post(api_client, org, session_id=str(session.id))
+    ticket.refresh_from_db()
+    assert ticket.contact.email == "bob@x.io"
+
+
+@pytest.mark.parametrize(
+    ("field", "raw"),
+    [
+        ("traits", '"text"'),
+        ("traits", _nested()),
+        ("company", "[1]"),
+        ("company", _nested()),
+    ],
+)
+def test_traits_or_company_that_isnt_an_object_is_ignored(api_client, org, field, raw):
+    body = (
+        f'{{"external_user_id": "u1", "user_hash": "{_sign("s3cret", "u1")}", '
+        f'"{field}": {raw}}}'
+    )
+    res = _send(api_client, "post", org, body)
+    assert res.status_code == 201
+    contact = WidgetSession.objects.get(id=res.data["session_id"]).contact
+    assert contact.attributes == {}
+    assert contact.company is None
+
+
+def test_session_race_returns_the_winners_session(api_client, org):
+    """The other request commits between our lookup and our insert."""
+    winner = WidgetSession.objects.create(organization=org, external_user_id="u1")
+    real_get = QuerySet.get
+    missed = []
+
+    def get(queryset, *args, **kwargs):
+        if queryset.model is WidgetSession and not missed:
+            missed.append(True)
+            raise WidgetSession.DoesNotExist
+        return real_get(queryset, *args, **kwargs)
+
+    with mock.patch.object(QuerySet, "get", get):
+        res = _post(
+            api_client, org, external_user_id="u1", user_hash=_sign("s3cret", "u1")
+        )
+    assert missed
+    assert res.status_code == 200
+    assert res.data["session_id"] == str(winner.id)
+    assert WidgetSession.objects.filter(organization=org).count() == 1
+
+
+class TestEmailOnResume:
+    def _resume(self, api_client, org, session, **body):
+        identity = (
+            {
+                "external_user_id": session.external_user_id,
+                "user_hash": _sign("s3cret", session.external_user_id),
+            }
+            if session.external_user_id
+            else {}
+        )
+        res = _post(api_client, org, session_id=str(session.id), **identity, **body)
+        assert res.status_code == 200
+        assert res.data["session_id"] == str(session.id)
+        session.refresh_from_db()
+        return res
+
+    def _proven(self, org, **kwargs):
+        return WidgetSession.objects.create(
+            organization=org,
+            email="old@x.io",
+            email_verified_at=timezone.now(),
+            **kwargs,
+        )
+
+    @pytest.mark.parametrize("external_user_id", ["", "u1"])
+    def test_signed_different_email_replaces_it_and_is_proven_again(
+        self, api_client, org, external_user_id
+    ):
+        session = self._proven(org, external_user_id=external_user_id)
+        before = session.email_verified_at
+        self._resume(
+            api_client,
+            org,
+            session,
+            email="new@x.io",
+            email_hash=_sign("s3cret", "email:new@x.io"),
+        )
+        assert session.email == "new@x.io"
+        assert session.email_verified_at > before
+        assert session.contact.email == "new@x.io"
+        assert session.contact.email_verified_at is not None
+
+    def test_signed_email_isnt_proof_for_a_contact_holding_another(
+        self, api_client, org
+    ):
+        contact = ContactFactory(
+            organization=org,
+            external_id="u1",
+            email="old@x.io",
+            email_verified_at=timezone.now(),
+        )
+        session = self._proven(org, external_user_id="u1", contact=contact)
+        self._resume(
+            api_client,
+            org,
+            session,
+            email="new@x.io",
+            email_hash=_sign("s3cret", "email:new@x.io"),
+        )
+        contact.refresh_from_db()
+        assert session.email == "new@x.io"
+        assert session.email_verified_at is None
+        assert contact.email == "old@x.io"
+
+    def test_unsigned_different_email_is_the_latest_on_an_identified_session(
+        self, api_client, org
+    ):
+        session = self._proven(org, external_user_id="u1")
+        for email in ("second@x.io", "third@x.io"):
+            self._resume(api_client, org, session, email=email)
+            assert session.email == email
+            assert session.email_verified_at is None
+            assert session.contact.declared_email == email
+            assert session.contact.email == ""
+
+    def test_forged_hash_on_an_identified_session_is_just_unsigned(
+        self, api_client, org
+    ):
+        session = self._proven(org, external_user_id="u1")
+        self._resume(api_client, org, session, email="new@x.io", email_hash="forged")
+        assert session.email == "new@x.io"
+        assert session.email_verified_at is None
+
+    @pytest.mark.parametrize("email_hash", [None, "forged", ["x"]])
+    def test_anonymous_session_keeps_its_first_email_unless_signed(
+        self, api_client, org, email_hash
+    ):
+        session = WidgetSession.objects.create(organization=org, email="old@x.io")
+        self._resume(api_client, org, session, email="new@x.io", email_hash=email_hash)
+        assert session.email == "old@x.io"
+        assert session.email_verified_at is None
+
+    @pytest.mark.parametrize(
+        ("external_user_id", "email"), [("", "OLD@x.io"), ("u1", " old@x.io ")]
+    )
+    def test_same_email_changes_nothing(self, api_client, org, external_user_id, email):
+        session = self._proven(org, external_user_id=external_user_id)
+        before = session.email_verified_at
+        signed = {"email_hash": _sign("s3cret", "email:old@x.io")}
+        with CaptureQueriesContext(connection) as queries:
+            self._resume(api_client, org, session, email=email, **signed)
+        assert session.email == "old@x.io"
+        assert session.email_verified_at == before
+        assert not any('"email"' in sql for sql in _session_updates(queries))
+
+    @pytest.mark.parametrize("external_user_id", ["", "u1"])
+    def test_absent_email_changes_nothing(self, api_client, org, external_user_id):
+        session = self._proven(org, external_user_id=external_user_id)
+        before = session.email_verified_at
+        signed = {"email_hash": _sign("s3cret", "email:old@x.io")}
+        self._resume(api_client, org, session, email=None, **signed)
+        assert session.email == "old@x.io"
+        assert session.email_verified_at == before
+
+    def test_a_stale_proof_never_vouches_for_a_new_email(self, api_client, org):
+        stale = WidgetSession.objects.create(
+            organization=org, email_verified_at=timezone.now()
+        )
+        res = _post(api_client, org, session_id=str(stale.id), email="new@x.io")
+        session = WidgetSession.objects.get(id=res.data["session_id"])
+        assert session != stale
+        assert session.email == "new@x.io"
+        assert session.email_verified_at is None
+
+    def test_changing_the_email_writes_only_what_changed(self, api_client, org):
+        session = self._proven(org, external_user_id="u1", name="A")
+        with CaptureQueriesContext(connection) as queries:
+            self._resume(api_client, org, session, email="new@x.io", name="B")
+        updates = _session_updates(queries)
+        assert any('"email"' in sql for sql in updates)
+        assert any('"email_verified_at"' in sql for sql in updates)
+        assert not any('"name"' in sql for sql in updates)
+        assert not any('"external_user_id"' in sql for sql in updates)
+
+
+class TestRequesterBackfillOnPatch:
+    def _message(self, api_client, org, session_id, **body):
+        res = api_client.post(
+            "/api/v1/tickets/widget_message/",
+            {"body": "Help", **body},
+            format="json",
+            HTTP_X_WIDGET_TOKEN=str(org.api_token),
+            HTTP_X_WIDGET_SESSION=str(session_id),
+        )
+        assert res.status_code == 201
+        return Ticket.objects.get(id=res.data["ticket_id"])
+
+    def test_an_email_reaches_a_ticket_that_has_a_name(self, api_client, org):
+        session_id = _post(api_client, org, name="Vi").data["session_id"]
+        ticket = self._message(api_client, org, session_id)
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "")
+
+        res = _patch(api_client, org, session_id, email="vi@x.io")
+
+        assert res.status_code == 200
+        ticket.refresh_from_db()
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "vi@x.io")
+        assert ticket.contact.email == "vi@x.io"
+
+    def test_an_agent_reply_then_emails_the_visitor(
+        self, api_client, org, settings, mailoutbox
+    ):
+        settings.CELERY_TASK_ALWAYS_EAGER = True
+        session_id = _post(api_client, org, name="Vi").data["session_id"]
+        ticket = self._message(api_client, org, session_id)
+        _patch(api_client, org, session_id, email="vi@x.io")
+        mailoutbox.clear()
+
+        agent_client = APIClient()
+        agent_client.force_authenticate(UserFactory(organization=org))
+        res = agent_client.post(
+            "/api/v1/messages/",
+            {"ticket": str(ticket.id), "body": "Hello"},
+            format="json",
+        )
+
+        assert res.status_code == 201
+        assert [message.to for message in mailoutbox] == [["vi@x.io"]]
+
+    def test_a_name_reaches_a_ticket_that_has_an_email(self, api_client, org):
+        session_id = _post(api_client, org, email="vi@x.io").data["session_id"]
+        ticket = self._message(api_client, org, session_id)
+        assert (ticket.requester_name, ticket.requester_email) == ("", "vi@x.io")
+
+        _patch(api_client, org, session_id, name="Vi")
+
+        ticket.refresh_from_db()
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "vi@x.io")
+
+    def test_both_reach_a_ticket_that_has_neither(self, api_client, org):
+        session_id = _post(api_client, org).data["session_id"]
+        ticket = self._message(api_client, org, session_id)
+
+        _patch(api_client, org, session_id, name="Vi", email="vi@x.io")
+
+        ticket.refresh_from_db()
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "vi@x.io")
+
+    def test_what_a_ticket_holds_isnt_replaced(self, api_client, org):
+        session_id = _post(api_client, org, name="Vi", email="vi@x.io").data[
+            "session_id"
+        ]
+        ticket = self._message(api_client, org, session_id)
+
+        _patch(api_client, org, session_id, name="Violet", email="violet@x.io")
+
+        ticket.refresh_from_db()
+        assert (ticket.requester_name, ticket.requester_email) == ("Vi", "vi@x.io")
+
+    def test_a_ticket_moved_by_a_login_isnt_filled(self, api_client, org):
+        session_id = _post(api_client, org, name="Vi").data["session_id"]
+        session = WidgetSession.objects.get(id=session_id)
+        moved = TicketFactory(
+            organization=org,
+            widget_session=session,
+            requester=None,
+            requester_name="",
+            requester_email="",
+            context_metadata={"pre_login_anonymous": True},
+        )
+
+        _patch(api_client, org, session_id, name="Violet", email="vi@x.io")
+
+        moved.refresh_from_db()
+        assert (moved.requester_name, moved.requester_email) == ("", "")
+
+    def test_a_ticket_of_another_session_or_organization_isnt_filled(
+        self, api_client, org
+    ):
+        session_id = _post(api_client, org, name="Vi").data["session_id"]
+        session = WidgetSession.objects.get(id=session_id)
+        other_session = TicketFactory(
+            organization=org,
+            widget_session=WidgetSession.objects.create(organization=org),
+            requester=None,
+            requester_name="",
+            requester_email="",
+        )
+        other_org = TicketFactory(
+            organization=OrganizationFactory(),
+            widget_session=session,
+            requester=None,
+            requester_name="",
+            requester_email="",
+        )
+
+        _patch(api_client, org, session_id, email="vi@x.io")
+
+        for ticket in (other_session, other_org):
+            ticket.refresh_from_db()
+            assert ticket.requester_email == ""
+
+    def test_the_first_message_takes_the_email_the_session_holds(self, api_client, org):
+        session_id = _post(api_client, org, name="Vi", email="vi@x.io").data[
+            "session_id"
+        ]
+
+        ticket = self._message(api_client, org, session_id)
+
+        assert ticket.requester_email == "vi@x.io"
+        assert ticket.requester_name == "Vi"
+
+    def test_the_first_attachment_takes_the_email_the_session_holds(
+        self, api_client, org, local_media
+    ):
+        session_id = _post(api_client, org, name="Vi", email="vi@x.io").data[
+            "session_id"
+        ]
+
+        res = api_client.post(
+            "/api/v1/tickets/widget_message_attachment/",
+            {"file": SimpleUploadedFile("a.png", b"x", content_type="image/png")},
+            format="multipart",
+            HTTP_X_WIDGET_TOKEN=str(org.api_token),
+            HTTP_X_WIDGET_SESSION=str(session_id),
+        )
+
+        assert res.status_code == 201
+        assert Ticket.objects.get(id=res.data["ticket_id"]).requester_email == (
+            "vi@x.io"
+        )
