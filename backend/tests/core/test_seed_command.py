@@ -127,3 +127,16 @@ class TestContacts:
         assert Contact.objects.count() == 3
         assert Company.objects.count() == 1
         assert not Ticket.objects.filter(contact__isnull=True).exists()
+
+
+@pytest.mark.django_db
+def test_seed_ignores_the_same_reference_in_another_organization():
+    other = Organization.objects.create(name="Other", slug="other")
+    Ticket.objects.create(organization=other, reference="SD-0001", title="Other's")
+
+    _seed()
+
+    assert Ticket.objects.get(organization=other).title == "Other's"
+    assert Ticket.objects.filter(
+        organization__slug="acme-corp", reference="SD-0001"
+    ).exists()
