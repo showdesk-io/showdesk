@@ -218,6 +218,8 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
 CELERY_TASK_TRACK_STARTED = True
+# Celery would use a queue named "celery", which the worker does not consume.
+CELERY_TASK_DEFAULT_QUEUE = "default"
 
 # Celery Beat schedule
 CELERY_BEAT_SCHEDULE = {
