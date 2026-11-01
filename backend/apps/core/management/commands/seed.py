@@ -446,8 +446,9 @@ class Command(BaseCommand):
         for data in tickets_data:
             tag_list = data.pop("tags", [])
             ticket, created = Ticket.objects.get_or_create(
+                organization=org,
                 reference=data["reference"],
-                defaults={**data, "organization": org},
+                defaults=data,
             )
             if created:
                 ticket.tags.set(tag_list)
