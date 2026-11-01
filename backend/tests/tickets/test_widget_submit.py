@@ -3,6 +3,7 @@
 import pytest
 from rest_framework.test import APIClient
 
+from apps.tickets.models import Ticket
 from tests.factories import OrganizationFactory
 
 
@@ -30,7 +31,7 @@ class TestWidgetSubmitNewFields:
             HTTP_X_WIDGET_TOKEN=self.organization.api_token,
         )
         assert response.status_code == 201
-        assert response.data["issue_type"] == "bug"
+        assert Ticket.objects.get(pk=response.data["id"]).issue_type == "bug"
 
     def test_widget_submit_issue_type_defaults_to_other(self):
         """issue_type defaults to 'other' when not provided."""
@@ -46,7 +47,7 @@ class TestWidgetSubmitNewFields:
             HTTP_X_WIDGET_TOKEN=self.organization.api_token,
         )
         assert response.status_code == 201
-        assert response.data["issue_type"] == "other"
+        assert Ticket.objects.get(pk=response.data["id"]).issue_type == "other"
 
     def test_widget_submit_with_external_user_id(self):
         """Widget can submit a ticket with external_user_id."""
@@ -63,7 +64,9 @@ class TestWidgetSubmitNewFields:
             HTTP_X_WIDGET_TOKEN=self.organization.api_token,
         )
         assert response.status_code == 201
-        assert response.data["external_user_id"] == "usr_12345"
+        assert (
+            Ticket.objects.get(pk=response.data["id"]).external_user_id == "usr_12345"
+        )
 
     def test_widget_submit_external_user_id_defaults_to_empty(self):
         """external_user_id defaults to empty string."""
@@ -79,7 +82,7 @@ class TestWidgetSubmitNewFields:
             HTTP_X_WIDGET_TOKEN=self.organization.api_token,
         )
         assert response.status_code == 201
-        assert response.data["external_user_id"] == ""
+        assert Ticket.objects.get(pk=response.data["id"]).external_user_id == ""
 
     def test_widget_submit_with_console_and_network_errors(self):
         """Widget can submit enriched context_metadata with console and network errors."""
@@ -118,8 +121,25 @@ class TestWidgetSubmitNewFields:
             HTTP_X_WIDGET_TOKEN=self.organization.api_token,
         )
         assert response.status_code == 201
-        metadata = response.data["context_metadata"]
+        metadata = Ticket.objects.get(pk=response.data["id"]).context_metadata
         assert len(metadata["console_errors"]) == 1
         assert metadata["console_errors"][0]["level"] == "error"
         assert len(metadata["network_errors"]) == 1
         assert metadata["network_errors"][0]["status"] == 500
+
+    def test_widget_submit_returns_only_what_the_widget_reads(self):
+        """The token is public: the response gives back nothing but the new ticket's ids."""
+        response = self.client.post(
+            "/api/v1/tickets/widget_submit/",
+            data={
+                "title": "Bug",
+                "description": "Details",
+                "requester_name": "Jean",
+                "requester_email": "jean@acme.com",
+            },
+            format="json",
+            HTTP_X_WIDGET_TOKEN=self.organization.api_token,
+        )
+        assert response.status_code == 201
+        ticket = Ticket.objects.get(pk=response.data["id"])
+        assert response.data == {"id": str(ticket.id), "reference": ticket.reference}

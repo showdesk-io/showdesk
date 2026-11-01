@@ -1,8 +1,9 @@
 """Views for ticket-related models."""
 
+import hashlib
 import logging
 
-from django.db import models
+from django.db import DatabaseError, models, transaction
 from django.utils import timezone
 from django_filters import rest_framework as django_filters
 from django_filters.rest_framework import DjangoFilterBackend
@@ -12,6 +13,13 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from apps.contacts.attributes import is_storable
+from apps.contacts.services import (
+    delete_contact_if_left_empty,
+    resolve_contact_for_email,
+    resolve_contact_for_ticket,
+    resolve_contact_for_widget_session,
+)
 from apps.core.filters import active_org_rows
 from apps.core.permissions import (
     LOOKUP_ERRORS,
@@ -34,9 +42,15 @@ from apps.notifications.signals import (
     notify_new_ticket,
     notify_ticket_update,
 )
-from apps.organizations.models import Organization, Team, User
+from apps.organizations.models import (
+    RESERVED_EXTERNAL_ID_PREFIXES,
+    Organization,
+    Team,
+    User,
+)
 
 from .models import (
+    PRE_LOGIN_ANONYMOUS_KEY,
     CannedResponse,
     PriorityLevel,
     SavedView,
@@ -60,9 +74,12 @@ from .serializers import (
     TicketSerializer,
     TicketSetTagsSerializer,
     WidgetConversationListSerializer,
+    WidgetIdentitySerializer,
     WidgetMessageCreateSerializer,
     WidgetMessageSerializer,
     WidgetSessionSerializer,
+    WidgetSubmitResponseSerializer,
+    ticket_list_rows,
 )
 from .tasks import (
     send_ticket_assigned_email,
@@ -72,6 +89,24 @@ from .tasks import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Next to ``PRE_LOGIN_ANONYMOUS_KEY``: the digest of the anonymous session it came
+# from, to trace the move.
+PRE_LOGIN_SESSION_HASH_KEY = "pre_login_session_hash"
+
+# The ``context`` of a widget message that have a field of their own on a ticket.
+_CONTEXT_FIELDS = {
+    "url": "context_url",
+    "user_agent": "context_user_agent",
+    "os": "context_os",
+    "browser": "context_browser",
+    "screen_resolution": "context_screen_resolution",
+}
+
+
+def _session_digest(session_id) -> str:
+    """Return what may be stored or logged of a session id, itself a bearer token."""
+    return hashlib.sha256(str(session_id).encode()).hexdigest()
 
 
 def _get_widget_org(request):
@@ -126,6 +161,343 @@ def _get_widget_session(request, organization):
     return session, None
 
 
+def _record_session_resume(
+    org, session, name: str, email: str, email_hash: str | None
+) -> None:
+    """Fill the session's blank name, update its email, and record the visit.
+
+    A different email replaces the session's on an identified session, where the
+    latest declared value wins, or if the host app signed it. An anonymous session
+    otherwise keeps its first email. The proof was about the previous email: the
+    service proves the new one again, if it can.
+
+    Writes only what changes: saving a value read before a concurrent
+    anonymization would restore the personal data it just wiped.
+    """
+    fields = ["last_seen_at", "updated_at"]
+    if name and not session.name:
+        session.name = name
+        fields.append("name")
+    if (
+        email
+        and email.lower() != session.email.strip().lower()
+        and (
+            not session.email
+            or session.external_user_id
+            or org.verify_email_hash(email, email_hash)
+        )
+    ):
+        session.email = email
+        fields.append("email")
+        if session.email_verified_at:
+            session.email_verified_at = None
+            fields.append("email_verified_at")
+    session.save(update_fields=fields)
+
+
+def _company_hash_is_valid(org, company, company_hash) -> bool:
+    if not company_hash or not isinstance(company, dict):
+        return False
+    company_id = company.get("id")
+    # Same values the service accepts as an id, without str() on a huge integer.
+    if type(company_id) is int and abs(company_id) < 2**63:
+        company_id = str(company_id)
+    return org.verify_company_hash(
+        company_id, company.get("name"), company.get("domain"), company_hash
+    )
+
+
+def _contact_claims(identity) -> dict:
+    """Pick from the validated payload what ``_link_session_contact`` takes."""
+    keys = ("email_hash", "company_hash", "traits", "company")
+    return {key: identity.get(key) for key in keys}
+
+
+def _link_session_contact(
+    org, session, *, email_hash=None, company_hash=None, traits=None, company=None
+) -> None:
+    """Resolve the session's contact from the widget init payload.
+
+    All of it is validated ``WidgetIdentitySerializer`` data. ``email_hash`` and
+    ``company_hash`` are optional: an invalid one is ignored (the value stays
+    unsigned) so a misconfigured host app never breaks the widget. For the same
+    reason a database error (a conflict the service's retry couldn't settle, a
+    deadlock, a lock timeout) is logged, and the session goes on without a contact
+    until the next init.
+    """
+    email_verified = bool(
+        session.email
+        and email_hash
+        and org.verify_email_hash(session.email, email_hash)
+    )
+    previous_contact_id = session.contact_id
+    try:
+        # Together: the tickets only get linked when the contact changes, so a
+        # contact committed without them would leave them unlinked for good.
+        with transaction.atomic():
+            resolve_contact_for_widget_session(
+                session,
+                email_verified=email_verified,
+                traits=traits,
+                company=company,
+                company_verified=_company_hash_is_valid(org, company, company_hash),
+            )
+            # The normal flow is first message, then contact nudge: tickets opened
+            # before the session had a contact would otherwise never get one. Only
+            # then: on any other visit, a ticket without a contact is one an agent
+            # cleared.
+            if session.contact_id and session.contact_id != previous_contact_id:
+                Ticket.objects.filter(
+                    organization=org, widget_session=session, contact__isnull=True
+                ).update(contact_id=session.contact_id)
+    except DatabaseError:
+        session.contact_id = previous_contact_id
+        logger.exception(
+            "Could not link widget session %s to a contact",
+            _session_digest(session.pk),
+        )
+
+
+def _update_session(request, org, identity) -> Response:
+    """PATCH: update the contact info (name/email) of an existing session."""
+    session, err = _get_widget_session(request, org)
+    if err:
+        return err
+    name = identity.get("name")
+    email = identity.get("email")
+    fields = ["last_seen_at", "updated_at"]
+    if name is not None:
+        session.name = name
+        fields.append("name")
+    if email is not None:
+        # The proof was about the previous email.
+        if email.lower() != session.email.strip().lower():
+            session.email_verified_at = None
+            fields.append("email_verified_at")
+        session.email = email
+        fields.append("email")
+    session.save(update_fields=fields)
+    # Backfill on linked tickets, each field where it's blank. Not on those a login
+    # moved here: their requester is whoever wrote them, not necessarily this user.
+    tickets = Ticket.objects.filter(organization=org, widget_session=session).exclude(
+        context_metadata__has_key=PRE_LOGIN_ANONYMOUS_KEY
+    )
+    if session.name:
+        tickets.filter(requester_name="").update(requester_name=session.name)
+    if session.email:
+        tickets.filter(requester_email="").update(requester_email=session.email)
+    _link_session_contact(org, session, **_contact_claims(identity))
+    return Response(WidgetSessionSerializer(session).data)
+
+
+def _ticket_context(context) -> dict:
+    """Return a ticket's fields from the ``context`` of a widget message.
+
+    A page can send anything: a field only takes a string it can store, cut to fit, and
+    the metadata leaves out what it can't store.
+    """
+    if not isinstance(context, dict):
+        return {}
+    fields = {}
+    for key, field in _CONTEXT_FIELDS.items():
+        value = context.get(key)
+        if isinstance(value, str) and is_storable(value):
+            fields[field] = value[: Ticket._meta.get_field(field).max_length]
+    fields["context_metadata"] = {
+        key: value
+        for key, value in context.items()
+        if key not in _CONTEXT_FIELDS and is_storable(key) and is_storable(value)
+    }
+    return fields
+
+
+def _stored_session(org, session_id):
+    """Return the session the widget stored, or None if it isn't one of this org."""
+    if not isinstance(session_id, str):
+        return None  # str() on a deeply nested list overflows the stack.
+    try:
+        return WidgetSession.objects.get(id=session_id, organization=org)
+    except LOOKUP_ERRORS:
+        return None
+
+
+def _move_conversation_to_identified_session(org, anonymous, identified) -> None:
+    """Continue an anonymous session's conversations on the session of a login.
+
+    Those tickets were written before anyone proved who they are, so they're marked
+    as such for ``sender_verified``. Moved, there's nothing left to do on a retry.
+
+    The anonymous session keeps nothing about its user: anonymizing the contact later
+    wouldn't reach it, as it's no longer on that contact.
+
+    Not caught, unlike a contact that can't be linked: the widget has to keep the
+    anonymous session's id for its next init, the only way to retry this.
+    """
+    origin_hash = _session_digest(anonymous.pk)
+    with transaction.atomic():
+        left_contact_id = (
+            WidgetSession.objects.select_for_update(no_key=True)
+            .values_list("contact_id", flat=True)
+            .get(pk=anonymous.pk)
+        )
+        left_contact_ids = {left_contact_id}
+        tickets = list(
+            Ticket.objects.select_for_update(no_key=True).filter(
+                organization=org, widget_session=anonymous
+            )
+        )
+        for ticket in tickets:
+            left_contact_ids.add(ticket.contact_id)
+            ticket.widget_session = identified
+            ticket.external_user_id = identified.external_user_id
+            ticket.contact_id = identified.contact_id or ticket.contact_id
+            metadata = ticket.context_metadata
+            ticket.context_metadata = {
+                **(metadata if isinstance(metadata, dict) else {}),
+                PRE_LOGIN_ANONYMOUS_KEY: True,
+                PRE_LOGIN_SESSION_HASH_KEY: origin_hash,
+            }
+        Ticket.objects.bulk_update(
+            tickets,
+            ["widget_session", "external_user_id", "contact", "context_metadata"],
+            batch_size=500,
+        )
+        moved_messages = TicketMessage.objects.filter(
+            widget_session=anonymous, ticket__organization=org
+        ).update(widget_session=identified)
+        WidgetSession.objects.filter(pk=anonymous.pk).update(
+            name="",
+            email="",
+            user_agent="",
+            email_verified_at=None,
+            contact=None,
+            updated_at=timezone.now(),
+        )
+    _delete_contacts_left_empty(left_contact_ids - {None, identified.contact_id})
+    if tickets or moved_messages:
+        # Only digests and counts: no personal data, and no usable session id.
+        logger.info(
+            "Moved %d ticket(s) and %d message(s) from widget session %s to %s at login",
+            len(tickets),
+            moved_messages,
+            origin_hash,
+            _session_digest(identified.pk),
+        )
+
+
+def _delete_contacts_left_empty(contact_ids) -> None:
+    """Delete the contacts a login emptied. The login is done: one that stays is fine."""
+    for contact_id in contact_ids:
+        try:
+            delete_contact_if_left_empty(contact_id)
+        except DatabaseError:
+            logger.exception("Could not delete the emptied contact %s", contact_id)
+
+
+def _create_user_message(ticket, **fields) -> TicketMessage:
+    """Create a widget user's message on the session its ticket is on now.
+
+    A login may have moved the ticket since the request found it through the anonymous
+    session. Under this lock, either the login is over and the message follows the
+    ticket, or it's still to come and it will move the committed message.
+    """
+    with transaction.atomic():
+        session_id = (
+            Ticket.objects.select_for_update(no_key=True)
+            .values_list("widget_session_id", flat=True)
+            .get(pk=ticket.pk)
+        )
+        return TicketMessage.objects.create(
+            ticket=ticket,
+            widget_session_id=session_id,
+            sender_type=TicketMessage.SenderType.USER,
+            **fields,
+        )
+
+
+def _create_or_resume_session(request, org, identity) -> Response:
+    """POST: create a new session or resume an existing one.
+
+    Only a valid ``user_hash`` gives access to an identified session. The session
+    the widget stored then decides what happens:
+
+    - Anonymous, no valid hash: it goes on, whatever the id sent.
+    - Anonymous with a proven email, no valid hash and no valid ``email_hash``: a
+      logout, as on an identified session below. What it proved stays true of what
+      it wrote, and the next tickets aren't written under that proof.
+    - Anonymous, valid hash: a login. The identified session replaces it, and takes
+      its conversations.
+    - Identified, valid hash: the user's own session, or the session of whoever
+      logged in since on that browser.
+    - Identified, hash absent: a logout. A new anonymous session starts, and the
+      stored one isn't touched, so neither is its contact.
+    - Identified, wrong hash: refused, as without a stored session.
+    """
+    stored = _stored_session(org, request.data.get("session_id"))
+    external_user_id = identity.get("external_user_id") or ""
+    user_hash = identity.get("user_hash") or ""
+    name = identity.get("name") or ""
+    email = identity.get("email") or ""
+    claims = _contact_claims(identity)
+
+    is_login = False
+    if stored is not None and not stored.external_user_id:
+        is_login = bool(
+            external_user_id
+            and user_hash
+            and org.verify_user_hash(external_user_id, user_hash)
+        )
+        lost_proof = bool(stored.email_verified_at) and not org.verify_email_hash(
+            email or stored.email, claims["email_hash"]
+        )
+        if not is_login and not lost_proof:
+            _record_session_resume(org, stored, name, email, claims["email_hash"])
+            _link_session_contact(org, stored, **claims)
+            return Response(WidgetSessionSerializer(stored).data)
+
+    # HMAC-identified user: find-or-create by external_user_id
+    if external_user_id and user_hash:
+        if not org.widget_secret:
+            return Response(
+                {"error": "Identity verification not configured."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not org.verify_user_hash(external_user_id, user_hash):
+            return Response(
+                {"error": "Invalid user_hash."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        session, created = WidgetSession.objects.get_or_create(
+            organization=org,
+            external_user_id=external_user_id,
+            defaults={
+                "name": name,
+                "email": email,
+                "user_agent": request.META.get("HTTP_USER_AGENT", ""),
+            },
+        )
+        if not created:
+            _record_session_resume(org, session, name, email, claims["email_hash"])
+        _link_session_contact(org, session, **claims)
+        if is_login:
+            _move_conversation_to_identified_session(org, stored, session)
+        resp_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(WidgetSessionSerializer(session).data, status=resp_status)
+
+    # Anonymous session
+    session = WidgetSession.objects.create(
+        organization=org,
+        name=name,
+        email=email,
+        user_agent=request.META.get("HTTP_USER_AGENT", ""),
+    )
+    _link_session_contact(org, session, **claims)
+    return Response(
+        WidgetSessionSerializer(session).data,
+        status=status.HTTP_201_CREATED,
+    )
+
+
 class TicketFilter(django_filters.FilterSet):
     """Ticket filters. Ids only resolve in the active organization."""
 
@@ -151,6 +523,9 @@ class TicketViewSet(viewsets.ModelViewSet):
 
     Supports full CRUD operations, filtering by status/priority/assignee,
     and a special widget submission endpoint.
+
+    Agents only, as tickets show their contact's personal data. The ``widget_*``
+    actions have their own permissions: they authenticate with the widget's token.
     """
 
     permission_classes = [IsAuthenticated, IsOrgStaff]
@@ -172,17 +547,32 @@ class TicketViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Filter tickets by the active organization."""
         org = get_active_org(self.request)
-        if org:
-            return Ticket.objects.filter(organization=org)
-        return Ticket.objects.none()
+        if not org:
+            return Ticket.objects.none()
+        tickets = Ticket.objects.filter(organization=org)
+        # Not on the others: an annotation would change what ``stats`` groups by.
+        if self.action == "list":
+            return ticket_list_rows(tickets)
+        return tickets.select_related("contact__company", "widget_session")
 
     def perform_create(self, serializer) -> None:
-        """Set organization and reference on creation."""
+        """Set organization, reference and source on creation."""
         org = require_active_org(self.request)
         ticket = serializer.save(
             organization=org,
             reference=org.next_ticket_reference(),
+            source=serializer.validated_data.get("source", Ticket.Source.AGENT),
         )
+        # An explicit null is a choice, like an agent clearing it later.
+        if "contact" not in serializer.validated_data:
+            try:
+                contact = resolve_contact_for_ticket(ticket)
+                if contact is not None:
+                    ticket.contact = contact
+                    ticket.save(update_fields=["contact"])
+            except DatabaseError:
+                # The ticket exists: failing here would lose its notifications.
+                logger.exception("Could not link ticket %s to a contact", ticket.pk)
         # Notify via WebSocket + email
         try:
             notify_new_ticket(ticket)
@@ -291,6 +681,18 @@ class TicketViewSet(viewsets.ModelViewSet):
             source=Ticket.Source.WIDGET,
         )
 
+        if ticket.requester_email:
+            try:
+                contact = resolve_contact_for_email(
+                    organization, ticket.requester_email, name=ticket.requester_name
+                )
+                if contact is not None:
+                    ticket.contact = contact
+                    ticket.save(update_fields=["contact"])
+            except DatabaseError:
+                # The ticket exists: failing here would lose its notifications.
+                logger.exception("Could not link ticket %s to a contact", ticket.pk)
+
         # Notify via WebSocket + email
         try:
             notify_new_ticket(ticket)
@@ -299,7 +701,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         send_ticket_created_email.delay(str(ticket.id))
 
         return Response(
-            TicketSerializer(ticket).data,
+            WidgetSubmitResponseSerializer(ticket).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -341,7 +743,10 @@ class TicketViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            ticket = Ticket.objects.get(id=ticket_id, organization=organization)
+            # No session here to have lost the ticket: see contacts.gdpr.
+            ticket = Ticket.objects.exclude(contact__is_anonymized=True).get(
+                id=ticket_id, organization=organization
+            )
         except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
@@ -398,6 +803,11 @@ class TicketViewSet(viewsets.ModelViewSet):
                 {"error": "external_user_id query parameter is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if external_user_id.startswith(RESERVED_EXTERNAL_ID_PREFIXES):
+            return Response(
+                {"error": "This external_user_id prefix is reserved."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # HMAC identity verification: require user_hash when widget_secret is set
         user_hash = request.query_params.get("user_hash")
@@ -441,17 +851,22 @@ class TicketViewSet(viewsets.ModelViewSet):
         data = serializer.validated_data
         agent = data.get("agent_id")
         team = data.get("team_id")
+        fields = ["updated_at"]
 
         if "agent_id" in data:
             ticket.assigned_agent = agent
+            fields.append("assigned_agent")
         if "team_id" in data:
             ticket.assigned_team = team
+            fields.append("assigned_team")
         if not ticket.first_response_at and agent:
             ticket.first_response_at = timezone.now()
+            fields.append("first_response_at")
 
         if agent or team:
             ticket.status = Ticket.Status.IN_PROGRESS
-        ticket.save()
+            fields.append("status")
+        ticket.save(update_fields=fields)
 
         # Notify
         try:
@@ -469,7 +884,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket = self.get_object()
         ticket.status = Ticket.Status.RESOLVED
         ticket.resolved_at = timezone.now()
-        ticket.save()
+        ticket.save(update_fields=["status", "resolved_at", "updated_at"])
 
         # Notify
         try:
@@ -486,7 +901,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket = self.get_object()
         ticket.status = Ticket.Status.CLOSED
         ticket.closed_at = timezone.now()
-        ticket.save()
+        ticket.save(update_fields=["status", "closed_at", "updated_at"])
 
         try:
             notify_ticket_update(ticket)
@@ -502,7 +917,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket.status = Ticket.Status.OPEN
         ticket.resolved_at = None
         ticket.closed_at = None
-        ticket.save()
+        ticket.save(update_fields=["status", "resolved_at", "closed_at", "updated_at"])
 
         try:
             notify_ticket_update(ticket)
@@ -608,22 +1023,30 @@ class TicketViewSet(viewsets.ModelViewSet):
         now = timezone.now()
         with transaction.atomic():
             for ticket in tickets:
+                fields = ["updated_at"]
                 if new_priority is not None:
                     ticket.priority = new_priority
+                    fields.append("priority")
                 if agent_provided:
                     ticket.assigned_agent_id = new_agent_id or None
+                    fields.append("assigned_agent")
                     if new_agent_id and not ticket.first_response_at:
                         ticket.first_response_at = now
+                        fields.append("first_response_at")
                 if new_status is not None:
                     ticket.status = new_status
+                    fields.append("status")
                     if new_status == Ticket.Status.RESOLVED:
                         ticket.resolved_at = ticket.resolved_at or now
+                        fields.append("resolved_at")
                     elif new_status == Ticket.Status.CLOSED:
                         ticket.closed_at = ticket.closed_at or now
+                        fields.append("closed_at")
                     elif new_status == Ticket.Status.OPEN:
                         ticket.resolved_at = None
                         ticket.closed_at = None
-                ticket.save()
+                        fields += ["resolved_at", "closed_at"]
+                ticket.save(update_fields=fields)
 
         for ticket in tickets:
             try:
@@ -656,108 +1079,13 @@ class TicketViewSet(viewsets.ModelViewSet):
         if err:
             return err
 
+        serializer = WidgetIdentitySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        identity = serializer.validated_data
+
         if request.method == "PATCH":
-            session, err = _get_widget_session(request, org)
-            if err:
-                return err
-            name = request.data.get("name")
-            email = request.data.get("email")
-            if name is not None:
-                session.name = name
-            if email is not None:
-                session.email = email
-            session.save(update_fields=["name", "email", "last_seen_at"])
-            # Backfill on linked tickets with blank requester info
-            if session.name or session.email:
-                update_fields = {}
-                if session.name:
-                    update_fields["requester_name"] = session.name
-                if session.email:
-                    update_fields["requester_email"] = session.email
-                Ticket.objects.filter(
-                    widget_session=session,
-                    requester_name="",
-                ).update(**update_fields)
-            return Response(WidgetSessionSerializer(session).data)
-
-        # POST — create or resume
-        session_id = request.data.get("session_id")
-        external_user_id = request.data.get("external_user_id", "")
-        user_hash = request.data.get("user_hash", "")
-        name = request.data.get("name", "")
-        email = request.data.get("email", "")
-
-        # Try to resume existing session
-        if session_id:
-            try:
-                session = WidgetSession.objects.get(id=session_id, organization=org)
-            except LOOKUP_ERRORS:
-                session = None
-
-            # Identity mismatch (e.g. a different user logged into the same
-            # browser): drop the stored session_id and fall through so the
-            # HMAC branch finds-or-creates the legitimate session for this
-            # user. Anonymous sessions (no external_user_id) can still be
-            # claimed by an identified user on the next branch.
-            if (
-                session is not None
-                and session.external_user_id
-                and external_user_id
-                and session.external_user_id != external_user_id
-            ):
-                session = None
-
-            if session is not None:
-                session.last_seen_at = timezone.now()
-                if name and not session.name:
-                    session.name = name
-                if email and not session.email:
-                    session.email = email
-                session.save()
-                return Response(WidgetSessionSerializer(session).data)
-
-        # HMAC-identified user: find-or-create by external_user_id
-        if external_user_id and user_hash:
-            if not org.widget_secret:
-                return Response(
-                    {"error": "Identity verification not configured."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-            if not org.verify_user_hash(external_user_id, user_hash):
-                return Response(
-                    {"error": "Invalid user_hash."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-            session, created = WidgetSession.objects.get_or_create(
-                organization=org,
-                external_user_id=external_user_id,
-                defaults={
-                    "name": name,
-                    "email": email,
-                    "user_agent": request.META.get("HTTP_USER_AGENT", ""),
-                },
-            )
-            if not created:
-                session.last_seen_at = timezone.now()
-                if name and not session.name:
-                    session.name = name
-                if email and not session.email:
-                    session.email = email
-                session.save()
-            resp_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
-            return Response(WidgetSessionSerializer(session).data, status=resp_status)
-
-        # Anonymous session
-        session = WidgetSession.objects.create(
-            organization=org,
-            name=name,
-            email=email,
-            user_agent=request.META.get("HTTP_USER_AGENT", ""),
-        )
-        return Response(
-            WidgetSessionSerializer(session).data,
-            status=status.HTTP_201_CREATED,
-        )
+            return _update_session(request, org, identity)
+        return _create_or_resume_session(request, org, identity)
 
     @action(
         detail=False,
@@ -811,26 +1139,11 @@ class TicketViewSet(viewsets.ModelViewSet):
                 description=body,
                 source=Ticket.Source.WIDGET,
                 widget_session=session,
+                contact_id=session.contact_id,
                 requester_name=session.name,
                 requester_email=session.email,
                 external_user_id=session.external_user_id,
-                context_url=context_data.get("url", ""),
-                context_user_agent=context_data.get("user_agent", ""),
-                context_os=context_data.get("os", ""),
-                context_browser=context_data.get("browser", ""),
-                context_screen_resolution=context_data.get("screen_resolution", ""),
-                context_metadata={
-                    k: v
-                    for k, v in context_data.items()
-                    if k
-                    not in (
-                        "url",
-                        "user_agent",
-                        "os",
-                        "browser",
-                        "screen_resolution",
-                    )
-                },
+                **_ticket_context(context_data),
             )
             try:
                 notify_new_ticket(ticket)
@@ -841,13 +1154,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = TicketMessage.objects.create(
-            ticket=ticket,
-            widget_session=session,
-            sender_type=TicketMessage.SenderType.USER,
-            body=body,
-            body_type=body_type,
-        )
+        message = _create_user_message(ticket, body=body, body_type=body_type)
 
         try:
             notify_new_message(message)
@@ -918,6 +1225,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 description=body,
                 source=Ticket.Source.WIDGET,
                 widget_session=session,
+                contact_id=session.contact_id,
                 requester_name=session.name,
                 requester_email=session.email,
                 external_user_id=session.external_user_id,
@@ -931,13 +1239,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = TicketMessage.objects.create(
-            ticket=ticket,
-            widget_session=session,
-            sender_type=TicketMessage.SenderType.USER,
-            body=body,
-            body_type=body_type,
-        )
+        message = _create_user_message(ticket, body=body, body_type=body_type)
 
         # Validate and save attachment
         att_serializer = TicketAttachmentSerializer(

@@ -35,6 +35,7 @@ LOCAL_APPS = [
     "apps.core",
     "apps.organizations",
     "apps.tickets",
+    "apps.contacts",
     "apps.videos",
     "apps.knowledge_base",
     "apps.notifications",

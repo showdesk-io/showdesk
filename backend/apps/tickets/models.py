@@ -1,8 +1,10 @@
 """Ticket-related models: Ticket, TicketMessage, TicketAttachment, Tag, SLAPolicy."""
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
+from apps.contacts.models import Contact
 from apps.core.models import TimestampedModel
 
 
@@ -161,15 +163,39 @@ class WidgetSession(TimestampedModel):
     email = models.EmailField(blank=True)
     user_agent = models.TextField(blank=True)
     last_seen_at = models.DateTimeField(auto_now=True)
+    contact = models.ForeignKey(
+        "contacts.Contact",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sessions",
+    )
+    email_verified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set when this session proved ownership of its email.",
+    )
 
     class Meta:
         indexes = [
             models.Index(fields=["organization", "external_user_id"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "external_user_id"],
+                condition=~models.Q(external_user_id=""),
+                name="unique_widget_session_external_user_per_org",
+            ),
+        ]
 
     def __str__(self) -> str:
         identifier = self.email or self.name or str(self.id)[:8]
         return f"WidgetSession {identifier} ({self.organization})"
+
+
+# In ``Ticket.context_metadata``: written anonymously, then moved to the session of
+# a login. Its sender never counts as verified.
+PRE_LOGIN_ANONYMOUS_KEY = "pre_login_anonymous"
 
 
 class Ticket(TimestampedModel):
@@ -259,6 +285,13 @@ class Ticket(TimestampedModel):
         related_name="requested_tickets",
         help_text="The end-user who submitted this ticket.",
     )
+    contact = models.ForeignKey(
+        "contacts.Contact",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tickets",
+    )
     assigned_agent = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -334,6 +367,53 @@ class Ticket(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.reference}: {self.title}"
+
+    @property
+    def sender_verified(self) -> bool | None:
+        """Tell whether this ticket's sender proved being its contact.
+
+        The contact's own ``email_verified_at`` can't say: a forged ticket can link
+        to a verified contact. None when there's no outside sender to verify.
+
+        A signed external id is proof whatever the email. A proven email only is
+        while the contact still holds it, since an agent can change it: the
+        session's date is about the address it had then. And only for what was written
+        since: a proof says nothing of who wrote the session's earlier tickets.
+        """
+        session = self.widget_session
+        if self.source in (self.Source.AGENT, self.Source.API) or (
+            session is None and not self.requester_email and not self.requester_id
+        ):
+            return None
+        metadata = self.context_metadata
+        if isinstance(metadata, dict) and metadata.get(PRE_LOGIN_ANONYMOUS_KEY) is True:
+            return False
+        if session is None or not self.contact_id:
+            return False
+        if session.contact_id != self.contact_id:
+            return False
+        if session.external_user_id:
+            return True
+        email = session.email.strip().lower()
+        return bool(
+            session.email_verified_at
+            and self.created_at >= session.email_verified_at
+            and email
+            and email == self.contact.email.strip().lower()
+        )
+
+    def clean(self) -> None:
+        super().clean()
+        if (
+            self.contact_id
+            and self.organization_id
+            and Contact.objects.filter(pk=self.contact_id)
+            .exclude(organization_id=self.organization_id)
+            .exists()
+        ):
+            raise ValidationError(
+                {"contact": "This contact belongs to another organization."}
+            )
 
 
 class TicketMessage(TimestampedModel):

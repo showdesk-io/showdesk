@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useEffect } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { clsx } from "clsx";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/authStore";
@@ -21,6 +21,7 @@ import type { Organization } from "@/types";
 const navItems = [
   { to: "/", label: "Dashboard", icon: "grid" },
   { to: "/tickets", label: "Tickets", icon: "inbox" },
+  { to: "/contacts", label: "Contacts", icon: "contact", alsoActiveOn: "/companies" },
   { to: "/team", label: "Team", icon: "users" },
   { to: "/settings", label: "Settings", icon: "settings" },
 ] as const;
@@ -31,6 +32,7 @@ function NavIcon({ icon }: { icon: string }) {
   const icons: Record<string, string> = {
     grid: "M4 4h6v6H4zm10 0h6v6h-6zm-10 10h6v6H4zm10 0h6v6h-6z",
     inbox: "M3 3h18v18H3zm2 8h14M8 11l-3 5h14l-3-5",
+    contact: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
     users: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
     settings: "M12 15a3 3 0 100-6 3 3 0 000 6z",
     shield: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
@@ -51,6 +53,7 @@ function NavIcon({ icon }: { icon: string }) {
 
 export function AppLayout() {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const queryClient = useQueryClient();
   const logout = useAuthStore((s) => s.logout);
   const clearActiveOrg = useOrgStore((s) => s.clearActiveOrg);
@@ -149,7 +152,9 @@ export function AppLayout() {
                 className={({ isActive }) =>
                   clsx(
                     "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                    isActive
+                    isActive ||
+                      ("alsoActiveOn" in item &&
+                        matchPath({ path: item.alsoActiveOn, end: false }, pathname))
                       ? "bg-primary-50 text-primary-700"
                       : "text-gray-600 hover:bg-gray-50 hover:text-gray-900",
                   )

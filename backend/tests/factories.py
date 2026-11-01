@@ -7,6 +7,13 @@ All factories are self-contained and can be used independently.
 import factory
 from django.utils import timezone
 
+from apps.contacts.models import (
+    Company,
+    CompanyAttributeDef,
+    Contact,
+    ContactAttributeDef,
+    ContactNote,
+)
 from apps.knowledge_base.models import Article, Category
 from apps.organizations.models import Organization, Team, User
 from apps.tickets.models import (
@@ -221,6 +228,65 @@ class VideoRecordingFactory(factory.django.DjangoModelFactory):
     expires_at = factory.LazyFunction(
         lambda: timezone.now() + timezone.timedelta(days=90)
     )
+
+
+class CompanyFactory(factory.django.DjangoModelFactory):
+    """Factory for creating Company instances."""
+
+    class Meta:
+        model = Company
+
+    organization = factory.SubFactory(OrganizationFactory)
+    name = factory.Sequence(lambda n: f"Company {n}")
+    domain = factory.Sequence(lambda n: f"company{n}.example")
+
+
+class ContactFactory(factory.django.DjangoModelFactory):
+    """Factory for creating Contact instances."""
+
+    class Meta:
+        model = Contact
+
+    organization = factory.SubFactory(OrganizationFactory)
+    name = factory.Faker("name")
+    email = factory.Sequence(lambda n: f"contact{n}@customer.example")
+
+
+class ContactAttributeDefFactory(factory.django.DjangoModelFactory):
+    """Factory for creating ContactAttributeDef instances."""
+
+    class Meta:
+        model = ContactAttributeDef
+
+    organization = factory.SubFactory(OrganizationFactory)
+    key = factory.Sequence(lambda n: f"attr_{n}")
+    label = factory.Sequence(lambda n: f"Attribute {n}")
+    type = "string"
+
+
+class CompanyAttributeDefFactory(factory.django.DjangoModelFactory):
+    """Factory for creating CompanyAttributeDef instances."""
+
+    class Meta:
+        model = CompanyAttributeDef
+
+    organization = factory.SubFactory(OrganizationFactory)
+    key = factory.Sequence(lambda n: f"attr_{n}")
+    label = factory.Sequence(lambda n: f"Attribute {n}")
+    type = "string"
+
+
+class ContactNoteFactory(factory.django.DjangoModelFactory):
+    """Factory for creating ContactNote instances."""
+
+    class Meta:
+        model = ContactNote
+
+    contact = factory.SubFactory(ContactFactory)
+    author = factory.SubFactory(
+        UserFactory, organization=factory.SelfAttribute("..contact.organization")
+    )
+    body = factory.Faker("sentence")
 
 
 class CategoryFactory(factory.django.DjangoModelFactory):

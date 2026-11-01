@@ -2,7 +2,7 @@
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import ValidationError as DjangoValidationError
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 # What ``Model.objects.get(id=<client value>)`` raises when no row matches: a
@@ -46,7 +46,11 @@ class IsOrgAdmin(BasePermission):
 
 
 class IsOrgAdminOrReadOnly(BasePermission):
-    """Let staff read, and admins write."""
+    """Let staff read, and admins write.
+
+    Checked before validation, so that an agent's answer doesn't depend on the body
+    sent, and doesn't tell what the validation would have refused.
+    """
 
     message = "Only admins can do this."
 
@@ -54,6 +58,12 @@ class IsOrgAdminOrReadOnly(BasePermission):
         if request.method in SAFE_METHODS:
             return IsOrgStaff().has_permission(request, view)
         return is_org_admin(request.user)
+
+
+def require_org_admin(user) -> None:
+    """Refuse the request unless ``user`` is an admin, for checks inside an action."""
+    if not is_org_admin(user):
+        raise PermissionDenied(IsOrgAdmin.message)
 
 
 def has_feature(feature: str) -> type[BasePermission]:
@@ -79,26 +89,56 @@ def has_feature(feature: str) -> type[BasePermission]:
     return _HasFeature
 
 
+def _impersonated_org(request):
+    """Return the organization a superuser's header names, None if it names none."""
+    org_id = request.META.get("HTTP_X_SHOWDESK_ORG")
+    if not org_id or not request.user.is_superuser:
+        return None
+    from apps.organizations.models import Organization
+
+    try:
+        return Organization.objects.get(id=org_id)
+    except LOOKUP_ERRORS:
+        return None
+
+
+def impersonates_no_organization(request) -> bool:
+    """Tell whether a superuser's header names an organization that doesn't resolve."""
+    return (
+        request.user.is_superuser
+        and bool(request.META.get("HTTP_X_SHOWDESK_ORG"))
+        and _impersonated_org(request) is None
+    )
+
+
 def get_active_org(request):
     """Return the effective organization for the current request.
 
     For superusers with an impersonated org (via X-Showdesk-Org header),
-    returns the impersonated org. Otherwise returns the user's own org.
+    returns the impersonated org. Otherwise returns the user's own org,
+    including when the header names an org that doesn't resolve: the frontend
+    persists the org it sends, and a stale one mustn't lock its user out.
 
     Note: This resolves the header lazily at call time (in the ViewSet),
     because DRF JWT authentication runs after Django middleware.
     """
-    if request.user.is_superuser:
-        org_id = request.META.get("HTTP_X_SHOWDESK_ORG")
-        if org_id:
-            from apps.organizations.models import Organization
-
-            try:
-                return Organization.objects.get(id=org_id)
-            except LOOKUP_ERRORS:
-                pass
     # Anonymous users reach this through AllowAny routes on scoped viewsets.
-    return getattr(request.user, "organization", None)
+    return _impersonated_org(request) or getattr(request.user, "organization", None)
+
+
+class HasStrictActiveOrg(BasePermission):
+    """Need an active organization, without ``get_active_org``'s fallback.
+
+    A superuser without one has to impersonate one first. An impersonation that
+    doesn't resolve is refused with a 400 rather than falling back on the
+    superuser's own organization: for routes showing personal data, that would
+    answer or write for an organization other than the one asked for.
+    """
+
+    def has_permission(self, request, view):
+        if impersonates_no_organization(request):
+            raise ValidationError({"detail": "Unknown organization."})
+        return get_active_org(request) is not None
 
 
 def require_active_org(request):

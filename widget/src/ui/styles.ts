@@ -794,6 +794,12 @@ export function injectStyles(primaryColor: string): void {
       padding: 8px 12px;
     }
 
+    .sd-input-error {
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: #b91c1c;
+    }
+
     .sd-input-row {
       display: flex;
       align-items: flex-end;

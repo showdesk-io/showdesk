@@ -7,10 +7,13 @@ from django.core.management import call_command
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
+from apps.tickets.models import WidgetSession
 from tests.factories import (
     AdminFactory,
     ArticleFactory,
     CategoryFactory,
+    CompanyFactory,
+    ContactFactory,
     EndUserFactory,
     OrganizationFactory,
     SLAPolicyFactory,
@@ -117,6 +120,24 @@ def test_article_category_and_author(org, other) -> None:
     output = _audit()
     assert _section(output, "article.category") == [str(bad.id)]
     assert _section(output, "article.author") == [str(bad.id)]
+
+
+def test_contact_links(org, other) -> None:
+    contact = ContactFactory(organization=other)
+    ticket = _ticket(org, contact=contact)
+    session = WidgetSession.objects.create(organization=org, contact=contact)
+    linked = ContactFactory(
+        organization=org, company=CompanyFactory(organization=other)
+    )
+    # The same links inside an organization aren't reported.
+    own = ContactFactory(organization=org, company=CompanyFactory(organization=org))
+    _ticket(org, contact=own)
+    WidgetSession.objects.create(organization=org, contact=own)
+
+    output = _audit()
+    assert _section(output, "ticket.contact") == [str(ticket.id)]
+    assert _section(output, "widget_session.contact") == [str(session.id)]
+    assert _section(output, "contact.company") == [str(linked.id)]
 
 
 def test_message_authors(org, other) -> None:

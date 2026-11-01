@@ -143,7 +143,7 @@ jobs:
           npm run build
 
   # ---------------------------------------------------------------------------
-  # Widget: lint + build
+  # Widget: type check + tests + build
   # ---------------------------------------------------------------------------
   widget-build:
     name: Widget Build
@@ -170,6 +170,11 @@ jobs:
         run: |
           cd widget
           npx tsc --noEmit
+
+      - name: Run tests
+        run: |
+          cd widget
+          npm test
 
       - name: Build widget
         run: |

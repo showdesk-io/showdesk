@@ -1,13 +1,18 @@
 """Serializers for ticket-related models."""
 
+from django.db.models import Count, Q
 from rest_framework import serializers
+from rest_framework.fields import empty
 
+from apps.contacts.attributes import is_storable
+from apps.contacts.models import Contact
+from apps.contacts.summary import ContactSummarySerializer
 from apps.core.permissions import get_active_org
 from apps.core.serializers import (
     OrgScopedPrimaryKeyRelatedField,
     read_only_organization_field,
 )
-from apps.organizations.models import Team, User
+from apps.organizations.models import RESERVED_EXTERNAL_ID_PREFIXES, Team, User
 from apps.organizations.serializers import UserSerializer
 
 from .models import (
@@ -200,6 +205,20 @@ ASSIGNABLE_AGENTS = User.objects.filter(
 )
 
 
+class TicketContactField(OrgScopedPrimaryKeyRelatedField):
+    """A contact of the active organization that a ticket can take.
+
+    An anonymized contact takes no more tickets, but a ticket can keep the one it has.
+    """
+
+    def get_queryset(self):
+        taken = Q(is_anonymized=False)
+        ticket = self.parent.instance
+        if ticket is not None:
+            taken |= Q(pk=ticket.contact_id)
+        return super().get_queryset().filter(taken)
+
+
 class TicketSerializer(serializers.ModelSerializer):
     """Serializer for the Ticket model."""
 
@@ -229,6 +248,11 @@ class TicketSerializer(serializers.ModelSerializer):
     sla_policy = OrgScopedPrimaryKeyRelatedField(
         queryset=SLAPolicy.objects.all(), required=False, allow_null=True
     )
+    contact = TicketContactField(
+        queryset=Contact.objects.all(), required=False, allow_null=True
+    )
+    contact_detail = ContactSummarySerializer(source="contact", read_only=True)
+    sender_verified = serializers.BooleanField(read_only=True, allow_null=True)
 
     class Meta:
         model = Ticket
@@ -245,6 +269,9 @@ class TicketSerializer(serializers.ModelSerializer):
             "requester_detail",
             "requester_name",
             "requester_email",
+            "contact",
+            "contact_detail",
+            "sender_verified",
             "assigned_agent",
             "assigned_agent_detail",
             "assigned_team",
@@ -278,6 +305,31 @@ class TicketSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    def update(self, instance, validated_data):
+        """Save only what the request sent, not what the view read before.
+
+        Saving the whole row could restore what an anonymization just removed.
+        """
+        tags = validated_data.pop("tags", None)
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        instance.save(update_fields=[*validated_data, "updated_at"])
+        if tags is not None:
+            instance.tags.set(tags)
+        return instance
+
+
+class WidgetSubmitResponseSerializer(serializers.ModelSerializer):
+    """What a widget gets back from a submission: what it reads, and nothing else.
+
+    The widget's token is public, and anyone can name an address to find out about the
+    contact holding it.
+    """
+
+    class Meta:
+        model = Ticket
+        fields = ["id", "reference"]
+
 
 class TicketAssignSerializer(serializers.Serializer):
     """Validates the body of the ticket ``assign`` action."""
@@ -304,7 +356,9 @@ class TicketListSerializer(serializers.ModelSerializer):
     requester_detail = UserSerializer(source="requester", read_only=True)
     assigned_agent_detail = UserSerializer(source="assigned_agent", read_only=True)
     tags_detail = TagSerializer(source="tags", many=True, read_only=True)
-    message_count = serializers.SerializerMethodField()
+    message_count = serializers.IntegerField(read_only=True)
+    contact_detail = ContactSummarySerializer(source="contact", read_only=True)
+    sender_verified = serializers.BooleanField(read_only=True, allow_null=True)
 
     class Meta:
         model = Ticket
@@ -320,6 +374,9 @@ class TicketListSerializer(serializers.ModelSerializer):
             "requester_detail",
             "requester_name",
             "requester_email",
+            "contact",
+            "contact_detail",
+            "sender_verified",
             "assigned_agent_detail",
             "assigned_team",
             "tags_detail",
@@ -329,9 +386,21 @@ class TicketListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def get_message_count(self, obj: Ticket) -> int:
-        """Return the number of messages on this ticket."""
-        return obj.messages.count()
+
+def ticket_list_rows(tickets):
+    """Return the rows ``TicketListSerializer`` shows, without an N+1.
+
+    Distinct: filtering on several tags joins them, one row per tag matched. Ordered
+    here, as Django drops ``Meta.ordering`` from a query with a GROUP BY.
+    """
+    return (
+        tickets.select_related(
+            "requester", "assigned_agent", "contact__company", "widget_session"
+        )
+        .prefetch_related("tags")
+        .annotate(message_count=Count("messages", distinct=True))
+        .order_by("-created_at", "-id")
+    )
 
 
 class TicketCreateFromWidgetSerializer(serializers.ModelSerializer):
@@ -482,6 +551,121 @@ class CannedResponseSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 # Widget messaging serializers
 # ---------------------------------------------------------------------------
+
+
+class StrictCharField(serializers.CharField):
+    """A CharField that refuses non-strings instead of coercing numbers."""
+
+    def run_validation(self, data=empty):
+        # Before the parent's str(data), a RecursionError on a deeply nested list.
+        if data is not empty and data is not None and not isinstance(data, str):
+            self.fail("invalid")
+        return super().run_validation(data)
+
+
+class WidgetHashField(serializers.Field):
+    """A hash signed by the host app. An invalid one is ignored, never a 400.
+
+    A hash of a shape no signature has reads as ``bad_shape``.
+    """
+
+    def __init__(self, *, bad_shape: str = "", **kwargs):
+        self.bad_shape = bad_shape
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        if isinstance(data, str) and len(data) <= 128 and data.isascii():
+            return data
+        return self.bad_shape
+
+
+class WidgetNameField(serializers.Field):
+    """A display name. Whatever can't be one is ignored, so it reads as absent."""
+
+    def __init__(self, **kwargs):
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        # A boolean isn't one: it would stick, a resume only fills a blank name.
+        if isinstance(data, (int, float)) and not isinstance(data, bool):
+            data = str(data)
+        if not isinstance(data, str) or not is_storable(data):
+            return None
+        return data.strip()[: WidgetSession._meta.get_field("name").max_length]
+
+
+class WidgetEmailField(serializers.Field):
+    """An email, only checked as text. A cut one would be somebody else's address."""
+
+    def __init__(self, **kwargs):
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        if not isinstance(data, str) or not is_storable(data):
+            return None
+        email = data.strip()
+        if len(email) > WidgetSession._meta.get_field("email").max_length:
+            return None
+        return email
+
+
+class WidgetObjectField(serializers.Field):
+    """A JSON object, for the service to look into. Anything else reads as absent."""
+
+    def __init__(self, **kwargs):
+        super().__init__(required=False, allow_null=True, **kwargs)
+
+    def to_internal_value(self, data):
+        return data if isinstance(data, dict) else None
+
+
+class WidgetExternalIdField(StrictCharField):
+    """A user id, as a string. A plain JavaScript host may pass an integer."""
+
+    def __init__(self, **kwargs):
+        super().__init__(
+            required=False,
+            allow_null=True,
+            allow_blank=True,
+            max_length=255,
+            trim_whitespace=False,  # The HMAC covers its exact value.
+            **kwargs,
+        )
+
+    def run_validation(self, data=empty):
+        if type(data) is int and abs(data) < 2**63:
+            data = str(data)
+        return super().run_validation(data)
+
+
+# A value no signature can equal: a digest is hexadecimal. A ``user_hash`` of a
+# bad shape must stay a wrong hash, not read as an id sent without one.
+BAD_SHAPE_USER_HASH = "invalid"
+
+
+class WidgetIdentitySerializer(serializers.Serializer):
+    """Read the identity fields of a widget session payload.
+
+    Null means absent. Only ``external_user_id`` is ever refused: everything else
+    is display data or a signature, and a host page that gets it wrong must not
+    stop the widget. ``email`` is only checked as text, since the widget's contact
+    form lets anything with an "@" through. Stored as is, it shows agents what was
+    typed, and the identity service ignores what isn't valid.
+    """
+
+    name = WidgetNameField()
+    email = WidgetEmailField()
+    external_user_id = WidgetExternalIdField()
+    user_hash = WidgetHashField(bad_shape=BAD_SHAPE_USER_HASH)
+    email_hash = WidgetHashField()
+    company_hash = WidgetHashField()
+    traits = WidgetObjectField()
+    company = WidgetObjectField()
+
+    def validate_external_user_id(self, value: str | None) -> str | None:
+        if value and value.startswith(RESERVED_EXTERNAL_ID_PREFIXES):
+            raise serializers.ValidationError("This prefix is reserved.")
+        return value
 
 
 class WidgetSessionSerializer(serializers.ModelSerializer):

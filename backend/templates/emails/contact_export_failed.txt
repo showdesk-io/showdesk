@@ -1,0 +1,6 @@
+{% extends "emails/base.txt" %}
+{% block content %}{% autoescape off %}{% if reason == "too_large" %}The data held about {{ contact_name }} is too large to attach to an email, so nothing was sent.
+
+Contact support and give them this contact's id: {{ contact_id }}.{% else %}Something went wrong while exporting the data held about {{ contact_name }}, and several attempts failed, so nothing was sent. You can request it again.
+
+If this keeps happening, contact support and give them this contact's id: {{ contact_id }}.{% endif %}{% endautoescape %}{% endblock %}

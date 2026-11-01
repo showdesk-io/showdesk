@@ -15,9 +15,10 @@ from collections.abc import Iterable
 from django.core.management.base import BaseCommand
 from django.db.models import F
 
+from apps.contacts.models import Contact
 from apps.knowledge_base.models import Article
 from apps.organizations.models import Team, User
-from apps.tickets.models import Ticket, TicketAttachment, TicketMessage
+from apps.tickets.models import Ticket, TicketAttachment, TicketMessage, WidgetSession
 
 
 def _foreign_key(model, field: str) -> Iterable:
@@ -82,7 +83,10 @@ class Command(BaseCommand):
             "ticket.assigned_team": _foreign_key(Ticket, "assigned_team"),
             "ticket.requester": _foreign_key(Ticket, "requester"),
             "ticket.sla_policy": _foreign_key(Ticket, "sla_policy"),
+            "ticket.contact": _foreign_key(Ticket, "contact"),
             "ticket.tags": _many_to_many(Ticket, "tags", "tag"),
+            "widget_session.contact": _foreign_key(WidgetSession, "contact"),
+            "contact.company": _foreign_key(Contact, "company"),
             "team.lead": _foreign_key(Team, "lead"),
             "team.members": _many_to_many(Team, "members", "user"),
             "article.category": _foreign_key(Article, "category"),

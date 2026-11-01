@@ -14,6 +14,13 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from apps.contacts.models import (
+    Company,
+    CompanyAttributeDef,
+    Contact,
+    ContactAttributeDef,
+)
+from apps.contacts.services import resolve_contact_for_ticket
 from apps.knowledge_base.models import Article, Category
 from apps.organizations.models import (
     SHOWDESK_INTERNAL_ORG_SLUG,
@@ -23,6 +30,15 @@ from apps.organizations.models import (
     User,
 )
 from apps.tickets.models import SLAPolicy, Tag, Ticket, TicketAttachment, TicketMessage
+
+CUSTOMER_DOMAIN = "customer.example"
+PERSONA_ATTRIBUTE = "persona"
+PERSONAS = {
+    "jane@customer.example": "admin",
+    "john@customer.example": "developer",
+    "maria@customer.example": "manager",
+}
+SEATS_ATTRIBUTE = "seats"
 
 
 class Command(BaseCommand):
@@ -54,6 +70,8 @@ class Command(BaseCommand):
         self._create_sla_policies(org)
         tickets = self._create_tickets(org, agents, end_users, tags, team)
         self._create_messages(tickets, agents, end_users)
+        company = self._create_company_and_attributes(org)
+        contacts = self._link_contacts(tickets)
         self._create_knowledge_base(org, agents[0])
 
         internal_org = self._create_internal_organization()
@@ -68,6 +86,8 @@ class Command(BaseCommand):
                 f"  Team: {team.name}\n"
                 f"  Tags: {', '.join(t.name for t in tags)}\n"
                 f"  Tickets: {len(tickets)}\n"
+                f"  Company: {company.name}\n"
+                f"  Contacts: {', '.join(sorted(c.email for c in contacts))}\n"
                 f"\n  Login with: admin@showdesk.local (OTP via email)\n"
                 f"  Emails visible at: http://localhost/mailpit/\n"
             )
@@ -78,6 +98,8 @@ class Command(BaseCommand):
         TicketMessage.objects.all().delete()
         TicketAttachment.objects.all().delete()
         Ticket.objects.all().delete()
+        Contact.objects.all().delete()
+        Company.objects.all().delete()
         Tag.objects.all().delete()
         SLAPolicy.objects.all().delete()
         Article.objects.all().delete()
@@ -537,6 +559,72 @@ class Command(BaseCommand):
             )
 
         self.stdout.write(f"  Created {len(messages_data)} messages")
+
+    def _create_company_and_attributes(self, org: Organization) -> Company:
+        """Create the customers' company and two attribute definitions."""
+        ContactAttributeDef.objects.get_or_create(
+            organization=org,
+            key=PERSONA_ATTRIBUTE,
+            defaults={
+                "label": "Persona",
+                "type": ContactAttributeDef.Type.ENUM,
+                "options": sorted(set(PERSONAS.values())),
+            },
+        )
+        CompanyAttributeDef.objects.get_or_create(
+            organization=org,
+            key=SEATS_ATTRIBUTE,
+            defaults={"label": "Seats", "type": CompanyAttributeDef.Type.NUMBER},
+        )
+        company, created = Company.objects.get_or_create(
+            organization=org,
+            domain=CUSTOMER_DOMAIN,
+            defaults={
+                "name": "Customer Inc",
+                "industry": "Software",
+                "size": "51-200",
+                "website": f"https://{CUSTOMER_DOMAIN}",
+                "plan": "Enterprise",
+                "attributes": {SEATS_ATTRIBUTE: 120},
+            },
+        )
+        if created:
+            self.stdout.write(f"  Created company: {company.name}")
+        return company
+
+    def _link_contacts(self, tickets: list[Ticket]) -> list[Contact]:
+        """Link tickets without a contact, and return the contacts of them all.
+
+        The company must exist by now: resolving a contact links it by email domain.
+        A contact is only filled in when first linked, so a re-run keeps later edits.
+        """
+        contacts: dict = {}
+        for ticket in tickets:
+            contact = ticket.contact
+            if contact is None:
+                contact = resolve_contact_for_ticket(ticket)
+                if contact is None:
+                    continue
+                # Linking isn't activity: no ``updated_at`` on the ticket.
+                Ticket.objects.filter(pk=ticket.pk).update(contact=contact)
+                if contact.last_seen_at is None:
+                    contact.first_seen_at = contact.last_seen_at = ticket.created_at
+                    if contact.email in PERSONAS:
+                        contact.attributes = {
+                            PERSONA_ATTRIBUTE: PERSONAS[contact.email],
+                            **contact.attributes,
+                        }
+                    contact.save(
+                        update_fields=[
+                            "first_seen_at",
+                            "last_seen_at",
+                            "attributes",
+                            "updated_at",
+                        ]
+                    )
+                self.stdout.write(f"  Linked {ticket.reference} to {contact.email}")
+            contacts[contact.pk] = contact
+        return list(contacts.values())
 
     def _create_internal_organization(self) -> Organization:
         """Get or create the Showdesk internal organization (dogfooding)."""

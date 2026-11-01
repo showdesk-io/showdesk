@@ -1,0 +1,9 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}The export of {{ contact_name }} could not be sent{% endblock %}
+
+{% block content %}
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">{% if reason == "too_large" %}This contact export is too large{% else %}This contact export failed{% endif %}</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">{% if reason == "too_large" %}The data held about <strong>{{ contact_name }}</strong> is too large to attach to an email, so nothing was sent.{% else %}Something went wrong while exporting the data held about <strong>{{ contact_name }}</strong>, and several attempts failed, so nothing was sent. You can request it again.{% endif %}</p>
+<p class="sd-muted" style="margin:20px 0 0 0;font-size:14px;line-height:22px;color:{{ brand.muted_color }};">{% if reason == "too_large" %}Contact support{% else %}If this keeps happening, contact support{% endif %} and give them this contact's id: {{ contact_id }}.</p>
+{% endblock %}

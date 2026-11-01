@@ -44,6 +44,44 @@ def _priority_label(ticket) -> str:
         return slug.replace("_", " ").title() or "—"
 
 
+def _requester_can_be_emailed(ticket) -> bool:
+    """Tell if the ticket has an address, and one that isn't an anonymized contact's.
+
+    Its contact says so. A ticket with none, scrubbed that way or left by a deleted
+    contact, only has the address to tell.
+    """
+    from apps.contacts.models import ANONYMIZED_EMAIL_DOMAIN
+
+    if not ticket.requester_email:
+        return False
+    if ticket.contact:
+        return not ticket.contact.is_anonymized
+    return not ticket.requester_email.lower().endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")
+
+
+def _reply_address(ticket) -> str:
+    """Return where an agent's reply goes, or "" if nowhere.
+
+    The ticket's address, or else what its contact holds: a resume doesn't fill in a
+    ticket, and an agent can link one. Not the contact of a ticket a login moved there,
+    who isn't necessarily who wrote it. ``is_unsubscribed`` doesn't come into it: it's
+    about non-essential email, and a reply to their own ticket isn't.
+    """
+    from apps.tickets.models import PRE_LOGIN_ANONYMOUS_KEY
+
+    if ticket.requester_email:
+        return ticket.requester_email if _requester_can_be_emailed(ticket) else ""
+    contact = ticket.contact
+    metadata = ticket.context_metadata
+    if (
+        contact is None
+        or contact.is_anonymized
+        or (isinstance(metadata, dict) and PRE_LOGIN_ANONYMOUS_KEY in metadata)
+    ):
+        return ""
+    return contact.email or contact.declared_email
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_ticket_created_email(self, ticket_id: str) -> None:
     """Notify agents when a new ticket is created.
@@ -129,7 +167,11 @@ def send_ticket_reply_email(self, message_id: str) -> None:
 
     try:
         message = TicketMessage.objects.select_related(
-            "ticket", "ticket__organization", "ticket__assigned_agent", "author"
+            "ticket",
+            "ticket__organization",
+            "ticket__assigned_agent",
+            "ticket__contact",
+            "author",
         ).get(id=message_id)
     except TicketMessage.DoesNotExist:
         logger.warning("Message %s not found, skipping email.", message_id)
@@ -144,10 +186,11 @@ def send_ticket_reply_email(self, message_id: str) -> None:
     is_agent_reply = author and author.role in (User.Role.AGENT, User.Role.ADMIN)
 
     if is_agent_reply:
-        if not ticket.requester_email:
-            logger.info("No requester email for ticket %s.", ticket.reference)
+        address = _reply_address(ticket)
+        if not address:
+            logger.info("No requester to email for ticket %s.", ticket.reference)
             return
-        recipients = [ticket.requester_email]
+        recipients = [address]
         author_label = (author.first_name or "").strip() or (
             author.email.split("@")[0] if author.email else "Support"
         )
@@ -257,11 +300,13 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
     from apps.tickets.models import Ticket
 
     try:
-        ticket = Ticket.objects.select_related("organization").get(id=ticket_id)
+        ticket = Ticket.objects.select_related("organization", "contact").get(
+            id=ticket_id
+        )
     except Ticket.DoesNotExist:
         return
 
-    if not ticket.requester_email:
+    if not _requester_can_be_emailed(ticket):
         return
 
     try:

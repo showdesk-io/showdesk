@@ -10,7 +10,9 @@ import { Link } from "react-router";
 import { fetchOrganization, fetchTicketStats } from "@/api/users";
 import { useTickets } from "@/hooks/useTickets";
 import { useCurrentUser } from "@/hooks/useAuth";
+import { isOrgAdmin } from "@/lib/permissions";
 import { StatusBadge, PriorityBadge } from "@/components/common/StatusBadge";
+import { requesterAddress } from "@/components/contacts/anonymized";
 
 export function DashboardPage() {
   const { data: user } = useCurrentUser();
@@ -24,9 +26,7 @@ export function DashboardPage() {
   });
   const { data: recentTickets } = useTickets({ page: 1 });
   const showOnboardingNudge =
-    !!org &&
-    !org.onboarding_completed_at &&
-    (user?.role === "admin" || !!user?.is_superuser);
+    !!org && !org.onboarding_completed_at && isOrgAdmin(user);
 
   const statCards = [
     {
@@ -148,7 +148,7 @@ export function DashboardPage() {
                     </span>
                   </div>
                   <p className="text-xs text-gray-500">
-                    {ticket.requester_detail?.email ?? ticket.requester_email}
+                    {requesterAddress(ticket)}
                     {" \u00B7 "}
                     {new Date(ticket.created_at).toLocaleDateString()}
                   </p>

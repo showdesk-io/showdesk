@@ -17,6 +17,7 @@ import {
   updateUser,
 } from "@/api/users";
 import { useCurrentUser } from "@/hooks/useAuth";
+import { isOrgAdmin } from "@/lib/permissions";
 import { useTags, useCreateTag, useUpdateTag, useDeleteTag } from "@/hooks/useTags";
 import {
   usePriorities,
@@ -43,6 +44,7 @@ import {
 } from "@/api/slaPolicies";
 import { AVAILABLE_VARIABLES } from "@/lib/cannedResponseVars";
 import type { Organization, Tag, User, UserRole } from "@/types";
+import { AttributeDefsTab } from "@/components/settings/AttributeDefsTab";
 import { DomainsList } from "@/components/settings/DomainsList";
 
 const tabs = [
@@ -51,6 +53,8 @@ const tabs = [
   "Priorities",
   "SLA",
   "Canned Responses",
+  "Contact attributes",
+  "Company attributes",
   "Widget",
   "Branding",
   "Organization",
@@ -69,8 +73,7 @@ const TABS_REQUIRING_FEATURE: Partial<Record<Tab, string>> = {
 export function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("Agents");
   const { data: currentUser } = useCurrentUser();
-  const isAdmin =
-    currentUser?.role === "admin" || false;
+  const isAdmin = isOrgAdmin(currentUser);
 
   // The /organizations/ payload now ships `enabled_features`; reuse the
   // same query key as the rest of the app so we hit the same cache.
@@ -95,7 +98,7 @@ export function SettingsPage() {
     <div className="flex h-full flex-col">
       <div className="border-b border-gray-200 bg-white px-6 pt-6">
         <h1 className="mb-4 text-2xl font-bold text-gray-900">Settings</h1>
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           {visibleTabs.map((tab) => (
             <button
               key={tab}
@@ -120,6 +123,12 @@ export function SettingsPage() {
         {activeTab === "SLA" && <SLATab isAdmin={isAdmin} />}
         {activeTab === "Canned Responses" && (
           <CannedResponsesTab currentUser={currentUser} />
+        )}
+        {activeTab === "Contact attributes" && (
+          <AttributeDefsTab entity="contact" isAdmin={isAdmin} />
+        )}
+        {activeTab === "Company attributes" && (
+          <AttributeDefsTab entity="company" isAdmin={isAdmin} />
         )}
         {activeTab === "Widget" && <WidgetTab isAdmin={isAdmin} />}
         {activeTab === "Branding" && <BrandingTab isAdmin={isAdmin} />}

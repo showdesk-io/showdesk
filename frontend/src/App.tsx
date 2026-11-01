@@ -9,6 +9,9 @@ import { TicketDetailPage } from "./pages/TicketDetailPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AdminPage } from "./pages/AdminPage";
 import { TeamPage } from "./pages/TeamPage";
+import { CompanyDetailPage } from "./pages/CompanyDetailPage";
+import { ContactDetailPage } from "./pages/ContactDetailPage";
+import { ContactsPage } from "./pages/ContactsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SignupPage } from "./pages/SignupPage";
@@ -39,6 +42,10 @@ export function App() {
         <Route index element={<DashboardPage />} />
         <Route path="tickets" element={<TicketListPage />} />
         <Route path="tickets/:id" element={<TicketDetailPage />} />
+        <Route path="contacts" element={<ContactsPage />} />
+        <Route path="contacts/:id" element={<ContactDetailPage />} />
+        <Route path="companies" element={<ContactsPage />} />
+        <Route path="companies/:id" element={<CompanyDetailPage />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route

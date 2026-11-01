@@ -6,10 +6,33 @@ import type { ConsoleEntry } from "./collectors/console-collector";
 import type { NetworkEntry } from "./collectors/network-collector";
 
 export interface ShowdeskUserIdentity {
-  id?: string;
+  /** A number is accepted, and signed as its decimal string. */
+  id?: string | number;
   name?: string;
   email?: string;
-  /** HMAC-SHA256(widget_secret, id) — computed server-side, enables ticket history. */
+  /**
+   * HMAC-SHA256(widget_secret, id) — computed on the host's server, identifies the
+   * user and enables ticket history.
+   */
+  hash?: string;
+  /** HMAC-SHA256(widget_secret, "email:" + lowercase email) — optional, proves the email. */
+  emailHash?: string;
+  /** Custom contact attributes (defined in Settings → Contact attributes). */
+  traits?: Record<string, unknown>;
+}
+
+export interface ShowdeskCompany {
+  /** A number is accepted, and signed as its decimal string. */
+  id: string | number;
+  name: string;
+  domain?: string;
+  /** Not signed. Only applied when the payload creates the company. */
+  traits?: Record<string, unknown>;
+  /**
+   * HMAC-SHA256(widget_secret, "company\n" + id + "\n" + name + "\n" + lowercase domain),
+   * with domain empty if absent — optional, lets the payload update the company's
+   * name and domain and move the contact to it. Doesn't cover traits.
+   */
   hash?: string;
 }
 
@@ -33,6 +56,8 @@ export interface ShowdeskConfig {
   hideButton: boolean;
   /** Optional user identity for pre-filling contact fields and tracking. */
   user?: ShowdeskUserIdentity;
+  /** Optional company of the user. Only honoured for HMAC-identified users. */
+  company?: ShowdeskCompany;
   /** Navigation mode: 'spa' (default) for single-page apps, 'mpa' for multi-page sites. */
   navigationMode: NavigationMode;
 }
