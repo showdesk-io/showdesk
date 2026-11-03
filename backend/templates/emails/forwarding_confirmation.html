@@ -1,0 +1,20 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}A mail claiming to come from Gmail reached {{ mailbox_name }}{% endblock %}
+
+{% block content %}
+<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">Email forwarding</div>
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">Confirm forwarding to {{ mailbox_name }}</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">
+  A Gmail forwarding confirmation reached <strong>{{ inbound_address }}</strong>, the inbound address of your {{ mailbox_name }} mailbox. If you set up forwarding from Gmail to this address, enter this code in Gmail's forwarding settings:
+</p>
+{% if code %}<p class="sd-text" style="margin:0 0 16px 0;font-size:22px;line-height:30px;font-weight:700;letter-spacing:0.08em;color:{{ brand.text_color }};">{{ code }}</p>{% endif %}
+{% if url %}<p class="sd-text sd-muted" style="margin:0 0 16px 0;font-size:14px;line-height:22px;color:{{ brand.muted_color }};word-break:break-all;">Or open this Google address: {{ url }}</p>{% endif %}
+<p class="sd-text sd-muted" style="margin:0 0 24px 0;font-size:14px;line-height:22px;color:{{ brand.muted_color }};">
+  If nobody in {{ org_name }} asked Gmail to forward mail here, ignore this email.
+</p>
+
+<div style="margin-top:8px;">
+  {% include "emails/_button.html" with url=settings_url label="Open settings" %}
+</div>
+{% endblock %}

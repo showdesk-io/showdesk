@@ -173,6 +173,17 @@ SAMPLES: dict[str, Callable[[], tuple[str, dict[str, Any]]]] = {
             "domain": "acme.com",
         },
     ),
+    "forwarding_confirmation": lambda: (
+        "Gmail forwarding confirmation for Support",
+        {
+            "org_name": "Acme",
+            "mailbox_name": "Support",
+            "inbound_address": "acme-x7k2m9ab3c@in.example.com",
+            "code": "614028937",
+            "url": "https://mail-settings.google.com/mail/vf-%5Bexample%5D-AbCd",
+            "settings_url": "https://app.showdesk.io/settings",
+        },
+    ),
     "contact_export_ready": lambda: (
         "Contact export ready",
         {
