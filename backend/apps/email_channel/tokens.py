@@ -20,8 +20,15 @@ _EMAIL_HASH_SALT = "showdesk.email_channel.email_hash"
 RENEWABLE_FOR = timedelta(days=180)
 
 
-def _reply_signature(ticket_hex: str) -> str:
-    return salted_hmac(_REPLY_SALT, ticket_hex, algorithm="sha256").hexdigest()[:16]
+def _secrets() -> list[str]:
+    """The keys a signature may have been made with: the current one, then the old."""
+    return [settings.SECRET_KEY, *settings.SECRET_KEY_FALLBACKS]
+
+
+def _reply_signature(ticket_hex: str, secret: str | None = None) -> str:
+    return salted_hmac(
+        _REPLY_SALT, ticket_hex, secret=secret, algorithm="sha256"
+    ).hexdigest()[:16]
 
 
 def reply_address(ticket) -> str:
@@ -42,7 +49,10 @@ def ticket_id_from_reply_address(address: str) -> uuid.UUID | None:
     if not local.startswith("reply+"):
         return None
     ticket_hex, _, signature = local.removeprefix("reply+").partition(".")
-    if not constant_time_compare(signature, _reply_signature(ticket_hex)):
+    if not any(
+        constant_time_compare(signature, _reply_signature(ticket_hex, secret))
+        for secret in _secrets()
+    ):
         return None
     try:
         return uuid.UUID(hex=ticket_hex)
@@ -50,13 +60,13 @@ def ticket_id_from_reply_address(address: str) -> uuid.UUID | None:
         return None
 
 
-def email_hash(email: str) -> str:
+def email_hash(email: str, secret: str | None = None) -> str:
     """A short keyed hash of an address, so that a link doesn't spell it out.
 
     Keyed, so that hashing a list of addresses doesn't find the one a link names.
     """
     return salted_hmac(
-        _EMAIL_HASH_SALT, email.strip().lower(), algorithm="sha256"
+        _EMAIL_HASH_SALT, email.strip().lower(), secret=secret, algorithm="sha256"
     ).hexdigest()[:16]
 
 
@@ -74,9 +84,13 @@ class ConversationClaim:
     email_hash: str
 
     def holds(self, email: str) -> bool:
-        """Tell if ``email`` is the address the link was mailed to."""
-        return bool(email.strip()) and constant_time_compare(
-            email_hash(email), self.email_hash
+        """Tell if ``email`` is the address the link was mailed to.
+
+        The hash may have been made with a key since rotated out of ``SECRET_KEY``.
+        """
+        return bool(email.strip()) and any(
+            constant_time_compare(email_hash(email, secret), self.email_hash)
+            for secret in _secrets()
         )
 
 

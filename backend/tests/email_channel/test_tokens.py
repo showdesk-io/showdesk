@@ -111,3 +111,25 @@ def test_an_outbound_message_id_is_stable_and_on_our_domain(settings):
     assert outbound_message_id(message) == f"<{message.id}@help.example.net>"
     settings.SITE_URL = ""
     assert outbound_message_id(message) == f"<{message.id}@localhost>"
+
+
+def test_addresses_and_links_survive_a_secret_key_rotation(settings):
+    ticket, contact = _ticket(), SimpleNamespace(id=uuid.uuid4())
+    old_key = settings.SECRET_KEY
+    address = reply_address(ticket)
+    token = conversation_token(ticket, contact, "ann@example.org")
+
+    settings.SECRET_KEY = "a-new-secret-key-" * 3
+    settings.SECRET_KEY_FALLBACKS = [old_key]
+
+    # Mail already sent, and links already mailed, keep working...
+    assert ticket_id_from_reply_address(address) == ticket.id
+    claim = read_conversation_token(token)
+    assert claim.holds("ann@example.org")
+    # ...while new ones are signed with the new key.
+    assert reply_address(ticket) != address
+    assert ticket_id_from_reply_address(reply_address(ticket)) == ticket.id
+
+    settings.SECRET_KEY_FALLBACKS = []
+    assert ticket_id_from_reply_address(address) is None
+    assert not claim.holds("ann@example.org")
