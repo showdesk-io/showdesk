@@ -47,7 +47,11 @@ import { CannedResponsePicker } from "./CannedResponsePicker";
 interface TicketDetailProps {
   ticket: Ticket;
   /** ``attachmentIds``: files already uploaded to the ticket, for this message. */
-  onSendMessage: (body: string, messageType: string, attachmentIds: string[]) => void;
+  onSendMessage: (
+    body: string,
+    messageType: string,
+    attachmentIds: string[],
+  ) => Promise<unknown> | void;
   isSending: boolean;
 }
 
@@ -187,11 +191,16 @@ export function TicketDetail({
       }
     }
 
-    onSendMessage(
-      messageBody.trim() ? messageBody : "",
-      isInternalNote ? "internal_note" : "reply",
-      attachmentIds,
-    );
+    try {
+      await onSendMessage(
+        messageBody.trim() ? messageBody : "",
+        isInternalNote ? "internal_note" : "reply",
+        attachmentIds,
+      );
+    } catch {
+      // Kept as written, with its uploaded files: a retry names them again.
+      return;
+    }
     setMessageBody("");
     setAttachedFiles([]);
     uploadedFiles.current.clear();

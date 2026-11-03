@@ -309,4 +309,29 @@ describe("TicketDetail reply with files", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith("", "reply", ["a9"]));
   });
+
+  it("keeps the reply and its uploaded files when sending it fails", async () => {
+    const upload = vi.mocked(uploadAttachment);
+    upload.mockResolvedValueOnce({ id: "a1" } as Awaited<ReturnType<typeof uploadAttachment>>);
+    const onSendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("down"))
+      .mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+    const { container } = renderDetail(makeTicket(), onSendMessage);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await user.upload(input, new File(["x"], "a.txt", { type: "text/plain" }));
+    await user.type(screen.getByPlaceholderText(/Write a reply/), "Hi");
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Write a reply/)).toHaveValue("Hi");
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalledTimes(2));
+    expect(onSendMessage).toHaveBeenLastCalledWith("Hi", "reply", ["a1"]);
+    expect(upload).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByText("a.txt")).not.toBeInTheDocument());
+  });
 });

@@ -16,19 +16,19 @@ export function TicketDetailPage() {
     body: string,
     messageType: string,
     attachmentIds: string[],
-  ) => {
-    createMessage.mutate(
-      { body, message_type: messageType, attachment_ids: attachmentIds },
-      {
-        onSuccess: () => {
+  ) =>
+    // Rejects on failure, so the composer keeps the reply and its files.
+    createMessage
+      .mutateAsync({ body, message_type: messageType, attachment_ids: attachmentIds })
+      .then(
+        () => {
           toast.success("Message sent.");
         },
-        onError: () => {
+        (error: unknown) => {
           toast.error("Failed to send message.");
+          throw error;
         },
-      },
-    );
-  };
+      );
 
   if (isLoading) {
     return (
