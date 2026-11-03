@@ -142,6 +142,18 @@ REST_FRAMEWORK = {
         "conversation_read": config("CONVERSATION_READ_RATE", default="60/minute"),
         "conversation_write": config("CONVERSATION_WRITE_RATE", default="20/minute"),
         "conversation_renew": config("CONVERSATION_RENEW_RATE", default="10/hour"),
+        # The widget's email code, apart from login codes. Per address, the
+        # session's, whichever session asks.
+        "widget_email_code_ip": config("WIDGET_EMAIL_CODE_IP_RATE", default="30/hour"),
+        "widget_email_code_email": config(
+            "WIDGET_EMAIL_CODE_EMAIL_RATE", default="5/hour"
+        ),
+        "widget_email_verify_ip": config(
+            "WIDGET_EMAIL_VERIFY_IP_RATE", default="60/hour"
+        ),
+        "widget_email_verify_email": config(
+            "WIDGET_EMAIL_VERIFY_EMAIL_RATE", default="10/hour"
+        ),
     },
 }
 

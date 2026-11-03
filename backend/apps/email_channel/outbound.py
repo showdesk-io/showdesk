@@ -10,18 +10,17 @@ from email.utils import formataddr, parseaddr
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db.models import Q
 
 from apps.email_channel import presence
 from apps.email_channel.content import REPLY_MARKER
 from apps.email_channel.models import Mailbox
 from apps.email_channel.recipients import one_line
 from apps.email_channel.tokens import conversation_token, reply_address
+from apps.tickets.access import ticket_session_ids
 from apps.tickets.models import (
     PRE_LOGIN_ANONYMOUS_KEY,
     Ticket,
     TicketMessage,
-    WidgetSession,
 )
 
 # Enough for a mail client to thread on, and a bound on the headers of a long one.
@@ -44,13 +43,12 @@ class Delivery(enum.StrEnum):
 
 
 def entitled_session_ids(ticket) -> list[str]:
-    """The widget sessions where ``ticket``'s replies show: the one that opened it."""
-    return [
-        str(session_id)
-        for session_id in WidgetSession.objects.filter(
-            Q(pk=ticket.widget_session_id)
-        ).values_list("id", flat=True)
-    ]
+    """The widget sessions where ``ticket``'s replies show.
+
+    The one that opened it, its external user's, and those that may see its
+    contact's history (``apps.tickets.access``).
+    """
+    return ticket_session_ids(ticket)
 
 
 def suppressed_by_unsubscribe(ticket) -> bool:

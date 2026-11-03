@@ -478,3 +478,37 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
     except Exception as exc:
         logger.exception("Failed to send resolved email for %s", ticket.reference)
         raise self.retry(exc=exc)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_widget_email_code(self, otp_id: str, organization_id: str) -> None:
+    """Mail a widget visitor the code proving their email (§6.2).
+
+    By id: the code itself never goes through the broker. Not once it's used or
+    replaced by a newer one.
+    """
+    from apps.organizations.models import Organization, OTPCode
+
+    otp = OTPCode.objects.filter(
+        pk=otp_id,
+        purpose=OTPCode.Purpose.WIDGET_EMAIL,
+        used_at__isnull=True,
+    ).first()
+    organization = Organization.objects.filter(pk=organization_id).first()
+    if otp is None or organization is None:
+        return
+    try:
+        send_branded_email(
+            template="widget_email_code",
+            subject=f"Your code to see your conversations with {organization.name}",
+            to=[otp.email],
+            organization=organization,
+            context={
+                "organization": organization,
+                "code": otp.code,
+                "expiry_minutes": getattr(settings, "OTP_EXPIRY_SECONDS", 600) // 60,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Failed to send a widget email code")
+        raise self.retry(exc=exc)

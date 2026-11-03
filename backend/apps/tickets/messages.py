@@ -42,13 +42,17 @@ def lock_ticket_with_contact(ticket_id) -> tuple[Ticket | None, Contact | None]:
 
 
 def create_user_message(
-    ticket, *, only_contacts_session: bool = False, **fields
+    ticket, *, session=None, only_contacts_session: bool = False, **fields
 ) -> TicketMessage:
     """Create a requester's message on the session its ticket is on now.
 
     A login may have moved the ticket since the request found it through the anonymous
     session. Under this lock, either the login is over and the message follows the
     ticket, or it's still to come and it will move the committed message.
+
+    ``session`` is the widget session writing, if any. When ``ticket`` as the request
+    found it wasn't on that session, it found it through the contact's history: the
+    message is then that session's, the one that may delete it.
 
     ``only_contacts_session`` leaves the message off a session that isn't the ticket
     contact's, for a writer who isn't that session (the conversation page).
@@ -60,6 +64,8 @@ def create_user_message(
         if locked is None or (contact is not None and contact.is_anonymized):
             raise MessageRefused
         session_id = locked.widget_session_id
+        if session is not None and ticket.widget_session_id != session.pk:
+            session_id = session.pk
         if (
             only_contacts_session
             and session_id

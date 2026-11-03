@@ -149,6 +149,10 @@ class WidgetSession(TimestampedModel):
     are identified only by their UUID, stored in the browser's localStorage.
     """
 
+    class ProofSource(models.TextChoices):
+        SIGNED = "signed", "Signed by the host app"
+        CODE = "code", "Code sent by email"
+
     organization = models.ForeignKey(
         "organizations.Organization",
         on_delete=models.CASCADE,
@@ -176,6 +180,14 @@ class WidgetSession(TimestampedModel):
         null=True,
         blank=True,
         help_text="Set when this session proved ownership of its email.",
+    )
+    email_proof_source = models.CharField(
+        max_length=10,
+        choices=ProofSource.choices,
+        blank=True,
+        default="",
+        help_text="How the email was proven. Only a signed proof is lost on an "
+        "unsigned page (logout).",
     )
 
     class Meta:

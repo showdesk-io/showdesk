@@ -199,12 +199,14 @@ a malformed `external_user_id` is a 400.
    session id alone (`X-Widget-Session`), so an id stays a bearer token (see §8). The
    session id the widget stored decides what an init does:
    - **Anonymous, no valid hash**: resumed. An id sent without a valid hash is ignored.
-   - **Anonymous with a proven email, no valid hash and no valid `email_hash`
+   - **Anonymous with a signed email, no valid hash and no valid `email_hash`
      (logout)**: handled as an identified session's logout below: a new anonymous
      session, the stored one left as it is. The proof stays true of what that session
      wrote, and nothing new is written under it. An integrator signing the email on every
      init keeps its session. A wrong `user_hash` here is refused (403) as on an identified
-     session, since nothing else in the request proves anything.
+     session, since nothing else in the request proves anything. An email proven by a
+     code mailed to it (`WidgetSession.email_proof_source = code`, email channel design
+     §6.2) isn't lost this way: a page that never signs couldn't sign it again.
    - **Anonymous, valid hash (login)**: the identified session is found or created,
      and returned for the widget to store instead. In one transaction, within the
      organization, the anonymous session's tickets move to it and to its Contact
@@ -476,8 +478,8 @@ in the widget.
   whoever kept it: only `POST` resume is gated by the hash (rule 8).
 - Pages with and without identity on one origin share the stored id, so each switch from
   a signed page to an unsigned one creates a new anonymous session. The same goes for a
-  session proven by `email_hash`, and for the email channel's later proof of ownership
-  when it adds one, unless that channel gives the widget something to sign with.
+  session proven by `email_hash`, but not for one proven by a code: that proof stays on
+  the browser's session until its email changes, logout or not.
 - A message posted through the email channel's conversation link doesn't make the
   ticket's `sender_verified` true. The link proves who holds the mailbox now, not who
   wrote the ticket: someone can file a ticket under another's address, and that

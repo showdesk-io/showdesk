@@ -14,6 +14,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.contacts.attributes import is_storable
+from apps.contacts.models import Contact
 from apps.contacts.services import (
     delete_contact_if_left_empty,
     resolve_contact_for_email,
@@ -31,6 +32,8 @@ from apps.core.permissions import (
     require_active_org,
 )
 from apps.core.throttling import (
+    WIDGET_EMAIL_CODE_THROTTLES,
+    WIDGET_EMAIL_VERIFY_THROTTLES,
     WidgetMessageThrottle,
     WidgetSessionThrottle,
     WidgetSubmitThrottle,
@@ -46,10 +49,12 @@ from apps.notifications.signals import (
 from apps.organizations.models import (
     RESERVED_EXTERNAL_ID_PREFIXES,
     Organization,
+    OTPCode,
     Team,
     User,
 )
 
+from .access import session_tickets
 from .messages import MessageRefused, create_user_message
 from .models import (
     PRE_LOGIN_ANONYMOUS_KEY,
@@ -87,6 +92,7 @@ from .tasks import (
     send_ticket_assigned_email,
     send_ticket_created_email,
     send_ticket_resolved_email,
+    send_widget_email_code,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,7 +205,8 @@ def _record_session_resume(
         fields.append("email")
         if session.email_verified_at:
             session.email_verified_at = None
-            fields.append("email_verified_at")
+            session.email_proof_source = ""
+            fields += ["email_verified_at", "email_proof_source"]
     session.save(update_fields=fields)
 
 
@@ -222,8 +229,15 @@ def _contact_claims(identity) -> dict:
 
 
 def _link_session_contact(
-    org, session, *, email_hash=None, company_hash=None, traits=None, company=None
-) -> None:
+    org,
+    session,
+    *,
+    email_hash=None,
+    company_hash=None,
+    traits=None,
+    company=None,
+    code_proof=False,
+) -> bool:
     """Resolve the session's contact from the widget init payload.
 
     All of it is validated ``WidgetIdentitySerializer`` data. ``email_hash`` and
@@ -232,24 +246,46 @@ def _link_session_contact(
     reason a database error (a conflict the service's retry couldn't settle, a
     deadlock, a lock timeout) is logged, and the session goes on without a contact
     until the next init.
+
+    ``code_proof`` is True once the session redeemed a code mailed to its email.
+    Return whether the email is proven: the contact ends up holding it. The session
+    then records how (``email_proof_source``), which decides what a later unsigned
+    init does with it (Contacts design §3 rule 8).
     """
-    email_verified = bool(
+    signed = bool(
         session.email
         and email_hash
         and org.verify_email_hash(session.email, email_hash)
     )
+    email_verified = code_proof or signed
     previous_contact_id = session.contact_id
+    previous_source = session.email_proof_source
+    proven = False
     try:
         # Together: the tickets only get linked when the contact changes, so a
         # contact committed without them would leave them unlinked for good.
         with transaction.atomic():
-            resolve_contact_for_widget_session(
+            contact = resolve_contact_for_widget_session(
                 session,
                 email_verified=email_verified,
                 traits=traits,
                 company=company,
                 company_verified=_company_hash_is_valid(org, company, company_hash),
             )
+            proven = bool(
+                email_verified
+                and contact is not None
+                and session.email_verified_at
+                and contact.email == session.email.strip().lower()
+            )
+            source = (
+                WidgetSession.ProofSource.CODE
+                if code_proof
+                else WidgetSession.ProofSource.SIGNED
+            )
+            if proven and session.email_proof_source != source:
+                session.email_proof_source = source
+                session.save(update_fields=["email_proof_source", "updated_at"])
             # The normal flow is first message, then contact nudge: tickets opened
             # before the session had a contact would otherwise never get one. Only
             # then: on any other visit, a ticket without a contact is one an agent
@@ -260,10 +296,13 @@ def _link_session_contact(
                 ).update(contact_id=session.contact_id)
     except DatabaseError:
         session.contact_id = previous_contact_id
+        session.email_proof_source = previous_source
         logger.exception(
             "Could not link widget session %s to a contact",
             _session_digest(session.pk),
         )
+        return False
+    return proven
 
 
 def _update_session(request, org, identity) -> Response:
@@ -281,7 +320,8 @@ def _update_session(request, org, identity) -> Response:
         # The proof was about the previous email.
         if email.lower() != session.email.strip().lower():
             session.email_verified_at = None
-            fields.append("email_verified_at")
+            session.email_proof_source = ""
+            fields += ["email_verified_at", "email_proof_source"]
         session.email = email
         fields.append("email")
     session.save(update_fields=fields)
@@ -296,6 +336,33 @@ def _update_session(request, org, identity) -> Response:
         tickets.filter(requester_email="").update(requester_email=session.email)
     _link_session_contact(org, session, **_contact_claims(identity))
     return Response(WidgetSessionSerializer(session).data)
+
+
+def _proof_would_open(org, session, email: str) -> bool:
+    """Tell if proving ``email`` would show this session conversations it can't see.
+
+    Those of the contact holding the address, when the proof would reach it: an
+    anonymous session links to that contact, an identified one only takes an
+    email-only contact's history into its own contact with no email (Contacts design
+    §3 rule 1). Anywhere else, a code would prove nothing.
+    """
+    holder = Contact.objects.filter(
+        organization=org, email=email, is_anonymized=False
+    ).first()
+    if holder is None:
+        return False
+    if session.external_user_id:
+        own = Contact.objects.filter(
+            organization=org, external_id=session.external_user_id
+        ).first()
+        reunites = not holder.external_id and (own is None or not own.email)
+        if (own is None or own.pk != holder.pk) and not reunites:
+            return False
+    return (
+        Ticket.objects.filter(organization=org, contact=holder)
+        .exclude(pk__in=session_tickets(session).values("pk"))
+        .exists()
+    )
 
 
 def _ticket_context(context) -> dict:
@@ -378,6 +445,7 @@ def _move_conversation_to_identified_session(org, anonymous, identified) -> None
             email="",
             user_agent="",
             email_verified_at=None,
+            email_proof_source="",
             contact=None,
             updated_at=timezone.now(),
         )
@@ -409,8 +477,8 @@ def _create_or_resume_session(request, org, identity) -> Response:
     the widget stored then decides what happens:
 
     - Anonymous, no valid hash: it goes on, whatever the id sent.
-    - Anonymous with a proven email, no valid hash and no valid ``email_hash``: a
-      logout, as on an identified session below. What it proved stays true of what
+    - Anonymous with a signed email, no valid hash and no valid ``email_hash``: a
+      logout, as on an identified session below. An email proven by a code stays. What it proved stays true of what
       it wrote, and the next tickets aren't written under that proof.
     - Anonymous, valid hash: a login. The identified session replaces it, and takes
       its conversations.
@@ -434,8 +502,11 @@ def _create_or_resume_session(request, org, identity) -> Response:
             and user_hash
             and org.verify_user_hash(external_user_id, user_hash)
         )
-        lost_proof = bool(stored.email_verified_at) and not org.verify_email_hash(
-            email or stored.email, claims["email_hash"]
+        # A code proof stays: a page that never signs couldn't sign it again.
+        lost_proof = (
+            bool(stored.email_verified_at)
+            and stored.email_proof_source != WidgetSession.ProofSource.CODE
+            and not org.verify_email_hash(email or stored.email, claims["email_hash"])
         )
         if not is_login and not lost_proof:
             _record_session_resume(org, stored, name, email, claims["email_hash"])
@@ -1106,11 +1177,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Create or retrieve ticket
         if ticket_id:
             try:
-                ticket = Ticket.objects.get(
-                    id=ticket_id,
-                    organization=org,
-                    widget_session=session,
-                )
+                ticket = session_tickets(session).get(id=ticket_id)
             except LOOKUP_ERRORS:
                 return Response(
                     {"error": "Ticket not found."},
@@ -1142,7 +1209,9 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         # Create message
         try:
-            message = create_user_message(ticket, body=body, body_type=body_type)
+            message = create_user_message(
+                ticket, session=session, body=body, body_type=body_type
+            )
         except MessageRefused:
             return Response(
                 {"error": "Ticket not found."},
@@ -1199,11 +1268,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Create or retrieve ticket
         if ticket_id:
             try:
-                ticket = Ticket.objects.get(
-                    id=ticket_id,
-                    organization=org,
-                    widget_session=session,
-                )
+                ticket = session_tickets(session).get(id=ticket_id)
             except LOOKUP_ERRORS:
                 return Response(
                     {"error": "Ticket not found."},
@@ -1233,7 +1298,9 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         # Create message
         try:
-            message = create_user_message(ticket, body=body, body_type=body_type)
+            message = create_user_message(
+                ticket, session=session, body=body, body_type=body_type
+            )
         except MessageRefused:
             return Response(
                 {"error": "Ticket not found."},
@@ -1313,11 +1380,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            ticket = Ticket.objects.get(
-                id=ticket_id,
-                organization=org,
-                widget_session=session,
-            )
+            ticket = session_tickets(session).get(id=ticket_id)
         except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
@@ -1356,15 +1419,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         if err:
             return err
 
-        # Find tickets by session, or by external_user_id for cross-session history
-        q = models.Q(widget_session=session)
-        if session.external_user_id:
-            q |= models.Q(
-                external_user_id=session.external_user_id,
-                organization=org,
-            )
-
-        tickets = Ticket.objects.filter(q).order_by("-updated_at")[:30]
+        tickets = session_tickets(session).order_by("-updated_at")[:30]
         serializer = WidgetConversationListSerializer(tickets, many=True)
         return Response(serializer.data)
 
@@ -1395,11 +1450,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            ticket = Ticket.objects.get(
-                id=ticket_id,
-                organization=org,
-                widget_session=session,
-            )
+            ticket = session_tickets(session).get(id=ticket_id)
         except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
@@ -1471,6 +1522,75 @@ class TicketViewSet(viewsets.ModelViewSet):
             )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[AllowAny],
+        throttle_classes=WIDGET_EMAIL_CODE_THROTTLES,
+        url_path="widget_email_code",
+    )
+    def widget_email_code(self, request):
+        """Mail a code proving the session's email, if it would open anything.
+
+        Always the same answer, whatever is behind the address: the email is only
+        declared, and anyone could type somebody else's to learn whether it's a
+        customer (Decision A). The code only goes when the contact holding it has
+        conversations this session can't see yet, and a proof would open them.
+        """
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+        email = session.email.strip().lower()
+        if (
+            email
+            and session.email_verified_at is None
+            and _proof_would_open(org, session, email)
+        ):
+            otp = OTPCode.generate(email, purpose=OTPCode.Purpose.WIDGET_EMAIL)
+            send_widget_email_code.delay(str(otp.pk), str(org.pk))
+        return Response(
+            {"detail": "If there is anything to see, a code is on its way."},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[AllowAny],
+        throttle_classes=WIDGET_EMAIL_VERIFY_THROTTLES,
+        url_path="widget_email_verify",
+    )
+    def widget_email_verify(self, request):
+        """Prove the session's email with the code mailed to it.
+
+        A wrong, expired or malformed code, or one never sent, is the same 400.
+        ``verified`` is true only if the contact ended up holding the address: an
+        identified session's contact holding another email proves nothing.
+        """
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+        email = session.email.strip().lower()
+        code = request.data.get("code") if hasattr(request.data, "get") else None
+        if (
+            not email
+            or not isinstance(code, str)
+            or OTPCode.redeem(email, code.strip(), purpose=OTPCode.Purpose.WIDGET_EMAIL)
+            is None
+        ):
+            return Response(
+                {"error": "Invalid or expired code."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        verified = _link_session_contact(org, session, code_proof=True)
+        return Response({"verified": verified})
 
 
 class TicketMessageViewSet(viewsets.ModelViewSet):

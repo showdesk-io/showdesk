@@ -5,6 +5,8 @@ import logging
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
+from apps.tickets.access import ticket_session_ids
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,8 +53,9 @@ def notify_new_ticket(ticket) -> None:
 def notify_new_message(message) -> None:
     """Send a new message notification to the organization channel.
 
-    Also broadcasts to the widget session group if the ticket was created
-    from the widget, so the end-user receives agent replies in real-time.
+    Also broadcasts to the group of each widget session that sees the ticket (the
+    one that opened it, and those entitled to its contact's history), so the
+    end-user receives agent replies in real-time.
     """
     channel_layer = get_channel_layer()
     group_name = f"org_{message.ticket.organization_id}"
@@ -79,24 +82,23 @@ def notify_new_message(message) -> None:
     )
 
     # Broadcast to widget session for real-time chat (never send internal notes)
-    widget_session_id = message.ticket.widget_session_id
-    if widget_session_id and message.message_type != "internal_note":
-        async_to_sync(channel_layer.group_send)(
-            f"widget_session_{widget_session_id}",
-            {
-                "type": "widget_message",
-                "data": {
-                    "event": "message.created",
-                    "ticket_id": str(message.ticket_id),
-                    "message_id": str(message.id),
-                    "body": message.body,
-                    "body_type": getattr(message, "body_type", "text"),
-                    "sender_type": getattr(message, "sender_type", "agent"),
-                    "sender_name": message.sender_name,
-                    "created_at": message.created_at.isoformat(),
-                },
-            },
-        )
+    if message.message_type == "internal_note":
+        return
+    event = {
+        "type": "widget_message",
+        "data": {
+            "event": "message.created",
+            "ticket_id": str(message.ticket_id),
+            "message_id": str(message.id),
+            "body": message.body,
+            "body_type": getattr(message, "body_type", "text"),
+            "sender_type": getattr(message, "sender_type", "agent"),
+            "sender_name": message.sender_name,
+            "created_at": message.created_at.isoformat(),
+        },
+    }
+    for session_id in ticket_session_ids(message.ticket):
+        async_to_sync(channel_layer.group_send)(f"widget_session_{session_id}", event)
 
 
 def notify_message_deleted(ticket, message_id: str) -> None:

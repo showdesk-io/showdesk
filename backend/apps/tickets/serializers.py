@@ -651,6 +651,7 @@ class WidgetSessionSerializer(serializers.ModelSerializer):
     """Serializer for widget session creation and display."""
 
     session_id = serializers.UUIDField(source="id", read_only=True)
+    email_proof_offered = serializers.SerializerMethodField()
 
     class Meta:
         model = WidgetSession
@@ -659,8 +660,16 @@ class WidgetSessionSerializer(serializers.ModelSerializer):
             "name",
             "email",
             "external_user_id",
+            "email_proof_offered",
         ]
         read_only_fields = ["session_id"]
+
+    def get_email_proof_offered(self, obj: WidgetSession) -> bool:
+        """Whether the widget offers a code: an email without a proof.
+
+        Whatever exists behind the address, so the answer tells nothing about it.
+        """
+        return bool(obj.email.strip()) and obj.email_verified_at is None
 
 
 class WidgetMessageCreateSerializer(serializers.Serializer):

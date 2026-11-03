@@ -303,11 +303,15 @@ showing the channel.
 
 - **Signed email** (`email_hash`, delivered with Contacts): the session is
   verified on init.
-- **One-time code**: when a session has a declared but unproven email and the
-  Contact owning it in `Contact.email` has tickets outside this session, the
-  widget offers
-  "You have N email conversations — get a code to see them". Six-digit code
-  via the existing `OTPCode` (expiry, attempt limit, throttling).
+- **One-time code**: when a session has a declared but unproven email, the widget
+  offers "Have earlier conversations by email? Get a code", whatever exists behind
+  the address: the email is only declared, so a count would tell anyone whether an
+  address is a customer's (Decision A of the implementation plan). The route always
+  answers 202, and a code is only mailed when the Contact owning the address in
+  `Contact.email` has tickets outside this session that the proof would open.
+  Six-digit code via the existing `OTPCode`, with its own purpose (`widget_email`)
+  and throttles, so it neither spends nor cancels a login code. A code proof is
+  recorded as such (`email_proof_source = code`) and survives an unsigned init.
 - Proof is stored **per session** (`WidgetSession.email_verified_at`); a
   verification made elsewhere never opens anything in this session.
 - Widget history = session tickets ∪ `external_user_id` tickets (unchanged) ∪

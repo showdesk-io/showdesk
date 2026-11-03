@@ -120,3 +120,65 @@ class ConversationWriteThrottle(_ConversationThrottle):
 
 class ConversationRenewThrottle(_ConversationThrottle):
     scope = "conversation_renew"
+
+
+def _widget_session_email(request) -> str | None:
+    """Return the normalized email of the widget session a request names, if any."""
+    from apps.core.permissions import LOOKUP_ERRORS
+    from apps.tickets.models import WidgetSession
+
+    session_id = request.headers.get("X-Widget-Session")
+    if not session_id:
+        return None
+    try:
+        email = (
+            WidgetSession.objects.filter(pk=session_id)
+            .values_list("email", flat=True)
+            .first()
+        )
+    except LOOKUP_ERRORS:
+        return None
+    email = (email or "").strip().lower()
+    return email or None
+
+
+class _WidgetEmailThrottle(SimpleRateThrottle):
+    """Count a widget email code's traffic per address, whichever session asks.
+
+    The address is the session's own, since the widget sends none. A request with
+    no session or no email isn't counted here: the view refuses it or does nothing.
+    """
+
+    def get_cache_key(self, request, view) -> str | None:
+        email = _widget_session_email(request)
+        if email is None:
+            return None
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": hashlib.sha256(email.encode()).hexdigest(),
+        }
+
+
+class WidgetEmailCodeIPThrottle(_OTPIPThrottle):
+    scope = "widget_email_code_ip"
+
+
+class WidgetEmailCodeEmailThrottle(_WidgetEmailThrottle):
+    scope = "widget_email_code_email"
+
+
+class WidgetEmailVerifyIPThrottle(_OTPIPThrottle):
+    scope = "widget_email_verify_ip"
+
+
+class WidgetEmailVerifyEmailThrottle(_WidgetEmailThrottle):
+    scope = "widget_email_verify_email"
+
+
+# Their own scopes: a widget visitor naming someone's address must not use up the
+# login codes that person can ask for.
+WIDGET_EMAIL_CODE_THROTTLES = [WidgetEmailCodeIPThrottle, WidgetEmailCodeEmailThrottle]
+WIDGET_EMAIL_VERIFY_THROTTLES = [
+    WidgetEmailVerifyIPThrottle,
+    WidgetEmailVerifyEmailThrottle,
+]
