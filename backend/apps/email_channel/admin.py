@@ -43,3 +43,6 @@ class InboundEmailAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     ]
+
+    def has_add_permission(self, request) -> bool:
+        return False
