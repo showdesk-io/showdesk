@@ -32,11 +32,11 @@ The code showed these. Each one is pinned by a test in the task named.
 | 10 | Agents' own addresses never become contacts on inbound mail, as on API tickets. | Contacts §5: "an agent, admin or superuser never becomes a Contact". | 8 |
 | 11 | Reuniting history on proof (Contacts §8) moves tickets, sessions and notes from the email-only contact to the identified one, fills the blanks, keeps an unsubscription, then deletes the email-only row. | The email has to move for the proof to hold, and an emptied row would hold nothing. Only on a proof, and only from an email-only contact. | 13 |
 
-### Decisions for Dimitri
+### Decisions taken (Dimitri, 2026-11-03)
 
-**A. The widget's code banner (§6.2).** The design shows "You have N email conversations", and only when such tickets exist. Since the widget's email is declared by the page, anyone could type an address and learn whether it's a customer and how many conversations they have. **This plan:** the same neutral banner for every unproven email ("Have earlier conversations by email? Get a code"), always a 202, and a mail is only sent when there's something to see.
+**A. The widget's code banner (§6.2).** The design shows "You have N email conversations", and only when such tickets exist. Since the widget's email is declared by the page, anyone could type an address and learn whether it's a customer and how many conversations they have. **Decided:** the same neutral banner for every unproven email ("Have earlier conversations by email? Get a code"), always a 202, and a mail is only sent when there's something to see.
 
-**B. Unsubscribed contacts.** Contacts §5 says a reply on the contact's own ticket is essential. The email design §5.2 suppresses replies except on tickets opened by email. **This plan** follows the email design, the more specific of the two, and corrects Contacts §5: an unsubscribed contact gets no email for a widget ticket and finds the reply in the widget.
+**B. Unsubscribed contacts.** Contacts §5 says a reply on the contact's own ticket is essential. The email design §5.2 suppresses replies except on tickets opened by email. **Decided:** follow the email design, and correct Contacts §5: an unsubscribed contact gets no email for a widget ticket and finds the reply in the widget.
 
 ---
 
