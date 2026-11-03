@@ -232,6 +232,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.organizations.tasks.recheck_dns_pending_domains",
         "schedule": 60 * 15,  # Every 15 minutes
     },
+    "requeue-stale-inbound-emails": {
+        "task": "apps.email_channel.tasks.requeue_stale_inbound",
+        "schedule": 60 * 10,
+    },
 }
 
 # =============================================================================

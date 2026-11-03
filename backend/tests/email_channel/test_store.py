@@ -1,16 +1,24 @@
 """Storing what arrives: once, with its raw mail, before any processing."""
 
+from datetime import timedelta
 from io import StringIO
 from unittest import mock
 
 import pytest
 from django.core.management import call_command
+from django.utils import timezone
 
 from apps.email_channel.inbound import store
 from apps.email_channel.models import InboundEmail
+from apps.email_channel.tasks import requeue_stale_inbound
 from apps.email_channel.tokens import reply_address
 from tests.email_channel.mails import build, fixture_bytes, parse
-from tests.factories import MailboxFactory, OrganizationFactory, TicketFactory
+from tests.factories import (
+    InboundEmailFactory,
+    MailboxFactory,
+    OrganizationFactory,
+    TicketFactory,
+)
 
 pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("local_media")]
 
@@ -26,16 +34,24 @@ def mailbox():
     return MailboxFactory(public_address="support@acme.example.com")
 
 
-def test_storing_twice_keeps_one_row_and_runs_once(
+def test_storing_twice_keeps_one_row_and_requeues_only_while_pending(
     mailbox, delay, django_capture_on_commit_callbacks
 ):
     raw = build(Subject="Printer on fire")
     with django_capture_on_commit_callbacks(execute=True):
         stored = store(parse(raw))
+        # The first queuing may have failed (broker down) and the provider retried.
         assert store(parse(raw)) is None
-
     assert list(InboundEmail.objects.all()) == [stored]
-    delay.assert_called_once_with(str(stored.id))
+    assert delay.call_args_list == [mock.call(str(stored.id))] * 2
+
+    InboundEmail.objects.filter(pk=stored.pk).update(
+        status=InboundEmail.Status.PROCESSED
+    )
+    with django_capture_on_commit_callbacks(execute=True):
+        assert store(parse(raw)) is None
+    assert delay.call_count == 2
+
     assert stored.mailbox == mailbox
     assert stored.status == InboundEmail.Status.PENDING
     assert stored.message_id == "<1@mail.example.org>"
@@ -134,3 +150,21 @@ def test_ingest_eml_feeds_the_same_pipeline(
     assert stored.mailbox == mailbox
     delay.assert_called_once_with(str(stored.id))
     assert f"{stored.id} queued" in out.getvalue()
+
+
+def test_stale_pending_mail_is_queued_again(delay, settings):
+    stale = InboundEmailFactory()
+    InboundEmailFactory()  # Pending, but its first queuing may still be on its way.
+    failed = InboundEmailFactory(status=InboundEmail.Status.FAILED)
+    processed = InboundEmailFactory(status=InboundEmail.Status.PROCESSED)
+    InboundEmail.objects.filter(pk__in=[stale.pk, failed.pk, processed.pk]).update(
+        received_at=timezone.now() - timedelta(minutes=11)
+    )
+
+    requeue_stale_inbound()
+
+    delay.assert_called_once_with(str(stale.id))
+    assert settings.CELERY_BEAT_SCHEDULE["requeue-stale-inbound-emails"] == {
+        "task": "apps.email_channel.tasks.requeue_stale_inbound",
+        "schedule": 60 * 10,
+    }

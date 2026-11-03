@@ -40,8 +40,6 @@ def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
     A mail for no mailbox is kept as rejected, and goes no further. Exceptions
     propagate, so that a provider retries.
     """
-    from apps.email_channel.tasks import process_inbound_email
-
     if raw is None:
         raw = message.as_bytes()
     with transaction.atomic():
@@ -66,10 +64,20 @@ def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
             defaults=defaults,
         )
         if not created:
+            # A retry of the provider: the first queuing may have failed after
+            # commit. Running the task twice is harmless.
+            if inbound.status == InboundEmail.Status.PENDING:
+                _queue_after_commit(inbound)
             return None
         inbound.raw.save("raw.eml", ContentFile(raw), save=False)
         inbound.save(update_fields=["raw", "updated_at"])
         if inbound.status == InboundEmail.Status.PENDING:
-            inbound_id = str(inbound.id)
-            transaction.on_commit(lambda: process_inbound_email.delay(inbound_id))
+            _queue_after_commit(inbound)
     return inbound
+
+
+def _queue_after_commit(inbound: InboundEmail) -> None:
+    from apps.email_channel.tasks import process_inbound_email
+
+    inbound_id = str(inbound.id)
+    transaction.on_commit(lambda: process_inbound_email.delay(inbound_id))
