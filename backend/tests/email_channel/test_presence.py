@@ -1,12 +1,16 @@
 """Whether a widget session has the widget open, as its socket tells (design §5.2)."""
 
+import logging
+
 import pytest
 from asgiref.sync import async_to_sync
 from channels.testing import WebsocketCommunicator
+from django.core.cache import cache
 
 from apps.email_channel import presence
 from apps.notifications.consumers import WidgetConsumer
 from apps.tickets.models import WidgetSession
+from config.settings import base as base_settings
 from tests.factories import OrganizationFactory
 
 pytestmark = pytest.mark.django_db
@@ -24,15 +28,20 @@ def session():
     return WidgetSession.objects.create(organization=OrganizationFactory())
 
 
-def test_a_session_is_connected_from_its_mark_until_it_leaves():
+def test_a_session_is_connected_from_its_mark_until_its_socket_leaves():
     assert not presence.is_connected("s1")
     assert not presence.is_connected(None)
 
-    presence.mark_connected("s1")
+    presence.mark_connected("s1", "socket-a")
     assert presence.is_connected("s1")
     assert not presence.is_connected("s2")
 
-    presence.mark_disconnected("s1")
+    # A reconnect: the old socket's late disconnect leaves the new one's mark.
+    presence.mark_connected("s1", "socket-b")
+    presence.mark_disconnected("s1", "socket-a")
+    assert presence.is_connected("s1")
+
+    presence.mark_disconnected("s1", "socket-b")
     assert not presence.is_connected("s1")
 
 
@@ -47,7 +56,7 @@ def test_the_widget_socket_marks_its_session_on_connect_ping_and_disconnect(sess
         seen["connected"] = presence.is_connected(session_id)
 
         # Expired while the socket stays open: the next ping marks it again.
-        presence.mark_disconnected(session_id)
+        cache.clear()
         await communicator.send_json_to({"type": "ping"})
         assert await communicator.receive_json_from() == {"type": "pong"}
         seen["pinged"] = presence.is_connected(session_id)
@@ -58,3 +67,27 @@ def test_the_widget_socket_marks_its_session_on_connect_ping_and_disconnect(sess
     async_to_sync(run)()
 
     assert seen == {"connected": True, "pinged": True, "left": False}
+
+
+def test_a_cache_outage_is_logged_once_per_socket(session, settings, caplog):
+    settings.CACHES = {
+        "default": {
+            **base_settings.CACHES["default"],
+            "LOCATION": "redis://127.0.0.1:1/0",
+        },
+    }
+
+    async def run() -> None:
+        communicator = WebsocketCommunicator(WidgetConsumer.as_asgi(), "/ws/widget/")
+        communicator.scope["widget_session"] = session
+        await communicator.connect()
+        for _ in range(3):
+            await communicator.send_json_to({"type": "ping"})
+            assert await communicator.receive_json_from() == {"type": "pong"}
+        await communicator.disconnect()
+
+    with caplog.at_level(logging.WARNING):
+        async_to_sync(run)()
+
+    assert len(caplog.records) == 1
+    assert "presence" in caplog.text
