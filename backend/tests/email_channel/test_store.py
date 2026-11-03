@@ -121,13 +121,61 @@ def test_unknown_recipient_is_stored_rejected_with_no_task(
     delay, django_capture_on_commit_callbacks
 ):
     with django_capture_on_commit_callbacks(execute=True):
-        stored = store(parse(build(To="nobody@example.com")))
+        stored = store(
+            parse(
+                build(
+                    To="nobody@example.com",
+                    From="Ann <Ann@example.org>",
+                    Subject="Printer on fire",
+                )
+            )
+        )
 
     assert stored.mailbox is None
     assert stored.status == InboundEmail.Status.REJECTED
     assert stored.reason == "unknown_recipient"
-    assert stored.raw
+    assert (stored.sender, stored.subject) == ("ann@example.org", "Printer on fire")
+    # Nobody here asked for it: its content isn't kept.
+    assert not stored.raw
     delay.assert_not_called()
+
+
+def test_rejected_mail_from_one_sender_is_logged_a_bounded_number_of_times(
+    delay, settings
+):
+    settings.INBOUND_EMAIL_RATE_LIMIT_PER_HOUR = 2
+
+    stored = [
+        store(parse(build(To="nobody@example.com", Message_ID=f"<{n}@x>")))
+        for n in range(3)
+    ]
+    other = store(
+        parse(
+            build(To="nobody@example.com", From="bob@example.org", Message_ID="<b@x>")
+        )
+    )
+
+    assert [row is not None for row in stored] == [True, True, False]
+    assert other is not None
+    assert InboundEmail.objects.count() == 3
+
+
+def test_a_rejected_mail_doesnt_make_the_same_one_to_a_reply_address_a_duplicate(
+    delay,
+):
+    ticket = TicketFactory(mailbox=None)
+    raw = build(Message_ID="<same@x>")
+    # Sent to an old reply address that no longer verifies, and to the right one.
+    old = reply_address(ticket).replace("reply+", "reply+0")
+
+    rejected = store(parse(raw, envelope_recipient=old))
+    accepted = store(parse(raw, envelope_recipient=reply_address(ticket)))
+
+    assert rejected.status == InboundEmail.Status.REJECTED
+    assert accepted is not None
+    assert accepted.status == InboundEmail.Status.PENDING
+    assert store(parse(raw, envelope_recipient=reply_address(ticket))) is None
+    assert store(parse(raw, envelope_recipient=old)) is None
 
 
 def test_mail_for_an_inactive_organization_is_rejected(
@@ -147,6 +195,7 @@ def test_mail_for_an_inactive_organization_is_rejected(
     for stored in (to_mailbox, to_ticket):
         assert stored.status == InboundEmail.Status.REJECTED
         assert stored.reason == "inactive_organization"
+        assert not stored.raw
     delay.assert_not_called()
 
 

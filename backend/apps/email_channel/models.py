@@ -183,10 +183,12 @@ class InboundEmail(TimestampedModel):
                 fields=["message_id", "mailbox"],
                 name="unique_inbound_per_mailbox",
             ),
-            # NULLs are distinct in the constraint above.
+            # NULLs are distinct in the constraint above. A mail rejected without
+            # a mailbox (to an old reply address, say) leaves room for the same
+            # one delivered where it belongs.
             models.UniqueConstraint(
                 fields=["message_id"],
-                condition=models.Q(mailbox__isnull=True),
+                condition=models.Q(mailbox__isnull=True) & ~models.Q(status="rejected"),
                 name="unique_inbound_without_mailbox",
             ),
         ]

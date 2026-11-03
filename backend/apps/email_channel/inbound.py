@@ -2,10 +2,13 @@
 
 import hashlib
 import logging
+from datetime import timedelta
 from email.utils import parseaddr
 
+from django.conf import settings
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from apps.email_channel.models import InboundEmail
 from apps.email_channel.recipients import one_line, recipient_addresses, resolve
@@ -57,13 +60,31 @@ def _provider_verdict(message) -> dict:
     }
 
 
+def _too_many_rejected(sender: str, mailbox) -> bool:
+    """Tell if the sender's rejected mail to ``mailbox`` filled its hour's log.
+
+    Mail nobody here asked for, to an unknown address or an inactive organization,
+    still leaves a row: bounded per sender as accepted mail is, so that a flood
+    leaves a trace without filling the table.
+    """
+    rows = InboundEmail.objects.filter(
+        sender=sender,
+        mailbox=mailbox,
+        status=InboundEmail.Status.REJECTED,
+        received_at__gt=timezone.now() - timedelta(hours=1),
+    )
+    return rows.count() >= settings.INBOUND_EMAIL_RATE_LIMIT_PER_HOUR
+
+
 def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
     """Store an inbound mail and queue its processing. None for a duplicate.
 
     The only entry point of inbound mail, for the provider webhooks and
     ``ingest_eml`` alike. ``raw`` is the mail as received, when the caller has it.
-    A mail for no mailbox is kept as rejected, and goes no further. Exceptions
-    propagate, so that a provider retries.
+    A mail for no mailbox, or for an inactive organization, is kept as rejected
+    without its content, and goes no further; past the sender's hourly quota of
+    such rows, it isn't kept at all. Exceptions propagate, so that a provider
+    retries.
     """
     if raw is None:
         raw = message.as_bytes()
@@ -73,33 +94,49 @@ def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
         _, sender = parseaddr(one_line(message.get("From")))
         # ``ticket`` is where the mail lands, once processed: the ticket of a reply
         # address is found again from the envelope.
-        defaults = {
+        fields = {
+            "message_id": normalize_message_id(message, raw),
+            "mailbox": mailbox,
             "sender": sender.lower()[:_SENDER_MAX_LENGTH],
             "recipients": recipient_addresses(message),
             "subject": one_line(message.get("Subject"))[:_SUBJECT_MAX_LENGTH],
             **_provider_verdict(message),
         }
         if recipient is None:
-            defaults["status"] = InboundEmail.Status.REJECTED
-            defaults["reason"] = "unknown_recipient"
+            fields["status"] = InboundEmail.Status.REJECTED
+            fields["reason"] = "unknown_recipient"
         elif not recipient.organization.is_active:
-            defaults["status"] = InboundEmail.Status.REJECTED
-            defaults["reason"] = "inactive_organization"
-        inbound, created = InboundEmail.objects.get_or_create(
-            message_id=normalize_message_id(message, raw),
-            mailbox=mailbox,
-            defaults=defaults,
+            fields["status"] = InboundEmail.Status.REJECTED
+            fields["reason"] = "inactive_organization"
+        rejected = fields.get("status") == InboundEmail.Status.REJECTED
+        same = InboundEmail.objects.filter(
+            message_id=fields["message_id"], mailbox=mailbox
         )
-        if not created:
+        if mailbox is None and not rejected:
+            # The same mail rejected through an old reply address, say, doesn't
+            # make this one a duplicate.
+            same = same.exclude(status=InboundEmail.Status.REJECTED)
+        stored = same.first()
+        if stored is not None:
             # A retry of the provider: the first queuing may have failed after
             # commit. Running the task twice is harmless.
-            if inbound.status == InboundEmail.Status.PENDING:
-                _queue_after_commit(inbound)
+            if stored.status == InboundEmail.Status.PENDING:
+                _queue_after_commit(stored)
             return None
+        if rejected and _too_many_rejected(fields["sender"], mailbox):
+            logger.info("Inbound mail not logged: its sender's quota is used up")
+            return None
+        try:
+            with transaction.atomic():
+                inbound = InboundEmail.objects.create(**fields)
+        except IntegrityError:
+            # Stored meanwhile by another delivery of the same mail, which queues it.
+            return None
+        if rejected:
+            return inbound
         inbound.raw.save("raw.eml", ContentFile(raw), save=False)
         inbound.save(update_fields=["raw", "updated_at"])
-        if inbound.status == InboundEmail.Status.PENDING:
-            _queue_after_commit(inbound)
+        _queue_after_commit(inbound)
     return inbound
 
 

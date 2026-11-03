@@ -94,8 +94,11 @@ def _from_address(message) -> str:
 
 
 def _is_forwarding_confirmation(message, recipient: Recipient) -> bool:
-    # Gmail writes to the forwarding address itself, which nobody else knows. On
-    # the public address, a forged From would be enough.
+    # Gmail writes to the inbound address itself; a mail to the public address
+    # claiming to be Gmail's is a request like any other. The inbound address isn't
+    # secret either, being the From of every reply mail, so a From can still be
+    # forged here: what's kept is only a Google https link and a code, shown to the
+    # organization's admins, at most once per mailbox per 10 minutes.
     mailbox = recipient.mailbox
     return (
         _from_address(message) == GMAIL_FORWARDING_SENDER
