@@ -4,6 +4,8 @@ import re
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
 
 from apps.email_channel.models import Mailbox
@@ -73,3 +75,20 @@ def test_same_message_id_is_unique_per_mailbox_and_without_one():
     InboundEmailFactory(mailbox=None, message_id="<a@x>")
     with pytest.raises(IntegrityError), transaction.atomic():
         InboundEmailFactory(mailbox=None, message_id="<a@x>")
+
+
+@pytest.mark.usefixtures("local_media")
+def test_raw_mails_are_deleted_with_their_rows_even_by_cascade(
+    django_capture_on_commit_callbacks,
+):
+    mailbox = MailboxFactory()
+    inbound = InboundEmailFactory(
+        mailbox=mailbox, raw=ContentFile(b"From: a@example.org\r\n", name="a.eml")
+    )
+    name = inbound.raw.name
+    assert default_storage.exists(name)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        mailbox.organization.delete()
+
+    assert not default_storage.exists(name)

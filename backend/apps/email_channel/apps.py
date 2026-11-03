@@ -12,7 +12,12 @@ class EmailChannelConfig(AppConfig):
 
     def ready(self) -> None:
         from anymail.signals import inbound
+        from django.db.models.signals import post_delete
 
-        from apps.email_channel.signals import store_inbound_event
+        from apps.email_channel.models import InboundEmail
+        from apps.email_channel.signals import delete_raw_mail, store_inbound_event
 
         inbound.connect(store_inbound_event, dispatch_uid="email_channel_store")
+        post_delete.connect(
+            delete_raw_mail, sender=InboundEmail, dispatch_uid="email_channel_raw"
+        )
