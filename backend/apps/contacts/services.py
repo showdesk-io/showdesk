@@ -457,7 +457,12 @@ def _absorb_email_only_contact(
 
 
 def _resolve_session_once(
-    session, email_verified: bool, traits: Any, company: Any, company_verified: bool
+    session,
+    email_verified: bool,
+    traits: Any,
+    company: Any,
+    company_verified: bool,
+    proof_source: str,
 ) -> Contact | None:
     org = session.organization
     email = _clean_email(session.email)
@@ -537,27 +542,51 @@ def _resolve_session_once(
         session.contact = contact
         session_changed.add("contact")
     _save_changes(session, session_changed)
-    if email_proven and session.email_verified_for != email:
-        _record_session_proof(session, email)
+    signed = WidgetSession.ProofSource.SIGNED
+    if email_proven and (
+        session.email_verified_for != email
+        or (proof_source == signed and session.email_proof_source != signed)
+    ):
+        _record_session_proof(session, email, proof_source)
     return contact
 
 
-def _record_session_proof(session, email: str) -> None:
-    """Mark ``session`` proven for ``email``, if that's still the email it has.
+_PROOF_FIELDS = ("email_verified_at", "email_verified_for", "email_proof_source")
 
-    A conditional write: a request changing the session's email meanwhile clears the
-    proof, and this must not land on the new, unproven address.
+
+def _record_session_proof(session, email: str, source: str) -> None:
+    """Mark ``session`` proven for ``email`` by ``source``, if it still has that email.
+
+    Conditional writes, on the row as it is now: a request changing the session's
+    email meanwhile clears the proof, and this must not land on the new, unproven
+    address. A session already proven for it keeps its date, and only a signature
+    relabels it (a host app signing it decides what an unsigned page means), never a
+    code that was checked before that proof landed.
     """
     now = timezone.now()
-    if WidgetSession.objects.filter(pk=session.pk, email__iexact=email).update(
-        email_verified_at=now, email_verified_for=email, updated_at=now
-    ):
-        session.email_verified_at = now
-        session.email_verified_for = email
+    rows = WidgetSession.objects.filter(pk=session.pk, email__iexact=email)
+    written = rows.exclude(email_verified_for=email).update(
+        email_verified_at=now,
+        email_verified_for=email,
+        email_proof_source=source,
+        updated_at=now,
+    )
+    signed = WidgetSession.ProofSource.SIGNED
+    if not written and source == signed:
+        rows.filter(email_verified_for=email).exclude(email_proof_source=signed).update(
+            email_proof_source=signed, updated_at=now
+        )
+    # What the row holds now, whichever write it took, or another request's.
+    session.refresh_from_db(fields=list(_PROOF_FIELDS))
 
 
 def _resolve_session_atomically(
-    session, email_verified: bool, traits: Any, company: Any, company_verified: bool
+    session,
+    email_verified: bool,
+    traits: Any,
+    company: Any,
+    company_verified: bool,
+    proof_source: str,
 ) -> Contact | None:
     """Run one pass. If it fails, forget in memory the writes it rolled back.
 
@@ -567,15 +596,17 @@ def _resolve_session_atomically(
     contact_id = session.contact_id
     email_verified_at = session.email_verified_at
     email_verified_for = session.email_verified_for
+    email_proof_source = session.email_proof_source
     try:
         with transaction.atomic():
             return _resolve_session_once(
-                session, email_verified, traits, company, company_verified
+                session, email_verified, traits, company, company_verified, proof_source
             )
     except DatabaseError:
         session.contact_id = contact_id
         session.email_verified_at = email_verified_at
         session.email_verified_for = email_verified_for
+        session.email_proof_source = email_proof_source
         raise
 
 
@@ -586,12 +617,14 @@ def resolve_contact_for_widget_session(
     traits: Any = None,
     company: Any = None,
     company_verified: bool = False,
+    proof_source: str = WidgetSession.ProofSource.SIGNED,
 ) -> Contact | None:
     """Find or create the contact behind a widget session and link them.
 
     ``session.external_user_id`` must only be set by callers after a
     successful HMAC check. ``email_verified`` must only be True when the
-    host app signed the email (``email_hash``) or the user proved ownership.
+    host app signed the email (``email_hash``) or the user proved ownership, which
+    ``proof_source`` records (``WidgetSession.ProofSource``).
     ``company_verified`` must only be True when the host app signed the company's
     id, name and domain (``company_hash``); it has no effect on a session that
     isn't identified.
@@ -605,7 +638,7 @@ def resolve_contact_for_widget_session(
     has to see that commit to leave the value alone. A snapshot taken at the
     start of an enclosing REPEATABLE READ transaction would hide it.
     """
-    args = (session, email_verified, traits, company, company_verified)
+    args = (session, email_verified, traits, company, company_verified, proof_source)
     try:
         return _resolve_session_atomically(*args)
     except IntegrityError:

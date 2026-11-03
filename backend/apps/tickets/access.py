@@ -46,12 +46,28 @@ def session_tickets(session) -> QuerySet[Ticket]:
 def writable_from(session, ticket) -> bool:
     """Tell if ``session``, which sees ``ticket``, may also write on it.
 
-    Its own ticket, or one opened by email. A ticket another session opened only if
-    that session is entitled too: a message there reaches the session that opened
-    it, which may be anyone who once typed this address in the widget.
+    Its own ticket. One opened by email, if its replies go to the address of the
+    contact this session may see the history of. A ticket another session opened
+    only if that session is entitled too: a message there reaches the session that
+    opened it, which may be anyone who once typed this address in the widget.
+
+    Any other ticket without a session is read-only: ``widget_submit`` writes one
+    with the public token alone, naming anyone's external id and any address.
     """
-    if ticket.widget_session_id in (None, session.pk):
+    if ticket.widget_session_id == session.pk:
         return True
+    if ticket.widget_session_id is None:
+        from .tasks import _reply_address
+
+        contact = ticket.contact
+        return bool(
+            ticket.source == Ticket.Source.EMAIL
+            and contact is not None
+            and ticket.contact_id == session.contact_id
+            and contact_history_opens(session)
+            and normalized_email(_reply_address(ticket))
+            == normalized_email(contact.email)
+        )
     opener = ticket.widget_session
     if session.external_user_id and opener.external_user_id == session.external_user_id:
         return True

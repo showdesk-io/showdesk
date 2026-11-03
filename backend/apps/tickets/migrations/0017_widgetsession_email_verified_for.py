@@ -1,13 +1,38 @@
 from django.db import migrations, models
-from django.db.models.functions import Lower, Trim
+
+
+def _normalized(value) -> str:
+    """As ``apps.tickets.models.normalized_email``, frozen here."""
+    return (value or "").strip().lower()
 
 
 def record_proven_addresses(apps, schema_editor) -> None:
-    """A session proven so far was proven for the email it has: no write changed one
-    without clearing its proof."""
+    """Keep a session's proof only where its contact holds the email it has.
+
+    That's what made it a proof when it was written. Anywhere else nothing says which
+    address it was about (an email change racing the proof could have left it on an
+    unproven one), so it's dropped: the session proves its email again if it can.
+    """
     WidgetSession = apps.get_model("tickets", "WidgetSession")
-    WidgetSession.objects.filter(email_verified_at__isnull=False).update(
-        email_verified_for=Lower(Trim("email"))
+    proven = (
+        WidgetSession.objects.filter(email_verified_at__isnull=False)
+        .select_related("contact")
+        .order_by("pk")
+    )
+    kept, dropped = [], []
+    for session in proven.iterator(chunk_size=500):
+        email = _normalized(session.email)
+        contact = session.contact
+        if email and contact is not None and _normalized(contact.email) == email:
+            session.email_verified_for = email
+            kept.append(session)
+        else:
+            session.email_verified_at = None
+            session.email_proof_source = ""
+            dropped.append(session)
+    WidgetSession.objects.bulk_update(kept, ["email_verified_for"], batch_size=500)
+    WidgetSession.objects.bulk_update(
+        dropped, ["email_verified_at", "email_proof_source"], batch_size=500
     )
 
 

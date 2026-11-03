@@ -68,6 +68,7 @@ from .models import (
     TicketAttachment,
     TicketMessage,
     WidgetSession,
+    has_proof,
     normalized_email,
     proof_holds,
 )
@@ -207,17 +208,38 @@ def _record_session_resume(
     ):
         session.email = email
         fields.append("email")
-        if session.email_verified_at or session.email_verified_for:
-            fields += _clear_proof(session)
     session.save(update_fields=fields)
+    _drop_proof_of_another_email(session)
 
 
-def _clear_proof(session) -> list[str]:
-    """Forget the session's proof, about an email it no longer has. Return the fields."""
-    session.email_verified_at = None
-    session.email_verified_for = ""
-    session.email_proof_source = ""
-    return ["email_verified_at", "email_verified_for", "email_proof_source"]
+def _drop_proof_of_another_email(session) -> None:
+    """Forget a proof about an email other than the one the session has now.
+
+    Whatever the email was before: a proof is only worth the address it was made
+    for (``email_verified_for``). Written on the row as it is, so a proof of the new
+    email landed meanwhile stays. One made for an old email that this request didn't
+    read is harmless: it holds for no email the session has.
+    """
+    email = normalized_email(session.email)
+    has_some = bool(session.email_verified_at or session.email_verified_for)
+    if not has_some or (
+        session.email_verified_at and session.email_verified_for == email
+    ):
+        return
+    stale = (
+        WidgetSession.objects.filter(pk=session.pk)
+        .exclude(email_verified_for=email, email_verified_at__isnull=False)
+        .exclude(email_verified_for="", email_verified_at__isnull=True)
+    )
+    if stale.update(
+        email_verified_at=None,
+        email_verified_for="",
+        email_proof_source="",
+        updated_at=timezone.now(),
+    ):
+        session.email_verified_at = None
+        session.email_verified_for = ""
+        session.email_proof_source = ""
 
 
 def _company_hash_is_valid(org, company, company_hash) -> bool:
@@ -281,16 +303,13 @@ def _link_session_contact(
                 traits=traits,
                 company=company,
                 company_verified=_company_hash_is_valid(org, company, company_hash),
+                proof_source=(
+                    WidgetSession.ProofSource.CODE
+                    if code_proof
+                    else WidgetSession.ProofSource.SIGNED
+                ),
             )
             proven = email_verified and proof_holds(session, contact)
-            source = (
-                WidgetSession.ProofSource.CODE
-                if code_proof
-                else WidgetSession.ProofSource.SIGNED
-            )
-            if proven and session.email_proof_source != source:
-                session.email_proof_source = source
-                session.save(update_fields=["email_proof_source", "updated_at"])
             # The normal flow is first message, then contact nudge: tickets opened
             # before the session had a contact would otherwise never get one. Only
             # then: on any other visit, a ticket without a contact is one an agent
@@ -322,12 +341,11 @@ def _update_session(request, org, identity) -> Response:
         session.name = name
         fields.append("name")
     if email is not None:
-        # The proof was about the previous email.
-        if normalized_email(email) != normalized_email(session.email):
-            fields += _clear_proof(session)
         session.email = email
         fields.append("email")
     session.save(update_fields=fields)
+    # A proof is about the email it was made for, not this one if it changed.
+    _drop_proof_of_another_email(session)
     # Backfill on linked tickets, each field where it's blank. Not on those a login
     # moved here: their requester is whoever wrote them, not necessarily this user.
     tickets = Ticket.objects.filter(organization=org, widget_session=session).exclude(
@@ -1479,6 +1497,10 @@ class TicketViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Their replies, read by whoever opened it: not for a reader of the history.
+        if not writable_from(session, ticket):
+            return Response({"error": READ_ONLY}, status=status.HTTP_403_FORBIDDEN)
+
         ticket.widget_last_read_at = timezone.now()
         ticket.save(update_fields=["widget_last_read_at"])
         return Response({"ticket_id": str(ticket.id), "status": "ok"})
@@ -1531,13 +1553,14 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Keep references before deleting
         ticket = message.ticket
         deleted_message_id = str(message.id)
+        message_type = message.message_type
 
         # Delete associated attachments (files on storage) and the message
         message.attachments.all().delete()
         message.delete()
 
         try:
-            notify_message_deleted(ticket, deleted_message_id)
+            notify_message_deleted(ticket, deleted_message_id, message_type)
         except Exception:
             logger.exception(
                 "WebSocket notification failed for deleted message %s",
@@ -1603,7 +1626,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         code = request.data.get("code") if hasattr(request.data, "get") else None
         if (
             not email
-            or session.email_verified_at
+            or has_proof(session)
             or not isinstance(code, str)
             or OTPCode.redeem(
                 email,
@@ -1661,9 +1684,10 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         """Delete message and send WebSocket notification."""
         ticket = instance.ticket
         message_id = str(instance.id)
+        message_type = instance.message_type
         instance.delete()
         try:
-            notify_message_deleted(ticket, message_id)
+            notify_message_deleted(ticket, message_id, message_type)
         except Exception:
             logger.exception(
                 "WebSocket notification failed for deleted message %s", message_id

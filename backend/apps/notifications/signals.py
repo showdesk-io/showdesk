@@ -101,8 +101,11 @@ def notify_new_message(message) -> None:
         async_to_sync(channel_layer.group_send)(f"widget_session_{session_id}", event)
 
 
-def notify_message_deleted(ticket, message_id: str) -> None:
-    """Notify agent dashboard and widget that a message was deleted."""
+def notify_message_deleted(ticket, message_id: str, message_type: str) -> None:
+    """Notify agent dashboard and widget that a message was deleted.
+
+    Widgets only hear of a reply: an internal note never reached them.
+    """
     channel_layer = get_channel_layer()
 
     # Notify agents
@@ -120,6 +123,8 @@ def notify_message_deleted(ticket, message_id: str) -> None:
     )
 
     # And every widget session that sees the ticket, so it can take the message off.
+    if message_type != "reply":
+        return
     for session_id in ticket_session_ids(ticket):
         async_to_sync(channel_layer.group_send)(
             f"widget_session_{session_id}",

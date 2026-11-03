@@ -106,6 +106,7 @@ class TestCodeRoute:
             organization=org, email="a@x.io", contact=holder
         )
         session.email_verified_at = session.created_at
+        session.email_verified_for = "a@x.io"
         session.save()
 
         assert _post(org, CODE_URL, session).status_code == 202
@@ -415,18 +416,32 @@ class TestCodeProofAndAnotherEmail:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_the_migration_records_what_proven_sessions_proved():
+def test_the_migration_keeps_only_proofs_of_the_address_the_contact_holds():
     before = ("tickets", "0016_widgetsession_email_proof_source")
     executor = MigrationExecutor(connection)
     executor.migrate([before])
-    Session = executor.loader.project_state(before).apps.get_model(
-        "tickets", "WidgetSession"
-    )
+    state = executor.loader.project_state(before).apps
+    Session = state.get_model("tickets", "WidgetSession")
+    OldContact = state.get_model("contacts", "Contact")
     org = OrganizationFactory()
-    proven = Session.objects.create(
-        organization_id=org.pk, email=" A@x.io", email_verified_at=timezone.now()
+    holding = OldContact.objects.create(organization_id=org.pk, email="a@x.io")
+    elsewhere = OldContact.objects.create(organization_id=org.pk, email="c@x.io")
+    now = timezone.now()
+    kept = Session.objects.create(
+        organization_id=org.pk,
+        contact_id=holding.pk,
+        email=" A@x.io",
+        email_verified_at=now,
+        email_proof_source="signed",
     )
-    unproven = Session.objects.create(organization_id=org.pk, email="b@x.io")
+    dropped = Session.objects.create(
+        organization_id=org.pk,
+        contact_id=elsewhere.pk,
+        email="b@x.io",
+        email_verified_at=now,
+        email_proof_source="signed",
+    )
+    unproven = Session.objects.create(organization_id=org.pk, email="d@x.io")
     try:
         executor = MigrationExecutor(connection)
         executor.migrate([("tickets", "0017_widgetsession_email_verified_for")])
@@ -434,9 +449,98 @@ def test_the_migration_records_what_proven_sessions_proved():
         executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())
 
-    rows = dict(
-        WidgetSession.objects.filter(organization=org).values_list(
-            "pk", "email_verified_for"
+    rows = {
+        row[0]: row[1:]
+        for row in WidgetSession.objects.filter(organization=org).values_list(
+            "pk", "email_verified_for", "email_proof_source", "email_verified_at"
         )
+    }
+    assert rows[kept.pk][:2] == ("a@x.io", "signed")
+    assert rows[kept.pk][2] is not None
+    assert rows[dropped.pk] == ("", "", None)
+    assert rows[unproven.pk] == ("", "", None)
+
+
+def _stale(org, **fields):
+    """A session holding a date, but for an address it no longer has."""
+    holder = Contact.objects.filter(organization=org, email="a@x.io").first()
+    if holder is None:
+        holder = ContactFactory(organization=org, email="a@x.io")
+        _email_ticket(org, holder)
+    return WidgetSession.objects.create(
+        organization=org,
+        email="a@x.io",
+        email_verified_at=timezone.now(),
+        email_verified_for="old@x.io",
+        **fields,
     )
-    assert rows == {proven.pk: "a@x.io", unproven.pk: ""}
+
+
+class TestAProofThatDoesNotHold:
+    def test_can_still_ask_for_a_code_and_verify(self, org):
+        session = _stale(org)
+
+        _post(org, CODE_URL, session)
+        res = _post(org, VERIFY_URL, session, code=_code())
+
+        assert [m.to for m in mail.outbox] == [["a@x.io"]]
+        assert res.data == {"verified": True}
+
+    def test_a_patch_clears_it_even_with_the_same_email(self, org):
+        session = _stale(org, email_proof_source=WidgetSession.ProofSource.CODE)
+
+        APIClient().patch(
+            SESSION_URL,
+            {"email": "a@x.io"},
+            format="json",
+            HTTP_X_WIDGET_TOKEN=org.api_token,
+            HTTP_X_WIDGET_SESSION=str(session.pk),
+        )
+
+        session.refresh_from_db()
+        assert (session.email_verified_at, session.email_verified_for) == (None, "")
+        assert session.email_proof_source == ""
+
+    def test_a_resume_clears_it_even_with_the_same_email(self, org):
+        session = _stale(org, email_proof_source=WidgetSession.ProofSource.CODE)
+
+        res = _post(org, SESSION_URL, session_id=str(session.pk), email="a@x.io")
+
+        assert res.data["session_id"] == str(session.pk)
+        session.refresh_from_db()
+        assert (session.email_verified_at, session.email_verified_for) == (None, "")
+
+
+def test_a_late_code_does_not_relabel_a_signed_proof(org):
+    """A verify that passed its guard before a signed proof landed."""
+    from apps.tickets.views import _link_session_contact
+
+    ContactFactory(organization=org, email="a@x.io")
+    session = WidgetSession.objects.create(
+        organization=org,
+        email="a@x.io",
+        email_verified_at=timezone.now(),
+        email_verified_for="a@x.io",
+        email_proof_source=WidgetSession.ProofSource.SIGNED,
+    )
+
+    _link_session_contact(org, session, code_proof=True)
+
+    session.refresh_from_db()
+    assert session.email_proof_source == WidgetSession.ProofSource.SIGNED
+
+
+def test_a_failed_send_is_retried_with_the_same_code(org):
+    holder = ContactFactory(organization=org, email="a@x.io")
+    _email_ticket(org, holder)
+    session = WidgetSession.objects.create(organization=org, email="a@x.io")
+
+    with mock.patch(
+        "apps.tickets.tasks.send_branded_email", side_effect=OSError
+    ) as send:
+        _post(org, CODE_URL, session)
+
+    assert OTPCode.objects.filter(widget_session=session).count() == 1
+    codes = {call.kwargs["context"]["code"] for call in send.call_args_list}
+    assert send.call_count > 1
+    assert len(codes) == 1

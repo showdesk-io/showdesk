@@ -1137,7 +1137,7 @@ class TestWebSocketPayloads:
             notify_new_ticket(ticket)
             notify_ticket_update(ticket)
             notify_new_message(message)
-            notify_message_deleted(ticket, str(message.id))
+            notify_message_deleted(ticket, str(message.id), message.message_type)
 
         groups = {group for group, _ in sent}
         assert groups == {

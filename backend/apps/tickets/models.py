@@ -146,19 +146,24 @@ def normalized_email(value) -> str:
     return (value or "").strip().lower()
 
 
+def has_proof(session) -> bool:
+    """Tell if ``session`` proved the email it has now, whoever holds it."""
+    email = normalized_email(session.email)
+    return bool(
+        session.email_verified_at and email and session.email_verified_for == email
+    )
+
+
 def proof_holds(session, contact) -> bool:
     """Tell if ``session`` proved the email it has, and ``contact`` holds that email.
 
     The proof is about the address it was made for (``email_verified_for``): a date
     left by a write racing an email change says nothing of the new one.
     """
-    email = normalized_email(session.email)
     return bool(
-        session.email_verified_at
-        and email
-        and session.email_verified_for == email
+        has_proof(session)
         and contact is not None
-        and normalized_email(contact.email) == email
+        and normalized_email(contact.email) == normalized_email(session.email)
     )
 
 

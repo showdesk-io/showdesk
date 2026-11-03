@@ -452,6 +452,21 @@ inbound provider.
   but BigCorp can't register the address until it is freed. To be tied to a
   verified sending domain in PR 3.
 
+- The widget code task's broker message carries the widget session's id, a bearer
+  token for that session, and the address. The code itself never does: the task
+  that sends it gets the code's id. Anyone who can read the broker's queue can use
+  the session id as the widget would.
+
+- The per-address code throttles (`WIDGET_EMAIL_CODE_EMAIL_RATE`,
+  `WIDGET_EMAIL_VERIFY_EMAIL_RATE`) count an address across every organization: a
+  visitor asking for codes in one organization's widget uses up what the same
+  address can ask for in another's.
+
+- A ticket filed through `widget_submit` has no session, and its external id and
+  address come with the public token alone. It shows in the history of the user
+  with that external id, read-only: a message there would go to the address it
+  names.
+
 ---
 
 ## 9. Testing and validation

@@ -313,7 +313,9 @@ class TestDeleting:
         proven = _session(org, holder, proven=True)
         _session(org, holder)
 
-        groups = _sent_groups(notify_message_deleted, email_ticket, "m1")
+        groups = _sent_groups(
+            notify_message_deleted, email_ticket, "m1", TicketMessage.MessageType.REPLY
+        )
 
         assert groups == [f"org_{org.id}", f"widget_session_{proven.pk}"]
 
@@ -335,3 +337,75 @@ def test_a_first_message_survives_a_contact_deleted_meanwhile(org, holder):
 
     assert res.status_code == 201
     assert Ticket.objects.get(pk=res.data["ticket_id"]).contact_id is None
+
+
+@pytest.mark.usefixtures("local_media")
+class TestTicketsWithoutASession:
+    def test_a_forged_widget_submit_ticket_is_read_only(self, org):
+        """The public token alone names the victim's external id and the attacker's
+        address: the victim's history shows it, but writing there would mail them."""
+        victim = ContactFactory(organization=org, email="v@x.io", external_id="u1")
+        session = _session(org, victim, external_user_id="u1")
+        res = APIClient().post(
+            f"{API}widget_submit/",
+            {
+                "title": "Your invoice",
+                "description": "Please answer here",
+                "external_user_id": "u1",
+                "requester_email": "attacker@evil.io",
+            },
+            format="json",
+            HTTP_X_WIDGET_TOKEN=org.api_token,
+        )
+        forged = Ticket.objects.get(reference=res.data["reference"])
+        client = _client(org, session)
+
+        assert str(forged.pk) in _history(client)
+        assert _by_id(client, forged) == {
+            "conversation": 200,
+            "message": 403,
+            "attachment": 403,
+            "mark_read": 403,
+        }
+        conversation = client.get(
+            f"{API}widget_conversation/", {"ticket_id": str(forged.pk)}
+        )
+        assert conversation.data["read_only"] is True
+        assert not forged.messages.exists()
+
+    def test_an_email_ticket_replying_elsewhere_is_read_only(self, org, holder):
+        ticket = _email_ticket(org, holder)
+        Ticket.objects.filter(pk=ticket.pk).update(requester_email="other@x.io")
+        client = _client(org, _session(org, holder, proven=True))
+
+        assert _by_id(client, ticket)["message"] == 403
+
+
+class TestMarkingRead:
+    def test_a_history_only_reader_does_not_mark_the_openers_conversation(
+        self, org, holder
+    ):
+        opener = _session(org, holder)
+        ticket = TicketFactory(organization=org, contact=holder, widget_session=opener)
+        client = _client(org, _session(org, holder, proven=True))
+
+        res = client.post(
+            f"{API}widget_mark_read/", {"ticket_id": str(ticket.pk)}, format="json"
+        )
+
+        assert res.status_code == 403
+        ticket.refresh_from_db()
+        assert ticket.widget_last_read_at is None
+
+
+def test_a_deleted_internal_note_reaches_no_widget(org, holder, email_ticket):
+    _session(org, holder, proven=True)
+
+    groups = _sent_groups(
+        notify_message_deleted,
+        email_ticket,
+        "m1",
+        TicketMessage.MessageType.INTERNAL_NOTE,
+    )
+
+    assert groups == [f"org_{org.id}"]

@@ -480,18 +480,19 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
         raise self.retry(exc=exc)
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_widget_email_code(self, session_id: str, email: str) -> None:
+@shared_task
+def send_widget_email_code(session_id: str, email: str) -> None:
     """Mail a widget session the code proving ``email``, if there's anything to see.
 
     The route queues this for every request, so its answer and its time say nothing
-    of the address. Here: only while the session still has that email and no proof,
-    and only when the proof would open conversations it can't see (§6.2, Decision
-    A). The code is good for this session and its organization alone.
+    of the address. Here: only while the session still has that email and no proof
+    of it, and only when the proof would open conversations it can't see (§6.2,
+    Decision A). The code is good for this session and its organization alone. It's
+    generated once: a failed send is retried with it (``deliver_widget_email_code``).
     """
     from apps.organizations.models import OTPCode
     from apps.tickets.access import email_proof_would_open
-    from apps.tickets.models import WidgetSession, normalized_email
+    from apps.tickets.models import WidgetSession, has_proof, normalized_email
 
     session = (
         WidgetSession.objects.select_related("organization", "contact")
@@ -502,22 +503,45 @@ def send_widget_email_code(self, session_id: str, email: str) -> None:
         session is None
         or not email
         or normalized_email(session.email) != email
-        or session.email_verified_at
+        or has_proof(session)
         or not email_proof_would_open(session, email)
     ):
         return
-    organization = session.organization
     otp = OTPCode.generate(
         email,
         purpose=OTPCode.Purpose.WIDGET_EMAIL,
-        organization=organization,
+        organization=session.organization,
         widget_session=session,
     )
+    deliver_widget_email_code.delay(str(otp.pk))
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def deliver_widget_email_code(self, otp_id: str) -> None:
+    """Send a widget email code, again on failure, while it's still to be used.
+
+    By id: the code itself never goes through the broker.
+    """
+    from apps.organizations.models import OTPCode
+
+    otp = (
+        OTPCode.objects.select_related("organization")
+        .filter(
+            pk=otp_id,
+            purpose=OTPCode.Purpose.WIDGET_EMAIL,
+            used_at__isnull=True,
+            organization__isnull=False,
+        )
+        .first()
+    )
+    if otp is None:
+        return
+    organization = otp.organization
     try:
         send_branded_email(
             template="widget_email_code",
             subject=f"Your code to see your conversations with {organization.name}",
-            to=[email],
+            to=[otp.email],
             organization=organization,
             context={
                 "organization": organization,
