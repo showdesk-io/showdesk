@@ -1,8 +1,9 @@
 """Email channel admin configuration."""
 
-from django.contrib import admin
+from django.contrib import admin, messages
 
 from .models import InboundEmail, Mailbox
+from .tasks import replay
 
 
 @admin.register(Mailbox)
@@ -20,13 +21,14 @@ class InboundEmailAdmin(admin.ModelAdmin):
     """Admin for received emails.
 
     The raw mail is left out: its file widget would link to it, and a mail holds
-    personal data.
+    personal data. Agents download it from its message, in the app.
     """
 
     list_display = ["received_at", "sender", "subject", "mailbox", "status", "reason"]
     list_filter = ["status", "reason"]
     search_fields = ["message_id", "sender", "subject"]
     exclude = ["raw"]
+    actions = ["replay_failed"]
     readonly_fields = [
         "id",
         "mailbox",
@@ -46,3 +48,20 @@ class InboundEmailAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request) -> bool:
         return False
+
+    @admin.action(description="Replay the selected failed mails")
+    def replay_failed(self, request, queryset) -> None:
+        """Queue the failed ones again, each once however often asked. Others stay."""
+        failed = queryset.filter(status=InboundEmail.Status.FAILED)
+        count = sum(replay(pk) for pk in failed.values_list("pk", flat=True))
+        skipped = queryset.count() - count
+        mails = "mail" if count == 1 else "mails"
+        self.message_user(
+            request, f"{count} failed {mails} queued again.", messages.SUCCESS
+        )
+        if skipped:
+            self.message_user(
+                request,
+                f"{skipped} left as they were: only failed mails are replayed.",
+                messages.WARNING,
+            )

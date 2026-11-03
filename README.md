@@ -26,6 +26,7 @@ Showdesk is an open-source helpdesk platform where **video is the primary medium
 - **Embeddable widget** — A single `<script>` tag, zero dependencies, works everywhere
 - **Auto-captured context** — Browser, OS, URL, screen resolution captured automatically
 - **Agent dashboard** — Fast, keyboard-friendly interface for processing tickets
+- **Email channel** — Forward your support address: every mail opens or continues a ticket, and replies go back by email or in the widget
 - **Internal notes** — Collaborate with your team without the requester seeing
 - **SLA policies** — Define response and resolution time targets per priority
 - **Knowledge base** — Publish articles for self-service support
@@ -382,6 +383,17 @@ Optional services (profile `local`):
 | `minio` | `minio/minio` | No managed S3 available |
 
 The backend image uses a unified entrypoint (`entrypoint.sh`) that accepts a mode argument: `server`, `worker`, `beat`, or `migrate`. Set `RUN_MIGRATIONS=true` in `.env` to apply migrations automatically on deploy.
+
+### Email Channel
+
+Off until `INBOUND_EMAIL_DOMAIN` is set. Once on, each organization creates mailboxes in **Settings → Email** and forwards its support address (say `support@acme.com`, on Google Workspace, Microsoft 365 or anything else) to the mailbox's inbound address, `{slug}-{random}@{INBOUND_EMAIL_DOMAIN}`. The tab gives the forwarding steps for both, and shows Gmail's forwarding confirmation code when it arrives.
+
+- **Receiving**: point the MX of `INBOUND_EMAIL_DOMAIN` to an inbound provider that posts signed webhooks. [Postal](https://docs.postalserver.io/) (open source) is the reference: an HTTP endpoint route to `https://<your domain>/anymail/postal/inbound/`, raw message sent base64, and its public key in `ANYMAIL_POSTAL_WEBHOOK_KEY`. Other providers supported by [django-anymail](https://anymail.dev/) work through `ANYMAIL_WEBHOOK_SECRET`. Each webhook is only mounted while its secret is set.
+- **Sending**: replies go out `From` the inbound domain, with a signed `Reply-To` that threads the answer back onto its ticket, and a link to a full-page conversation. Publish SPF and DKIM for `INBOUND_EMAIL_DOMAIN` with your sending service.
+- **Without a provider**: `python manage.py ingest_eml mail.eml --recipient <inbound address>` runs a raw mail through the same pipeline (testing, replaying, or a self-hosted relay).
+- **Operations**: mail that was ignored (auto-replies, bounces, loops, spam, rate limits) or failed is listed per mailbox in Settings; admins replay failed mail there or from the Django admin. Raw mails are never served by URL: agents download them from the message, and they are purged after `INBOUND_EMAIL_RAW_RETENTION_DAYS`.
+
+Every variable is documented, with its default, in [`.env.example`](./.env.example). The design is in [`docs/plans/2026-10-29-email-channel-design.md`](./docs/plans/2026-10-29-email-channel-design.md).
 
 ## Contributing
 

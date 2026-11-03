@@ -11,6 +11,7 @@ Usage:
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
@@ -21,6 +22,7 @@ from apps.contacts.models import (
     ContactAttributeDef,
 )
 from apps.contacts.services import resolve_contact_for_ticket
+from apps.email_channel.models import Mailbox
 from apps.knowledge_base.models import Article, Category
 from apps.organizations.models import (
     SHOWDESK_INTERNAL_ORG_SLUG,
@@ -66,6 +68,7 @@ class Command(BaseCommand):
         agents = self._create_agents(org)
         end_users = self._create_end_users(org)
         team = self._create_team(org, agents)
+        mailbox = self._create_mailbox(org, team)
         tags = self._create_tags(org)
         self._create_sla_policies(org)
         tickets = self._create_tickets(org, agents, end_users, tags, team)
@@ -77,6 +80,11 @@ class Command(BaseCommand):
         internal_org = self._create_internal_organization()
         self._create_internal_staff(internal_org)
 
+        mailbox_line = (
+            f"  Mailbox: {mailbox.public_address} -> {mailbox.inbound_address}\n"
+            if mailbox
+            else ""
+        )
         self.stdout.write(
             self.style.SUCCESS(
                 "\nSeed complete!\n"
@@ -88,6 +96,7 @@ class Command(BaseCommand):
                 f"  Tickets: {len(tickets)}\n"
                 f"  Company: {company.name}\n"
                 f"  Contacts: {', '.join(sorted(c.email for c in contacts))}\n"
+                f"{mailbox_line}"
                 f"\n  Login with: admin@showdesk.local (OTP via email)\n"
                 f"  Emails visible at: http://localhost/mailpit/\n"
             )
@@ -237,6 +246,22 @@ class Command(BaseCommand):
             team.members.set(agents)
             self.stdout.write(f"  Created team: {team.name}")
         return team
+
+    def _create_mailbox(self, org: Organization, team: Team) -> Mailbox | None:
+        """Create a support mailbox, when this instance receives mail at all.
+
+        Feed it with ``manage.py ingest_eml`` and the mailbox's inbound address.
+        """
+        if not settings.INBOUND_EMAIL_DOMAIN:
+            return None
+        mailbox, created = Mailbox.objects.get_or_create(
+            organization=org,
+            public_address="support@acme.example.com",
+            defaults={"name": "Support", "default_team": team},
+        )
+        if created:
+            self.stdout.write(f"  Created mailbox: {mailbox.inbound_address}")
+        return mailbox
 
     def _create_tags(self, org: Organization) -> list[Tag]:
         """Create demo tags."""

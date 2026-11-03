@@ -1,7 +1,7 @@
 # Email Channel (send + receive) — Design Document
 
 > Date: 2026-10-29
-> Status: Validated
+> Status: Validated. PR 2 built on `feat/email-channel` (2026-11-03), see §10.
 > Phase: 3.5 (Channels & Integrations)
 > Research input: `docs/brainstorm/multi-channel-communication.md` (§1, §6)
 > Depends on: `docs/plans/2026-10-29-contacts-design.md`
@@ -208,8 +208,10 @@ whose `context_metadata` references the previous one.
 
 ### 4.6 Errors
 
-Exceptions mark the row `failed` and the task retries with backoff; an admin
-action replays any `InboundEmail`. Idempotency relies on
+Exceptions mark the row `failed` and the task retries with backoff. An admin
+replays a `failed` row, from the Django admin (any row) or from the API (the
+rows of their organization's mailboxes): the row goes back to `pending` before
+it's queued, so a replay asked twice runs once. Idempotency relies on
 `(message_id, mailbox)`, and the task does nothing unless the row is `pending`
 or `failed`, under its row lock: it can be queued twice.
 
@@ -262,6 +264,13 @@ For a public agent reply:
 
 Presence: `WidgetConsumer` sets `widget_presence:{session_id}` in Redis with a
 60 s TTL, refreshed by a 25 s client ping, deleted on disconnect.
+
+As built: the key holds the socket's channel name, and a socket only deletes its
+own, so the late disconnect of a socket a reconnect replaced leaves the new one
+present. "Connected" means any widget session that would see the reply: the
+ticket's own, and those entitled to it through the Contact's history (§6.2). A
+cache outage reads as "not connected", so the reply is emailed at once rather
+than lost. Two tabs share one key: see Known limitations.
 
 `Contact.is_unsubscribed` suppresses notification emails, except on tickets
 the contact opened by email (the channel they chose).
@@ -385,7 +394,14 @@ emails org admins.
 
 ### 7.4 UI
 
-Mailbox settings, "Send from support@acme.com" wizard: (1) domain ownership
+PR 2 ships the Settings "Email" tab without the sending wizard: mailboxes,
+their inbound address with a copy button, public address, default team,
+active toggle, address regeneration (confirmed first), the forwarding steps
+below, the detected Gmail code and link, and the log of ignored, rejected and
+failed mail with a replay for admins. The tab is hidden while
+`INBOUND_EMAIL_DOMAIN` is empty.
+
+PR 3 adds to it a "Send from support@acme.com" wizard: (1) domain ownership
 (existing flow), (2) DNS records with copy buttons, (3) status and "Check now".
 The same screen documents forwarding for Google Workspace / Gmail (including
 the detected confirmation link/code) and Microsoft 365 (external forwarding is
@@ -457,3 +473,55 @@ inbound provider.
 - **Development environment**: outbound mail is captured by Mailpit (headers
   checked there); inbound is exercised with `manage.py ingest_eml` using
   replies crafted from captured mails, until an inbound provider is connected.
+
+---
+
+## 10. As built (PR 2)
+
+The implementation plan (`docs/plans/2026-11-01-email-channel-plan.md`) made
+these choices beyond this design. Each one is pinned by a test.
+
+| # | Choice | Why |
+|---|---|---|
+| 1 | Only the configured provider's webhook is mounted: `/anymail/postal/inbound/` needs `ANYMAIL_POSTAL_WEBHOOK_KEY`, the rest of `anymail.urls` needs `ANYMAIL_WEBHOOK_SECRET`. | Without a secret, Anymail's basic-auth check only warns: any other provider's inbound route would take a forged mail. |
+| 2 | Our own `PostalInboundView`, subclassing Anymail's. | Anymail decodes the raw message as UTF-8 (an 8-bit Latin-1 mail was a 500) and reads it through `request.body`, capped far below `INBOUND_EMAIL_MAX_SIZE_MB`. |
+| 3 | `TicketMessage.external_sender`: the display name and address of the mail's `From`. | A third party's reply on a thread shows who wrote it. Anonymization clears it. |
+| 4 | The raw `.eml` never gets a URL, in the API or the Django admin. Agents of the ticket's organization download it from `GET /api/v1/tickets/{id}/messages/{mid}/original/` (`message/rfc822`, attachment, `nosniff`); a purged one is a 404. | The default storage builds URLs, and a mail holds personal data. |
+| 5 | Anonymization deletes the contact's `InboundEmail` rows and raw files (its own, its tickets', those sent from its address) and clears `external_id` and `external_sender` on its messages. | Otherwise the raw mail keeps everything the anonymization removes. |
+| 6 | The conversation token carries a keyed hash of the address it was mailed to (16 hex characters of an HMAC-SHA256 of the lowercased address, with its own salt), never the address. A link opens its conversation, and verifies the contact, only while the contact's email has that hash. | An agent correcting a contact's email must neither let an old link prove the new address nor keep the old address's holder in the conversation. |
+| 7 | The conversation link never makes a ticket's `sender_verified` true. | It proves who holds the mailbox now, not who wrote the ticket. |
+| 8 | `OTPCode.purpose` (`login`, `widget_email`), with separate throttles. | A widget visitor can't spend, cancel or exhaust someone's login codes. |
+| 9 | `WidgetSession.email_proof_source` (`signed`, `code`); the logout rule (Contacts §3 rule 8) only applies to `signed`. | A host page that never signs would lose a code proof at the next page load. |
+| 10 | Agents' own addresses never become contacts on inbound mail. | Contacts §5: an agent, admin or superuser never becomes a Contact. |
+| 11 | Reuniting history on proof (Contacts §8) moves tickets, sessions and notes from the email-only contact to the identified one, fills the blanks, keeps an unsubscription, then deletes the email-only row. | The email has to move for the proof to hold. |
+
+Decisions taken on 2026-11-03:
+
+- **A. The widget's code banner** is the same neutral one for every unproven
+  email, the route always answers 202, and a code is only mailed when there's
+  something to see (§6.2).
+- **B. Unsubscribed contacts** get no email for a widget ticket and find the
+  reply in the widget; tickets they opened by email still get replies (§5.2,
+  and Contacts §5 corrected accordingly).
+
+What agents and admins have:
+
+- `/api/v1/mailboxes/`: agents read, admins create and edit (the serializer runs
+  `Mailbox.full_clean()`, so the inbound-domain and team checks apply; a public
+  address already taken is a 400 on that field). Mailboxes are deactivated,
+  never deleted, since their log would go with them. The Gmail confirmation is
+  only sent to admins. `POST …/{id}/regenerate-address/` (admins).
+- `GET /api/v1/mailboxes/{id}/inbound/`: the paginated log of the mailbox's
+  `ignored`, `rejected` and `failed` mail. Mail no mailbox was found for stays in
+  the Django admin.
+- `POST /api/v1/inbound-emails/{id}/replay/` (admins, `failed` rows of their
+  organization only; 409 otherwise), and the same replay as a Django admin action.
+- The organization payload carries `inbound_email_enabled` and
+  `inbound_email_domain`, which show or hide the Settings "Email" tab.
+- On a ticket: a channel badge per message, the mail's sender, "View original"
+  (downloaded through the authenticated API client), and "Not delivered by email"
+  when a reply bounced. The Gmail confirmation link is only linked when it's an
+  https link to `mail.google.com` or `mail-settings.google.com`, checked again in
+  the browser.
+- `manage.py seed` adds a "Support" mailbox to the demo organization when
+  `INBOUND_EMAIL_DOMAIN` is set.

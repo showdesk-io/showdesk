@@ -397,7 +397,8 @@ string, cut to the column's length, and the metadata leaves out what `jsonb` ref
 `widget_submit` answers with `{id, reference}` only, the token being public.
 
 `Contact.is_unsubscribed` blocks every notification email to the contact (enforced by
-the email channel). Corrected by the email channel design §5.2, which wins: an agent's
+the email channel). Corrected by the email channel design §5.2, which wins (Decision B
+of the email channel implementation plan, 2026-11-03): an agent's
 reply is no exception, except on a ticket the contact opened by email, the channel they
 chose. An unsubscribed contact gets no email for a widget ticket, and finds the reply
 in the widget.

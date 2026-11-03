@@ -720,10 +720,9 @@ Full brainstorm on notifications: who gets notified, when, and via which channel
 ## Phase 3.5 -- Channels & Integrations (next up)
 
 Contacts & Companies, the prerequisite of the email channel, are done on the
-`feat/contacts` branch. The rest is still research notes in `docs/brainstorm/`.
-Today Showdesk sends transactional email (Mailjet via `django-anymail`)
-but cannot **receive** email: `Ticket.source = "email"` exists in the
-model, no inbound pipeline feeds it.
+`feat/contacts` branch, and the email channel's receiving side (PR 2) on
+`feat/email-channel`. Sending from an organization's own domain (PR 3) and the
+MCP server are next.
 
 ### Contacts & Companies (P0) -- see `docs/plans/2026-10-29-contacts-design.md`
 
@@ -744,17 +743,23 @@ model, no inbound pipeline feeds it.
 - [ ] P1: Saved views for the contact list
 - [ ] P1: Server-side `identify` API
 
-### Email channel (send + receive) -- see `docs/brainstorm/multi-channel-communication.md`
+### Email channel (send + receive) -- see `docs/plans/2026-10-29-email-channel-design.md`
 
-- [ ] Inbound provider + webhook endpoint (Postmark Inbound / Mailjet Parse / SES), signature-verified, idempotent
-- [ ] Per-org inbound address (`{org_slug}@inbound.showdesk.io`) + optional custom forward (`support@acme.com` → Showdesk)
-- [ ] Threading: stable `Message-ID` on every outbound reply, `Reply-To: reply+{token}@inbound…` token, `In-Reply-To`/`References` + `[SD-123]` subject fallback
-- [ ] Inbound parsing: quote/signature stripping, attachments to S3, auto-responder / bounce / loop detection, `Fwd:` → new ticket
-- [ ] Agent replies on email tickets go out as email from the org's address (sender domain / DKIM per org)
+PR 2 (`feat/email-channel`, 2026-11-03): receiving, threading, repliable replies, conversation page, email proof in the widget.
+
+- [x] Inbound webhook, signature-verified and idempotent: Postal as reference (`ANYMAIL_POSTAL_WEBHOOK_KEY`), other Anymail providers behind `ANYMAIL_WEBHOOK_SECRET`; `manage.py ingest_eml` for testing and self-hosting
+- [x] Mailboxes: per-org inbound address (`{slug}-{random}@{INBOUND_EMAIL_DOMAIN}`, regenerable), optional public address (`support@acme.com` forwarded), default team
+- [x] Threading: stored `Message-ID` on every outbound reply, signed `Reply-To: reply+{token}@…`, `In-Reply-To`/`References`, `[SD-123]` subject only from the ticket's contact; reopen window
+- [x] Inbound parsing: quoted history stripped, attachments stored with a size cap, auto-reply / bounce / loop / spam / rate-limit / duplicate filters, Gmail forwarding confirmation detected
+- [x] Replies by email when the requester isn't in the widget, or still unread after `WIDGET_UNREAD_EMAIL_DELAY_MINUTES`; unsubscribed contacts only on tickets they opened by email
+- [x] Conversation page from a signed link (30 days, renewable by email)
+- [x] Email proof in the widget by a one-time code, and history reunion once an email is proven
+- [x] Anonymization and retention cover inbound mail (raw mails purged after `INBOUND_EMAIL_RAW_RETENTION_DAYS`)
+- [x] Agents: Settings "Email" tab (mailboxes, forwarding steps for Google Workspace and Microsoft 365, log of ignored mail, replay), channel badge, mail sender, "View original" and "not delivered" on tickets
 - [x] Requester identity unification: email requesters and widget `external_user_id` share one `Contact` per person (Contacts & Companies above)
-- [ ] History reunion once an email is proven: reassign an email-only contact's tickets to the identified contact holding the proof
+- [x] Model refactor decision: keep `Ticket → TicketMessage` + `channel`/`external_id` on messages (decided 2026-10-29); revisit when designing a third channel
+- [ ] PR 3: send from the organization's own domain (`SendingDomainProvider` adapter, DNS wizard, periodic checks)
 - [ ] Security follow-up: widget upload routes accept any ticket id of the organization with the public token alone (`tickets/widget_upload_attachment/`, `videos/widget_upload/`)
-- [x] Model refactor decision: keep `Ticket → TicketMessage` + `channel`/`external_id` on messages (decided 2026-10-29, see `docs/plans/2026-10-29-email-channel-design.md`); revisit when designing a third channel
 
 ### MCP server -- see `docs/brainstorm/mcp-server.md`
 
@@ -802,7 +807,7 @@ model, no inbound pipeline feeds it.
 
 ## Summary
 
-*Status as of 2026-10-30.*
+*Status as of 2026-11-03.*
 
 | Area | Progress | What's done | What's left |
 |------|----------|-------------|-------------|
@@ -818,12 +823,12 @@ model, no inbound pipeline feeds it.
 | Admin (org) | **~75%** | Agents, teams, widget, tags, priorities, canned responses, domains, branding, SLA | Agent groups, notification prefs, audit log, custom domain, widget code examples |
 | Admin (platform) | **~70%** | Orgs, impersonation, usage dashboard, plans + feature flags + gates | **Billing**, monitoring, announcements |
 | Notifications | **~10%** | Basic emails + in-app WebSocket | SLA breach detection, preferences, webhooks, Slack |
-| Channels & Integrations (3.5) | **~20%** | Contacts & Companies P0 (`feat/contacts`), research notes | Contacts P1, email channel (send + receive), MCP server |
+| Channels & Integrations (3.5) | **~50%** | Contacts & Companies P0 (`feat/contacts`), email channel PR 2: receiving, threading, repliable replies, conversation page (`feat/email-channel`) | Contacts P1, sending domains (email PR 3), MCP server |
 | Post-MVP / AI | **0%** | Models/flags ready | Everything |
 
 ### Next priorities
 
-1. **Email channel (send + receive)** -- inbound provider + per-org address, threading, agent replies by email (Phase 3.5). *Next up, on top of Contacts & Companies once `feat/contacts` is merged.*
+1. **Email channel PR 3: sending domains** -- replies `From` the organization's own address once its domain is verified for sending (Phase 3.5). PR 2 (receiving, threading, replies by email) is on `feat/email-channel`.
 2. **Billing on top of plans** (Stripe Checkout + Customer Portal → `Organization.plan`).
 3. **MCP server MVP** (read-only + draft tools, plan-gated).
 4. SLA breach detection + notifications.

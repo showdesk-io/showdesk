@@ -140,3 +140,20 @@ def test_seed_ignores_the_same_reference_in_another_organization():
     assert Ticket.objects.filter(
         organization__slug="acme-corp", reference="SD-0001"
     ).exists()
+
+
+@pytest.mark.django_db
+def test_seeds_a_mailbox_only_when_mail_can_reach_it(settings):
+    from apps.email_channel.models import Mailbox
+
+    settings.INBOUND_EMAIL_DOMAIN = ""
+    _seed()
+    assert not Mailbox.objects.exists()
+
+    settings.INBOUND_EMAIL_DOMAIN = "in.example.com"
+    _seed()
+    _seed()
+
+    mailbox = Mailbox.objects.get()
+    assert mailbox.organization.slug == "acme-corp"
+    assert mailbox.public_address == "support@acme.example.com"
