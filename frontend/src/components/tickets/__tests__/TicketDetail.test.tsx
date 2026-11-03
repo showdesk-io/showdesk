@@ -5,6 +5,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { AxiosError, type AxiosResponse } from "axios";
+import toast from "react-hot-toast";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/api/client";
@@ -172,24 +174,70 @@ describe("TicketDetail messages", () => {
   });
 
   it("downloads the original mail through the authenticated client", async () => {
-    const createObjectURL = vi.fn(() => "blob:original");
-    const revokeObjectURL = vi.fn();
-    Object.assign(URL, { createObjectURL, revokeObjectURL });
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    // jsdom has no blob URLs: define them, so that they can be spied on and restored.
+    Object.assign(URL, { createObjectURL: () => "", revokeObjectURL: () => {} });
+    const create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:original");
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const attached: boolean[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        attached.push(this.isConnected);
+      });
     client.get.mockImplementation((url: string) =>
       Promise.resolve({ data: url.endsWith("/original/") ? new Blob(["raw"]) : [] }),
     );
     renderDetail(makeTicket({ messages: [emailed] }));
 
-    await userEvent.setup().click(screen.getByRole("button", { name: "View original" }));
+    try {
+      await userEvent.setup().click(screen.getByRole("button", { name: "View original" }));
 
-    await waitFor(() => expect(click).toHaveBeenCalled());
-    expect(client.get).toHaveBeenCalledWith(
-      `/tickets/t1/messages/${emailed.id}/original/`,
-      { responseType: "blob" },
+      await waitFor(() => expect(click).toHaveBeenCalled());
+      expect(client.get).toHaveBeenCalledWith(
+        `/tickets/t1/messages/${emailed.id}/original/`,
+        { responseType: "blob" },
+      );
+      expect(create).toHaveBeenCalled();
+      // Clicked while in the document, then removed from it.
+      expect(attached).toEqual([true]);
+      expect(document.querySelector("a[download]")).toBeNull();
+      // Revoked later, not right away: some browsers abort the download otherwise.
+      expect(revoke).not.toHaveBeenCalled();
+      await waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:original"), {
+        timeout: 2000,
+      });
+    } finally {
+      create.mockRestore();
+      revoke.mockRestore();
+      click.mockRestore();
+    }
+  });
+
+  it("says the original mail is gone only on a 404", async () => {
+    const failWith = (status: number) =>
+      client.get.mockImplementation((url: string) =>
+        url.endsWith("/original/")
+          ? Promise.reject(
+              new AxiosError("Failed", "ERR_BAD_RESPONSE", undefined, undefined, {
+                status,
+              } as AxiosResponse),
+            )
+          : Promise.resolve({ data: [] }),
+      );
+    renderDetail(makeTicket({ messages: [emailed] }));
+    const user = userEvent.setup();
+
+    failWith(404);
+    await user.click(screen.getByRole("button", { name: "View original" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("The original mail is no longer available."),
     );
-    expect(createObjectURL).toHaveBeenCalled();
-    click.mockRestore();
+
+    failWith(500);
+    await user.click(screen.getByRole("button", { name: "View original" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenLastCalledWith("Could not download the original mail."),
+    );
   });
 
   it("says when a reply couldn't be delivered by email", () => {

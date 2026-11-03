@@ -50,15 +50,18 @@ function logEntry(overrides: Partial<InboundLogEntry> = {}): InboundLogEntry {
   };
 }
 
-function refusal(data: unknown): AxiosError {
+function refusal(data: unknown, status = 400): AxiosError {
   return new AxiosError("Request failed", "ERR_BAD_REQUEST", undefined, undefined, {
-    status: 400,
+    status,
     data,
   } as AxiosResponse);
 }
 
 let mailboxes: Mailbox[];
 let log: InboundLogEntry[];
+type LogPage = { next: string | null; previous: string | null; results: InboundLogEntry[] };
+/** Pages of the log by number, when a test pages it; a missing one is a 404. */
+let pages: Record<number, LogPage | undefined> | null;
 
 async function renderTab({ isAdmin = true }: { isAdmin?: boolean } = {}) {
   const queryClient = new QueryClient({
@@ -77,12 +80,20 @@ beforeEach(() => {
   vi.clearAllMocks();
   mailboxes = [mailbox()];
   log = [];
-  client.get.mockImplementation((url: string) => {
+  pages = null;
+  client.get.mockImplementation((url: string, config?: unknown) => {
     if (url === "/mailboxes/") return Promise.resolve({ data: mailboxes });
     if (url === "/teams/")
       return Promise.resolve({ data: { results: [{ id: "team1", name: "Billing" }] } });
-    if (url.endsWith("/inbound/"))
+    if (url.endsWith("/inbound/")) {
+      if (pages) {
+        const page = pages[(config as { params: { page: number } }).params.page];
+        return page
+          ? Promise.resolve({ data: { count: 2, ...page } })
+          : Promise.reject(refusal({ detail: "Invalid page." }, 404));
+      }
       return Promise.resolve({ data: { count: log.length, next: null, previous: null, results: log } });
+    }
     return Promise.reject(new Error(`unexpected ${url}`));
   });
   client.post.mockResolvedValue({ data: mailbox() });
@@ -222,6 +233,42 @@ describe("MailboxesTab", () => {
     await waitFor(() =>
       expect(client.post).toHaveBeenCalledWith("/inbound-emails/i2/replay/"),
     );
+  });
+
+  it("steps back a page when a replay empties the last one", async () => {
+    pages = {
+      1: { next: "page=2", previous: null, results: [logEntry()] },
+      2: {
+        next: null,
+        previous: "page=1",
+        results: [logEntry({ id: "i2", subject: "Printer on fire", status: "failed" })],
+      },
+    };
+    const user = await renderTab();
+    await user.click(screen.getByRole("button", { name: "Show received mail log" }));
+    await user.click(await screen.findByRole("button", { name: "Older" }));
+    await screen.findByText("Printer on fire", { selector: "td" });
+
+    pages[2] = undefined;
+    await user.click(screen.getByRole("button", { name: "Replay" }));
+
+    await screen.findByText("Out of office", { selector: "td" });
+    expect(client.get).toHaveBeenLastCalledWith("/mailboxes/m1/inbound/", {
+      params: { page: 1 },
+    });
+  });
+
+  it("keeps the pager on a page that can't be loaded", async () => {
+    pages = {
+      1: { next: "page=2", previous: null, results: [logEntry()] },
+    };
+    const user = await renderTab();
+    await user.click(screen.getByRole("button", { name: "Show received mail log" }));
+    await user.click(await screen.findByRole("button", { name: "Older" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Could not load/);
+    await user.click(screen.getByRole("button", { name: "Newer" }));
+    await screen.findByText("Out of office", { selector: "td" });
   });
 
   it("is read-only for agents", async () => {

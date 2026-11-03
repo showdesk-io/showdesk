@@ -319,10 +319,14 @@ function InboundLog({ mailboxId, isAdmin }: { mailboxId: string; isAdmin: boolea
     return <p className="mt-3 text-sm text-gray-500">Loading…</p>;
   }
   if (isError || !data) {
+    // With the pager: a page emptied meanwhile is a 404, and the previous one isn't.
     return (
-      <p role="alert" className="mt-3 text-sm text-red-600">
-        Could not load the received mail log.
-      </p>
+      <div className="mt-3">
+        <p role="alert" className="text-sm text-red-600">
+          Could not load the received mail log.
+        </p>
+        {page > 1 && <LogPager page={page} hasNewer hasOlder={false} onPage={setPage} />}
+      </div>
     );
   }
   if (data.results.length === 0) {
@@ -334,8 +338,13 @@ function InboundLog({ mailboxId, isAdmin }: { mailboxId: string; isAdmin: boolea
   }
 
   const replayMail = (id: string) => {
+    // The replayed mail leaves the log: alone on its page, the page goes with it.
+    const emptiesPage = page > 1 && data.results.length === 1;
     replay.mutate(id, {
-      onSuccess: () => toast.success("The mail will be processed again."),
+      onSuccess: () => {
+        if (emptiesPage) setPage(page - 1);
+        toast.success("The mail will be processed again.");
+      },
       onError: () => toast.error("Could not replay this mail."),
     });
   };
@@ -389,25 +398,46 @@ function InboundLog({ mailboxId, isAdmin }: { mailboxId: string; isAdmin: boolea
         </table>
       </div>
       {(data.previous || data.next) && (
-        <div className="mt-2 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => setPage(page - 1)}
-            disabled={!data.previous}
-            className={SMALL_BUTTON_CLASS}
-          >
-            Newer
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage(page + 1)}
-            disabled={!data.next}
-            className={SMALL_BUTTON_CLASS}
-          >
-            Older
-          </button>
-        </div>
+        <LogPager
+          page={page}
+          hasNewer={Boolean(data.previous)}
+          hasOlder={Boolean(data.next)}
+          onPage={setPage}
+        />
       )}
+    </div>
+  );
+}
+
+function LogPager({
+  page,
+  hasNewer,
+  hasOlder,
+  onPage,
+}: {
+  page: number;
+  hasNewer: boolean;
+  hasOlder: boolean;
+  onPage: (page: number) => void;
+}) {
+  return (
+    <div className="mt-2 flex justify-end gap-2">
+      <button
+        type="button"
+        onClick={() => onPage(page - 1)}
+        disabled={!hasNewer}
+        className={SMALL_BUTTON_CLASS}
+      >
+        Newer
+      </button>
+      <button
+        type="button"
+        onClick={() => onPage(page + 1)}
+        disabled={!hasOlder}
+        className={SMALL_BUTTON_CLASS}
+      >
+        Older
+      </button>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
+import { isAxiosError } from "axios";
 import type {
   MessageChannel,
   Ticket,
@@ -510,6 +511,8 @@ interface ChatBubbleProps {
   onDelete?: (messageId: string) => void;
 }
 
+const REVOKE_DOWNLOAD_AFTER_MS = 1000;
+
 const CHANNEL_LABELS: Record<MessageChannel, string> = {
   widget: "Widget",
   email: "Email",
@@ -526,16 +529,24 @@ async function viewOriginal(ticketId: string, reference: string, messageId: stri
   let blob: Blob;
   try {
     blob = await fetchOriginalMail(ticketId, messageId);
-  } catch {
-    toast.error("The original mail is no longer available.");
+  } catch (error) {
+    toast.error(
+      isAxiosError(error) && error.response?.status === 404
+        ? "The original mail is no longer available."
+        : "Could not download the original mail.",
+    );
     return;
   }
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = `${reference}-${messageId.slice(0, 8)}.eml`;
+  // In the document while clicked, and revoked later, as some browsers otherwise
+  // abort the download.
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DOWNLOAD_AFTER_MS);
 }
 
 function ChatBubble({
