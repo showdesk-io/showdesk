@@ -73,8 +73,9 @@ def requeue_stale_inbound() -> int:
 def purge_inbound_raw() -> int:
     """Delete the raw mails older than ``INBOUND_EMAIL_RAW_RETENTION_DAYS``.
 
-    The rows stay, as a log. Pending and failed mails keep theirs: it's all a
-    replay has. Returns how many were deleted.
+    The rows stay, as a log, until ``INBOUND_EMAIL_LOG_RETENTION_DAYS``. Pending
+    and failed mails keep both: it's all a replay has. Returns how many raw mails
+    were emptied.
     """
     from django.conf import settings
 
@@ -100,6 +101,12 @@ def purge_inbound_raw() -> int:
             if emptied:
                 transaction.on_commit(lambda s=storage, n=name: _delete_file(s, n))
         count += emptied
+    # The log itself, past its own retention. Their files go with the rows, once
+    # committed, by the post_delete receiver.
+    InboundEmail.objects.filter(
+        received_at__lt=timezone.now()
+        - timedelta(days=settings.INBOUND_EMAIL_LOG_RETENTION_DAYS)
+    ).exclude(status__in=PROCESSABLE).delete()
     return count
 
 

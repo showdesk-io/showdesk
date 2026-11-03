@@ -223,6 +223,14 @@ def _delete_inbound_mail(contact: Contact, email: str, ticket_ids) -> None:
             | Q(ticket__organization_id=contact.organization_id)
         )
     InboundEmail.objects.filter(query).delete()
+    if email:
+        # Their address as the sender of a mail, on tickets that aren't theirs:
+        # a reply in a thread they were copied on, for instance.
+        TicketMessage.objects.filter(
+            Q(external_sender__iexact=email)
+            | Q(external_sender__iendswith=f"<{email}>"),
+            ticket__organization_id=contact.organization_id,
+        ).update(external_sender="", updated_at=timezone.now())
 
 
 def _tickets_of(contact: Contact, session_ids, external_id: str):

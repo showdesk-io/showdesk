@@ -50,3 +50,21 @@ def test_the_purge_runs_daily():
 
     assert schedule["task"] == "apps.email_channel.tasks.purge_inbound_raw"
     assert schedule["schedule"] == 60 * 60 * 24
+
+
+def test_log_rows_past_their_retention_are_deleted_with_their_file(
+    settings, django_capture_on_commit_callbacks
+):
+    settings.INBOUND_EMAIL_RAW_RETENTION_DAYS = 30
+    settings.INBOUND_EMAIL_LOG_RETENTION_DAYS = 90
+    kept = _received(89)
+    gone = _received(91, status=InboundEmail.Status.REJECTED)
+    pending = _received(91, status=InboundEmail.Status.PENDING)
+    failed = _received(91, status=InboundEmail.Status.FAILED)
+    storage, name = gone.raw.storage, gone.raw.name
+
+    with django_capture_on_commit_callbacks(execute=True):
+        purge_inbound_raw()
+
+    assert set(InboundEmail.objects.all()) == {kept, pending, failed}
+    assert not storage.exists(name)

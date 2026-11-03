@@ -334,8 +334,9 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   sender's domain) and `From` (`external_sender`) of a message that came by email
   cleared; the channel stays. Inbound mail: the stored mails (rows and raw `.eml` files)
   of those tickets, and those sent from the Contact's address to a mailbox or ticket of
-  its organization, ignored ones included, are deleted. Mail from that address to another
-  organization stays. Files: the contact's attachments and recordings are deleted, rows and files.
+  its organization, ignored ones included, are deleted, and the address is cleared as
+  the `external_sender` of any message of the organization (a reply from a thread the
+  contact was copied on). Mail from that address to another organization stays. Files: the contact's attachments and recordings are deleted, rows and files.
   "The contact's" means uploaded with no user (as the widget does, or by an account since
   deleted) or by the ticket's requester. A requester who's an agent or admin of the
   organization filed the ticket for the contact: what they wrote or uploaded stays. Files
@@ -501,7 +502,9 @@ in the widget.
   anonymizing again repairs it. A video being processed at that moment can leave its
   thumbnail on the storage.
 - A ticket scrubbed while it had no Contact stays without one, so the upload endpoints that
-  take a ticket id and check for an anonymized Contact still accept files on it.
+  take a ticket id and check for an anonymized Contact still accept files on it, and a
+  mail can still continue it (by its reply address, or headers naming one of its
+  messages' ids that were kept).
 - Anonymization only deletes mail sent from the address the Contact holds when it runs.
   Mail from an address it held before, a `declared_email`, or mail that no mailbox took
   (stored rejected, with no organization) stays until the raw mail's retention, and the

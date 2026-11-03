@@ -99,3 +99,25 @@ def test_the_export_tells_the_channel_and_holds_no_mail(mailbox, contact):
     [exported] = json.loads(archive.read("tickets.json"))
     assert [message["channel"] for message in exported["messages"]] == ["email"]
     assert "CAF0rwd-1" not in archive.read("tickets.json").decode()
+
+
+def test_anonymization_clears_the_contacts_address_as_a_mail_sender(mailbox, contact):
+    # A reply from the contact's address, on a ticket that isn't theirs.
+    elsewhere_in_org = TicketMessageFactory(
+        ticket__organization=mailbox.organization,
+        author=None,
+        sender_type=TicketMessage.SenderType.USER,
+        external_sender='"Ann" <Ann@Example.org>',
+    )
+    in_another_org = TicketMessageFactory(
+        author=None,
+        sender_type=TicketMessage.SenderType.USER,
+        external_sender="ann@example.org",
+    )
+
+    anonymize_contact(contact)
+
+    elsewhere_in_org.refresh_from_db()
+    in_another_org.refresh_from_db()
+    assert elsewhere_in_org.external_sender == ""
+    assert in_another_org.external_sender == "ann@example.org"

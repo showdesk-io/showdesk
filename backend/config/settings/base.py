@@ -382,6 +382,10 @@ INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR = config(
 INBOUND_EMAIL_RAW_RETENTION_DAYS = config(
     "INBOUND_EMAIL_RAW_RETENTION_DAYS", default=30, cast=int
 )
+# How long the log of received mails is kept (rows, without their raw mail).
+INBOUND_EMAIL_LOG_RETENTION_DAYS = config(
+    "INBOUND_EMAIL_LOG_RETENTION_DAYS", default=90, cast=int
+)
 # A reply left unread in the widget this long is also sent by email.
 WIDGET_UNREAD_EMAIL_DELAY_MINUTES = config(
     "WIDGET_UNREAD_EMAIL_DELAY_MINUTES", default=5, cast=int

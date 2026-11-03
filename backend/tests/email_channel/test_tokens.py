@@ -9,7 +9,6 @@ from unittest import mock
 from django.core import signing
 
 from apps.email_channel.tokens import (
-    ConversationClaim,
     conversation_token,
     outbound_message_id,
     read_conversation_token,
@@ -46,14 +45,20 @@ def test_a_reply_address_cannot_be_forged_or_moved():
         assert ticket_id_from_reply_address(address) is None
 
 
-def test_a_conversation_token_carries_ticket_contact_and_address():
+def test_a_conversation_token_carries_ticket_contact_and_a_hash_of_the_address():
     ticket, contact = _ticket(), SimpleNamespace(id=uuid.uuid4())
 
     token = conversation_token(ticket, contact, "Ann@Example.org ")
 
-    assert read_conversation_token(token) == ConversationClaim(
-        ticket_id=str(ticket.id), contact_id=str(contact.id), email="ann@example.org"
-    )
+    claim = read_conversation_token(token)
+    assert (claim.ticket_id, claim.contact_id) == (str(ticket.id), str(contact.id))
+    assert claim.holds("ann@example.org")
+    assert claim.holds(" ANN@example.org")
+    assert not claim.holds("bob@example.org")
+    assert not claim.holds("")
+    # A link is forwarded, pasted, logged: it doesn't spell the address out.
+    payload = signing.loads(token, salt="showdesk.email_channel.conversation")
+    assert "ann" not in str(payload).lower()
     assert read_conversation_token(token[:-2] + "xx") is None
 
 
@@ -73,7 +78,7 @@ def test_an_expired_conversation_token_is_only_read_to_renew(settings):
 
 def test_other_signed_values_are_no_conversation_tokens():
     ticket = _ticket()
-    payload = {"t": str(ticket.id), "c": str(uuid.uuid4()), "e": "ann@example.org"}
+    payload = {"t": str(ticket.id), "c": str(uuid.uuid4()), "h": "0" * 16}
     reply_token = reply_address(ticket).partition("+")[2].partition("@")[0]
 
     assert read_conversation_token(reply_token) is None

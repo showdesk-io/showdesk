@@ -278,8 +278,9 @@ showing the channel.
 - Public frontend route `/c/:token`, branded with the organization's logo and
   colour, no account needed: full public thread (no internal notes), reply
   box, attachments. Messages posted there use `channel = widget`.
-- `token` = `django.core.signing` of `{ticket_id, contact_id}` with a dedicated
-  salt and `max_age = CONVERSATION_LINK_MAX_AGE_DAYS` (default 30). Every email
+- `token` = `django.core.signing` of `{ticket_id, contact_id, hash of the
+  address mailed}` (never the address in clear: a link is forwarded and logged)
+  with a dedicated salt and `max_age = CONVERSATION_LINK_MAX_AGE_DAYS` (default 30). Every email
   carries a fresh link.
 - Expired link → "Send me a new link": the new link goes **only** to the
   ticket contact's email; the requester never chooses the address.
@@ -384,6 +385,7 @@ All new variables are documented in `.env.example` with safe defaults.
 | `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` | 20 | 2 | Per sender and mailbox. |
 | `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` | 200 | 2 | Per mailbox, all senders. |
 | `INBOUND_EMAIL_RAW_RETENTION_DAYS` | 30 | 2 | Raw `.eml` retention, purged daily; the row stays, and pending or failed mail keeps its file. |
+| `INBOUND_EMAIL_LOG_RETENTION_DAYS` | 90 | 2 | Log of received mails (rows), purged daily; pending or failed ones stay. |
 | `WIDGET_UNREAD_EMAIL_DELAY_MINUTES` | 5 | 2 | Delay before emailing an unread widget reply. |
 | `CONVERSATION_LINK_MAX_AGE_DAYS` | 30 | 2 | Conversation link lifetime. |
 | `SENDING_DOMAIN_PROVIDER` | `none` | 3 | `none`, `manual`, `scaleway_tem`. |

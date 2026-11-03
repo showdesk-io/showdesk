@@ -25,7 +25,7 @@ The code showed these. Each one is pinned by a test in the task named.
 | 3 | `TicketMessage.external_sender` (display name and address of the mail's `From`). | `sender_name` comes from a widget session. A third party's reply on a thread must show who wrote it. Anonymization clears it. | 1, 9 |
 | 4 | The raw `.eml` never gets a URL. Agents open it through an authenticated endpoint. | The default storage builds URLs, and a mail holds personal data. | 3, 16 |
 | 5 | Anonymization deletes the contact's `InboundEmail` rows and raw files, those of its tickets and those sent from its address, and clears `external_id` and `external_sender` on its messages. | Otherwise the raw mail keeps everything the anonymization removes. | 9 |
-| 6 | The conversation token also carries the address the mail went to. Opening a link verifies the contact only if it still holds that address. | An agent can change a contact's email: an old link must not prove the new one. | 6, 11 |
+| 6 | The conversation token also carries a hash of the address the mail went to (16 hex characters of SHA-256 of the lowercased address), never the address in clear. Opening a link verifies the contact only if its current email has that hash. | An agent can change a contact's email: an old link must not prove the new one. | 6, 11 |
 | 7 | `sender_verified` becomes true from a message posted through the link, not from opening it. | Opening proves who holds the mailbox, not who wrote the ticket: someone can file a ticket under another's address, and that person then opens the link. | 11 |
 | 8 | `OTPCode.purpose` (`login`, `widget_email`), with separate throttles. | Without it, a widget visitor spends the attempts of someone's login code, cancels it by asking for a new one, and uses up their hourly OTP quota. | 14 |
 | 9 | `WidgetSession.email_proof_source` (`signed`, `code`). The logout rule (Contacts §3 rule 8) only applies to `signed`. | A host page that never signs can't sign on resume: a code proof would be lost at the next page load. Contacts §8 announced this. | 14 |
@@ -386,11 +386,13 @@ def ticket_id_from_reply_address(address: str) -> uuid.UUID | None:
 class ConversationClaim:
     ticket_id: str
     contact_id: str
-    email: str
+    email_hash: str  # email_hash(address): a link is forwarded and logged
+
+    def holds(self, email: str) -> bool: ...  # constant-time compare of hashes
 
 
 def conversation_token(ticket, contact, email: str) -> str:
-    return signing.dumps({"t": str(ticket.id), "c": str(contact.id), "e": email}, salt=_CONVERSATION_SALT, compress=True)
+    return signing.dumps({"t": str(ticket.id), "c": str(contact.id), "h": email_hash(email)}, salt=_CONVERSATION_SALT, compress=True)
 
 
 def read_conversation_token(token: str, *, allow_expired: bool = False) -> ConversationClaim | None:
@@ -400,7 +402,7 @@ def read_conversation_token(token: str, *, allow_expired: bool = False) -> Conve
         data = signing.loads(token, salt=_CONVERSATION_SALT, max_age=max_age)
     except signing.BadSignature:  # SignatureExpired is a subclass.
         return None
-    return ConversationClaim(data["t"], data["c"], data["e"])
+    return ConversationClaim(data["t"], data["c"], data["h"])
 
 
 def outbound_message_id(message) -> str:
@@ -498,7 +500,7 @@ The requester branch of `send_ticket_reply_email` (`channel=AGENT` or `author` s
 - `From`: `outbound.from_address(ticket)`, §5.1: the ticket's mailbox, else the organization's first active one, else `DEFAULT_FROM_EMAIL`.
 - `Reply-To`: `reply_address(ticket)` when `INBOUND_EMAIL_DOMAIN` is set; none otherwise, as today.
 - Headers: `Message-ID` = `outbound_message_id(message)`, `In-Reply-To`, `References` from the ticket's stored chain, kept under 20 ids. The id is derived from the message, so a retry keeps it. Saves `external_id` before sending and `email_delivery_status=sent` after. Failure past retries: `failed`.
-- Context: the marker `-- Reply above this line --`, the unread replies, the last three public messages, `conversation_url`. A conversation link is built only if the ticket has a contact; `email` in the token is the address the mail goes to.
+- Context: the marker `-- Reply above this line --`, the unread replies, the last three public messages, `conversation_url`. A conversation link is built only if the ticket has a contact; the token carries the hash of the address the mail goes to.
 - With `INBOUND_EMAIL_DOMAIN` empty, everything behaves as today apart from the delay. Pinned by a test.
 
 Scheduled send: `send_unread_reply_email.apply_async(args=[message_id], countdown=delay_minutes * 60)`. It runs only if `widget_last_read_at` doesn't cover the message and no later agent reply exists (that one's task sends the group), and groups every unread reply.
@@ -521,7 +523,7 @@ Commit: `feat(backend): send repliable replies, in the widget first when connect
 
 | Route | Behaviour |
 |---|---|
-| `GET /api/v1/conversations/{token}/` | Branding (`name`, `logo`, colour), status, reference, public messages through `WidgetMessageSerializer`. Marks the contact verified if it holds `claim.email`, under its row lock, with a service function `mark_email_proven(contact, email)`. |
+| `GET /api/v1/conversations/{token}/` | Branding (`name`, `logo`, colour), status, reference, public messages through `WidgetMessageSerializer`. Marks the contact verified if `claim.holds(contact.email)`, under its row lock, with a service function `mark_email_proven(contact, email)`. |
 | `POST …/messages/` | `_create_user_message` extracted to a shared module, `channel=WIDGET`, sets `sender_verified_at`, notifies agents and sessions. A closed ticket follows §4.3's reopen rule. |
 | `POST …/attachments/` | `TicketAttachmentSerializer` with the same limits. |
 | `POST /api/v1/conversations/renew/` | Body `{token}`, read with `allow_expired=True`. Always 202. Mails a fresh link to `ticket.contact.email` and nothing else, at most once per ticket per hour, by a cache key. |
