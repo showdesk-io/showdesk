@@ -527,7 +527,6 @@ class TicketMessage(TimestampedModel):
     external_id = models.CharField(
         max_length=255,
         blank=True,
-        db_index=True,
         help_text="Message-ID of the email this message came in or went out as.",
     )
     external_sender = models.CharField(
@@ -543,6 +542,14 @@ class TicketMessage(TimestampedModel):
 
     class Meta:
         ordering = ["created_at"]
+        indexes = [
+            # Only email messages have one: the others would make most of it.
+            models.Index(
+                fields=["external_id"],
+                condition=~models.Q(external_id=""),
+                name="ticketmessage_external_id",
+            ),
+        ]
 
     def __str__(self) -> str:
         if self.author:

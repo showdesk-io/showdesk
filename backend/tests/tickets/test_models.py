@@ -1,6 +1,9 @@
 """Tests for ticket models."""
 
+import importlib
+
 import pytest
+from django.apps import apps as django_apps
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
@@ -158,3 +161,23 @@ def test_backfill_sets_the_channel_from_the_sender_type() -> None:
         TicketMessage.objects.filter(ticket_id=ticket.pk).values_list("pk", "channel")
     )
     assert channels == {user.pk: "widget", agent.pk: "agent", system.pk: "system"}
+
+
+@pytest.mark.django_db
+def test_backfill_covers_every_batch() -> None:
+    backfill = importlib.import_module(
+        "apps.tickets.migrations.0013_backfill_message_channel"
+    ).backfill_channel
+    ticket = TicketFactory(requester=None)
+    for sender_type in ("agent", "user", "system", "agent", "agent"):
+        TicketMessageFactory(ticket=ticket, author=None, sender_type=sender_type)
+
+    backfill(django_apps, None, batch_size=2)
+
+    assert sorted(ticket.messages.values_list("sender_type", "channel")) == [
+        ("agent", "agent"),
+        ("agent", "agent"),
+        ("agent", "agent"),
+        ("system", "system"),
+        ("user", "widget"),
+    ]

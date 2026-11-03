@@ -61,7 +61,6 @@ class Migration(migrations.Migration):
             name="external_id",
             field=models.CharField(
                 blank=True,
-                db_index=True,
                 help_text="Message-ID of the email this message came in or went out as.",
                 max_length=255,
             ),
