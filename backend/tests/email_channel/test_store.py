@@ -64,6 +64,26 @@ def test_an_overlong_message_id_is_replaced_by_its_hash(mailbox, delay):
     assert store(parse(build(Message_ID=long_id))) is None
 
 
+def test_control_characters_are_dropped_from_what_is_stored(mailbox, delay):
+    # Postgres refuses NUL in text and JSON: the webhook would fail on every retry.
+    raw = (
+        b"From: Ann\x00 Customer <ann\x00@example.org>\r\n"
+        b"To: support@acme.example.com, odd\x00\x01@example.org\r\n"
+        b"Subject: Printer\x00 on\x07 fire\r\n"
+        b"Message-ID: <nul\x00@mail.example.org>\r\n"
+        b"\r\n"
+        b"Hello\r\n"
+    )
+    stored = store(parse(raw), raw=raw)
+
+    stored.refresh_from_db()
+    assert stored.subject == "Printer on fire"
+    assert stored.sender == "ann@example.org"
+    assert stored.message_id == "<nul@mail.example.org>"
+    assert stored.recipients == ["support@acme.example.com", "odd@example.org"]
+    assert stored.mailbox == mailbox
+
+
 def test_unknown_recipient_is_stored_rejected_with_no_task(
     delay, django_capture_on_commit_callbacks
 ):

@@ -1,5 +1,6 @@
 """Which mailbox, or which ticket, an inbound mail is for (design §4.1)."""
 
+import re
 from dataclasses import dataclass
 from email.utils import getaddresses
 
@@ -35,9 +36,21 @@ class Recipient:
         return self.ticket.organization if self.ticket else self.mailbox.organization
 
 
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def one_line(value) -> str:
+    """``value`` as one line of text, without the control characters Postgres refuses.
+
+    Folding and tabs become single spaces; other control characters, such as NUL,
+    go away.
+    """
+    return _CONTROL_CHARACTERS.sub("", " ".join(str(value or "").split()))
+
+
 def _addresses(values: list[str]) -> list[str]:
     addresses = []
-    for _, address in getaddresses(values):
+    for _, address in getaddresses([one_line(value) for value in values]):
         address = address.strip().lower()
         if address and address not in addresses:
             addresses.append(address)
