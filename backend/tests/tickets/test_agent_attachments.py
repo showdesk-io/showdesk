@@ -177,12 +177,21 @@ def test_an_upload_cannot_be_moved_to_another_ticket_or_message(client, ticket, 
     other_ticket = TicketFactory(organization=agent.organization)
     other_message = TicketMessageFactory(ticket=other_ticket)
 
+    for change in (
+        {"message": str(other_message.pk)},
+        {"ticket": str(other_ticket.pk)},
+        {"message": str(other_message.pk), "ticket": str(other_ticket.pk)},
+    ):
+        res = client.patch(
+            f"/api/v1/attachments/{attachment_id}/", change, format="json"
+        )
+        assert res.status_code == 400, change
+    # What it keeps can still be sent as it is.
     res = client.patch(
         f"/api/v1/attachments/{attachment_id}/",
-        {"message": str(other_message.pk), "ticket": str(other_ticket.pk)},
+        {"ticket": str(ticket.pk), "filename": "renamed.pdf"},
         format="json",
     )
-
     assert res.status_code == 200
     attachment = TicketAttachment.objects.get(pk=attachment_id)
     assert (attachment.ticket_id, attachment.message_id) == (ticket.pk, None)
