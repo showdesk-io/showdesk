@@ -139,7 +139,7 @@ to `ingest_eml` without `--recipient`.
    never creates an Organization or a Mailbox. Such a row keeps the sender,
    subject and reason, never the raw mail, and at most
    `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` of them are kept per sender (and mailbox)
-   and hour. A mail rejected without a mailbox doesn't make the same mail,
+   and hour, and at most `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` overall. A mail rejected without a mailbox doesn't make the same mail,
    delivered to a valid reply address, a duplicate.
 
 ### 4.2 Filters (status `ignored`, reason recorded)
@@ -432,7 +432,7 @@ All new variables are documented in `.env.example` with safe defaults.
 | `INBOUND_EMAIL_REOPEN_DAYS` | 7 | 2 | Reopen window for resolved/closed tickets. |
 | `INBOUND_EMAIL_MAX_SIZE_MB` | 25 | 2 | Attachment size cap. |
 | `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` | 20 | 2 | Per sender and mailbox; also bounds the rejected rows kept per sender (§4.1). |
-| `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` | 200 | 2 | Per mailbox, all senders. |
+| `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` | 200 | 2 | Per mailbox, all senders; also bounds the rejected rows kept overall (§4.1). |
 | `INBOUND_EMAIL_RAW_RETENTION_DAYS` | 30 | 2 | Raw `.eml` retention, purged daily; the row stays, and pending or failed mail keeps its file. |
 | `INBOUND_EMAIL_LOG_RETENTION_DAYS` | 90 | 2 | Log of received mails (rows), purged daily; pending or failed ones stay. |
 | `WIDGET_UNREAD_EMAIL_DELAY_MINUTES` | 5 | 2 | Delay before emailing an unread widget reply. |

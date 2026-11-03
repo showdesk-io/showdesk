@@ -160,6 +160,26 @@ def test_rejected_mail_from_one_sender_is_logged_a_bounded_number_of_times(
     assert InboundEmail.objects.count() == 3
 
 
+def test_rejected_mail_from_anyone_is_logged_a_bounded_number_of_times(delay, settings):
+    settings.INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR = 2
+
+    stored = [
+        store(
+            parse(
+                build(
+                    To="nobody@example.com",
+                    From=f"sender{n}@example.org",
+                    Message_ID=f"<{n}@x>",
+                )
+            )
+        )
+        for n in range(3)
+    ]
+
+    # A From costs nothing to change.
+    assert [row is not None for row in stored] == [True, True, False]
+
+
 def test_a_rejected_mail_doesnt_make_the_same_one_to_a_reply_address_a_duplicate(
     delay,
 ):

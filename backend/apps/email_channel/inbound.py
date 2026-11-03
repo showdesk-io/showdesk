@@ -62,19 +62,21 @@ def _provider_verdict(message) -> dict:
 
 
 def _too_many_rejected(sender: str, mailbox) -> bool:
-    """Tell if the sender's rejected mail to ``mailbox`` filled its hour's log.
+    """Tell if the hour's log of rejected mail is full, for this sender or overall.
 
     Mail nobody here asked for, to an unknown address or an inactive organization,
-    still leaves a row: bounded per sender as accepted mail is, so that a flood
+    still leaves a row: bounded per sender (and mailbox) as accepted mail is, and
+    overall as a mailbox's mail is, since a From costs nothing to change. A flood
     leaves a trace without filling the table.
     """
     rows = InboundEmail.objects.filter(
-        sender=sender,
-        mailbox=mailbox,
         status=InboundEmail.Status.REJECTED,
         received_at__gt=timezone.now() - timedelta(hours=1),
     )
-    return rows.count() >= settings.INBOUND_EMAIL_RATE_LIMIT_PER_HOUR
+    if rows.count() >= settings.INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR:
+        return True
+    from_sender = rows.filter(sender=sender, mailbox=mailbox)
+    return from_sender.count() >= settings.INBOUND_EMAIL_RATE_LIMIT_PER_HOUR
 
 
 def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
