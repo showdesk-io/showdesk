@@ -76,7 +76,8 @@ def resolve(message) -> Recipient | None:
     headers, in the order of ``RECIPIENT_HEADERS``.
 
     A reply address wins over any mailbox. Otherwise the first address that is the
-    inbound or public address of an active mailbox.
+    inbound or public address of an active mailbox, an inbound address winning over
+    a public one equal to it.
     """
     if message.envelope_recipient:
         addresses = _addresses([str(message.envelope_recipient)])
@@ -98,9 +99,12 @@ def resolve(message) -> Recipient | None:
         .filter(Q(local_part__in=local_parts) | Q(public_address__in=addresses))
     )
     for address in addresses:
-        for mailbox in mailboxes:
-            if address in (mailbox.inbound_address.lower(), mailbox.public_address):
-                return Recipient(mailbox=mailbox, ticket=None, address=address)
+        # An inbound address first: a public address must never shadow one.
+        mailbox = next(
+            (m for m in mailboxes if address == m.inbound_address.lower()), None
+        ) or next((m for m in mailboxes if address == m.public_address), None)
+        if mailbox is not None:
+            return Recipient(mailbox=mailbox, ticket=None, address=address)
     return None
 
 

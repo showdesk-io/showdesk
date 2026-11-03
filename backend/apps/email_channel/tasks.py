@@ -79,9 +79,10 @@ def requeue_stale_inbound() -> int:
     """
     from apps.email_channel.models import InboundEmail
 
+    # Pending since: a replay puts an old mail back to pending, and queues it.
     stale = InboundEmail.objects.filter(
         status=InboundEmail.Status.PENDING,
-        received_at__lt=timezone.now() - STALE_PENDING_AFTER,
+        updated_at__lt=timezone.now() - STALE_PENDING_AFTER,
     ).values_list("id", flat=True)
     count = 0
     for inbound_id in stale.iterator():

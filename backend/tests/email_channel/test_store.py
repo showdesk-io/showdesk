@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from apps.email_channel.inbound import store
 from apps.email_channel.models import InboundEmail
-from apps.email_channel.tasks import requeue_stale_inbound
+from apps.email_channel.tasks import replay, requeue_stale_inbound
 from apps.email_channel.tokens import reply_address
 from tests.email_channel.mails import build, fixture_bytes, parse
 from tests.factories import (
@@ -174,8 +174,9 @@ def test_stale_pending_mail_is_queued_again(delay, settings):
     InboundEmailFactory()  # Pending, but its first queuing may still be on its way.
     failed = InboundEmailFactory(status=InboundEmail.Status.FAILED)
     processed = InboundEmailFactory(status=InboundEmail.Status.PROCESSED)
+    long_ago = timezone.now() - timedelta(minutes=11)
     InboundEmail.objects.filter(pk__in=[stale.pk, failed.pk, processed.pk]).update(
-        received_at=timezone.now() - timedelta(minutes=11)
+        received_at=long_ago, updated_at=long_ago
     )
 
     requeue_stale_inbound()
@@ -185,3 +186,20 @@ def test_stale_pending_mail_is_queued_again(delay, settings):
         "task": "apps.email_channel.tasks.requeue_stale_inbound",
         "schedule": 60 * 10,
     }
+
+
+def test_an_old_mail_just_replayed_is_not_queued_again(
+    delay, django_capture_on_commit_callbacks
+):
+    long_ago = timezone.now() - timedelta(days=2)
+    failed = InboundEmailFactory(status=InboundEmail.Status.FAILED)
+    InboundEmail.objects.filter(pk=failed.pk).update(
+        received_at=long_ago, updated_at=long_ago
+    )
+    with django_capture_on_commit_callbacks(execute=True):
+        assert replay(failed.pk)
+    delay.reset_mock()
+
+    requeue_stale_inbound()
+
+    delay.assert_not_called()

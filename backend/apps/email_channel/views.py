@@ -7,6 +7,7 @@ an authenticated route.
 
 from contextlib import contextmanager
 
+from botocore.exceptions import ClientError
 from django.db import IntegrityError, transaction
 from django.http import FileResponse
 from rest_framework import status, viewsets
@@ -149,12 +150,23 @@ class OriginalMailView(APIView):
         )
         if inbound is None or not inbound.raw.storage.exists(inbound.raw.name):
             raise NotFound
+        try:
+            file = inbound.raw.open("rb")
+        except FileNotFoundError:
+            # Purged between the check and the opening.
+            raise NotFound from None
+        except ClientError as exc:
+            # The same, on S3. Any other storage error stays a 500.
+            if exc.response.get("Error", {}).get("Code") not in ("404", "NoSuchKey"):
+                raise
+            raise NotFound from None
         message = inbound.ticket_message
         response = FileResponse(
-            inbound.raw.open("rb"),
+            file,
             as_attachment=True,
             filename=f"{message.ticket.reference}-{message.id.hex[:8]}.eml",
             content_type="message/rfc822",
         )
         response["X-Content-Type-Options"] = "nosniff"
+        response["Cache-Control"] = "private, no-store"
         return response

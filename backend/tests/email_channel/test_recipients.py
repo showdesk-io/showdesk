@@ -88,3 +88,14 @@ def test_the_envelope_wins_over_a_reply_token_in_the_headers():
 
     assert recipient.mailbox == mailbox
     assert recipient.ticket is None
+
+
+def test_an_inbound_address_beats_a_public_address_equal_to_it():
+    # Mailbox.clean() refuses it, but a row may predate the inbound domain.
+    # Mailboxes come ordered by name: the shadowing one first.
+    target = MailboxFactory(name="Zulu")
+    MailboxFactory(name="Alpha", public_address=target.inbound_address)
+
+    recipient = resolve(parse(build(To=target.inbound_address)))
+
+    assert recipient.mailbox == target

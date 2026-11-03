@@ -209,8 +209,9 @@ whose `context_metadata` references the previous one.
 ### 4.6 Errors
 
 Exceptions mark the row `failed` and the task retries with backoff. An admin
-replays a `failed` row, from the Django admin (any row) or from the API (the
-rows of their organization's mailboxes): the row goes back to `pending` before
+replays a `failed` row, from the Django admin (a platform operator, on any
+organization's rows, including those without a mailbox) or from the API (an
+organization admin, on the rows of their organization's mailboxes only): the row goes back to `pending` before
 it's queued, so a replay asked twice runs once. Idempotency relies on
 `(message_id, mailbox)`, and the task does nothing unless the row is `pending`
 or `failed`, under its row lock: it can be queued twice.

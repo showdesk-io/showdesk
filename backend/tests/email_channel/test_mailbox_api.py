@@ -3,14 +3,17 @@
 from unittest import mock
 
 import pytest
+from botocore.exceptions import ClientError
 from django.core.files.base import ContentFile
 from rest_framework.test import APIClient
 
 from apps.email_channel.models import InboundEmail, Mailbox
+from apps.email_channel.serializers import PUBLIC_ADDRESS_TAKEN, MailboxSerializer
 from apps.tickets.models import TicketMessage
 from tests.email_channel.mails import INBOUND_DOMAIN
 from tests.factories import (
     AdminFactory,
+    EndUserFactory,
     InboundEmailFactory,
     MailboxFactory,
     OrganizationFactory,
@@ -180,6 +183,28 @@ class TestMailboxes:
         assert [row["id"] for row in inside.data] == [str(mailbox.id)]
         assert unknown.status_code == 400
 
+    def test_an_address_taken_after_validation_is_the_same_400(
+        self, admin_client, mailbox
+    ):
+        validate = MailboxSerializer.validate
+
+        def validate_then_lose_the_race(serializer, attrs):
+            attrs = validate(serializer, attrs)
+            MailboxFactory(public_address="billing@acme.example.com")
+            return attrs
+
+        with mock.patch.object(
+            MailboxSerializer, "validate", validate_then_lose_the_race
+        ):
+            response = admin_client.patch(
+                f"/api/v1/mailboxes/{mailbox.id}/",
+                {"public_address": "billing@acme.example.com"},
+                format="json",
+            )
+
+        assert response.status_code == 400
+        assert response.data["public_address"] == [PUBLIC_ADDRESS_TAKEN]
+
     def test_mailboxes_are_not_deleted_but_deactivated(self, admin_client, mailbox):
         # Deleting one would delete its log of received mails with it.
         url = f"/api/v1/mailboxes/{mailbox.id}/"
@@ -271,6 +296,48 @@ class TestOriginalMail:
         assert response["Content-Disposition"].startswith("attachment;")
         assert response["X-Content-Type-Options"] == "nosniff"
         assert b"".join(response.streaming_content) == RAW
+        assert response["Cache-Control"] == "private, no-store"
+
+    def test_not_for_end_users(self, organization):
+        message = _emailed_message(organization)
+        end_user = client_for(EndUserFactory(organization=organization))
+
+        assert end_user.get(_original_url(message)).status_code == 403
+
+    def test_a_superuser_reads_it_in_the_organization_impersonated(self, organization):
+        message = _emailed_message(organization)
+        superuser = UserFactory(organization=None, is_superuser=True, is_staff=True)
+
+        inside = client_for(superuser, organization).get(_original_url(message))
+        elsewhere = client_for(superuser, OrganizationFactory()).get(
+            _original_url(message)
+        )
+
+        assert inside.status_code == 200
+        assert elsewhere.status_code == 404
+
+    def test_a_raw_file_gone_from_the_storage_is_a_404(
+        self, authenticated_client, organization
+    ):
+        message = _emailed_message(organization)
+        inbound = message.inbound_emails.get()
+        inbound.raw.storage.delete(inbound.raw.name)
+
+        assert authenticated_client.get(_original_url(message)).status_code == 404
+
+    def test_a_file_vanishing_while_opened_is_a_404(
+        self, authenticated_client, organization
+    ):
+        message = _emailed_message(organization)
+
+        s3_missing = ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+
+        for error in (FileNotFoundError, s3_missing):
+            with mock.patch(
+                "django.db.models.fields.files.FieldFile.open", side_effect=error
+            ):
+                response = authenticated_client.get(_original_url(message))
+            assert response.status_code == 404
 
     def test_not_in_another_organization_nor_through_another_ticket(
         self, stranger, authenticated_client, organization
