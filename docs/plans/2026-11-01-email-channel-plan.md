@@ -42,7 +42,7 @@ The code showed these. Each one is pinned by a test in the task named.
 
 ## Working rules
 
-Environment: disposable `postgres:17-alpine` on 25432 and `redis:8-alpine` on 26379, never the `sparkup-*` containers. If the Docker engine stops answering, don't restart it: use a disposable Homebrew `postgresql@16` and Redis on those ports and say so.
+Environment: disposable `postgres:17-alpine` on 25432 and `redis:8-alpine` on 26379, never another project's containers. If the Docker engine stops answering, don't restart it: use a disposable Homebrew `postgresql@16` and Redis on those ports and say so.
 
 ```bash
 export DJANGO_SETTINGS_MODULE=config.settings.development
