@@ -96,3 +96,10 @@ def test_an_outbound_message_id_is_stable_and_on_our_domain(settings):
     settings.INBOUND_EMAIL_DOMAIN = ""
     settings.DEFAULT_FROM_EMAIL = "Showdesk <noreply@mail.example.com>"
     assert outbound_message_id(message) == f"<{message.id}@mail.example.com>"
+
+    # Without a domain there either, the site's host, else localhost.
+    settings.DEFAULT_FROM_EMAIL = "noreply"
+    settings.SITE_URL = "https://help.example.net:8443/app"
+    assert outbound_message_id(message) == f"<{message.id}@help.example.net>"
+    settings.SITE_URL = ""
+    assert outbound_message_id(message) == f"<{message.id}@localhost>"

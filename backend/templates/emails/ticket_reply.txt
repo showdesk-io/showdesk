@@ -1,5 +1,5 @@
 {% extends "emails/base.txt" %}
-{% block content %}{% if reply_marker %}{{ reply_marker }}
+{% block content %}{% autoescape off %}{% if reply_marker %}{{ reply_marker }}
 
 {% endif %}{{ intro }}
 
@@ -18,4 +18,4 @@ Earlier in this conversation:
 {% for earlier in history %}
 {{ earlier.author_label }}{% if earlier.created_at %} ({{ earlier.created_at|date:"M j, H:i" }}){% endif %}:
 {{ earlier.body|truncatechars:600 }}
-{% endfor %}{% endif %}{% endblock %}
+{% endfor %}{% endif %}{% endautoescape %}{% endblock %}

@@ -17,6 +17,8 @@ from apps.core.email import send_branded_email
 logger = logging.getLogger(__name__)
 
 SITE_URL = getattr(settings, "SITE_URL", "http://localhost")
+# A reply mail finding its ticket's previous one still being sent waits this long.
+REPLY_LOCK_RETRY_SECONDS = 15
 
 
 def _ticket_url(ticket) -> str:
@@ -205,24 +207,46 @@ def _requester_address(ticket) -> str:
 def _email_requester(task, message, address: str) -> None:
     """Email ``address`` the unread replies up to ``message``, ``message``'s mail.
 
-    Its Message-ID is stored before sending, and is the same on a retry.
+    One reply mail at a time per ticket, so that two close replies don't both
+    carry the same unread ones: a task finding the ticket busy comes back shortly.
     """
+    from apps.email_channel import outbound
+
+    ticket = message.ticket
+    if not outbound.lock_replies(ticket):
+        raise task.retry(countdown=REPLY_LOCK_RETRY_SECONDS, max_retries=None)
+    try:
+        _send_requester_mail(task, message, address)
+    finally:
+        outbound.unlock_replies(ticket)
+
+
+def _send_requester_mail(task, message, address: str) -> None:
+    """Build and send ``message``'s mail; its Message-ID is the same on a retry."""
     from apps.email_channel import outbound
     from apps.email_channel.tokens import outbound_message_id
     from apps.tickets.models import TicketMessage
 
+    # Another task may have sent it while this one waited for the ticket.
+    message.refresh_from_db(fields=["email_delivery_status"])
     if message.email_delivery_status == TicketMessage.DeliveryStatus.SENT:
         return
     ticket = message.ticket
     replies = outbound.unread_replies(message)
-    entries = [_reply_entry(reply, outbound.sender_label(reply)) for reply in replies]
+    entries = [
+        _reply_entry(reply, outbound.sender_label(reply, address)) for reply in replies
+    ]
+    conversation_url = outbound.conversation_url(ticket, address)
+    # The history recalls what the contact said: only for the contact's address.
     history = [
         {
-            "author_label": outbound.sender_label(earlier),
+            "author_label": outbound.sender_label(earlier, address),
             "body": earlier.body,
             "created_at": earlier.created_at,
         }
-        for earlier in outbound.context_messages(replies[0])
+        for earlier in (
+            outbound.context_messages(replies[0]) if conversation_url else ()
+        )
     ]
     author_label = entries[-1]["author_label"]
     intro = (
@@ -234,7 +258,10 @@ def _email_requester(task, message, address: str) -> None:
     message_id = outbound_message_id(message)
     if message.external_id != message_id:
         TicketMessage.objects.filter(pk=message.pk).update(external_id=message_id)
-    headers = {"Message-ID": message_id, **outbound.threading_headers(message)}
+    headers = {
+        "Message-ID": message_id,
+        **outbound.threading_headers(ticket, before=message.created_at),
+    }
 
     try:
         send_branded_email(
@@ -247,8 +274,7 @@ def _email_requester(task, message, address: str) -> None:
             headers=headers,
             context={
                 "ticket": ticket,
-                "ticket_url": outbound.conversation_url(ticket, address)
-                or _ticket_url(ticket),
+                "ticket_url": conversation_url or _ticket_url(ticket),
                 "replies": entries,
                 "history": history,
                 "reply_marker": outbound.reply_marker(),
@@ -362,7 +388,7 @@ def send_unread_reply_email(self, message_id: str) -> None:
         or message.message_type == TicketMessage.MessageType.INTERNAL_NOTE
         or message.email_delivery_status == TicketMessage.DeliveryStatus.SENT
         or outbound.read_in_widget(message)
-        or outbound.superseded(message)
+        or outbound.carried_by_later_reply(message)
     ):
         return
     address = _requester_address(message.ticket)
@@ -415,7 +441,9 @@ def send_ticket_assigned_email(self, ticket_id: str) -> None:
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_ticket_resolved_email(self, ticket_id: str) -> None:
-    """Notify the requester when their ticket is resolved."""
+    """Notify the requester when their ticket is resolved, on the ticket's thread."""
+    from apps.email_channel import outbound
+    from apps.email_channel.tokens import resolution_message_id
     from apps.tickets.models import Ticket
 
     try:
@@ -425,10 +453,8 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
     except Ticket.DoesNotExist:
         return
 
-    from apps.email_channel import outbound
-
-    if not _requester_can_be_emailed(ticket) or (
-        ticket.contact and ticket.contact.is_unsubscribed
+    if not _requester_can_be_emailed(ticket) or outbound.suppressed_by_unsubscribe(
+        ticket
     ):
         return
 
@@ -440,6 +466,10 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
             organization=ticket.organization,
             from_email=outbound.from_address(ticket),
             reply_to=outbound.reply_to(ticket),
+            headers={
+                "Message-ID": resolution_message_id(ticket),
+                **outbound.threading_headers(ticket),
+            },
             context={
                 "ticket": ticket,
                 "requester_name": ticket.requester_name,

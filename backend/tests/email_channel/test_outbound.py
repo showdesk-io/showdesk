@@ -4,14 +4,21 @@ from smtplib import SMTPException
 from unittest import mock
 
 import pytest
+from celery.exceptions import Retry
 from django.core import mail
+from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.core.email import _format_from_email
 from apps.email_channel import presence
 from apps.email_channel.content import REPLY_MARKER
-from apps.email_channel.outbound import Delivery, delivery_decision
+from apps.email_channel.outbound import (
+    Delivery,
+    delivery_decision,
+    queue_reply_email,
+    reply_lock_key,
+)
 from apps.email_channel.tokens import (
     outbound_message_id,
     read_conversation_token,
@@ -23,6 +30,7 @@ from apps.tickets.tasks import (
     send_ticket_resolved_email,
     send_unread_reply_email,
 )
+from tests.email_channel.mails import INBOUND_DOMAIN
 from tests.factories import (
     ContactFactory,
     MailboxFactory,
@@ -73,7 +81,7 @@ def _from_user(ticket, channel, **fields) -> TicketMessage:
 
 
 def _connect(ticket) -> None:
-    presence.mark_connected(str(ticket.widget_session_id))
+    presence.mark_connected(str(ticket.widget_session_id), "socket")
 
 
 # What a reply mail carries
@@ -300,15 +308,213 @@ def test_a_reply_mail_recalls_the_conversation_before_it(ticket, agent):
 # The resolved mail
 
 
-def test_a_resolved_mail_skips_the_unsubscribed_and_is_answered_to_the_ticket(
+def test_a_resolved_mail_is_answered_to_the_ticket_and_threads_on_it(ticket, agent):
+    _from_user(ticket, "email", external_id="<1@mail.example.org>")
+    ticket.resolved_at = timezone.now()
+    ticket.save()
+
+    send_ticket_resolved_email(ticket.id)
+    send_ticket_resolved_email(ticket.id)
+
+    first, retried = mail.outbox
+    assert first.reply_to == [reply_address(ticket)]
+    assert first.extra_headers["In-Reply-To"] == "<1@mail.example.org>"
+    # A retry sends the same mail.
+    assert first.extra_headers["Message-ID"] == retried.extra_headers["Message-ID"]
+    assert first.extra_headers["Message-ID"].endswith(f"@{INBOUND_DOMAIN}>")
+
+
+def test_a_resolved_mail_reaches_the_unsubscribed_only_on_a_ticket_opened_by_email(
     ticket,
 ):
-    send_ticket_resolved_email(ticket.id)
-    assert mail.outbox[0].reply_to == [reply_address(ticket)]
-
     ticket.contact.is_unsubscribed = True
     ticket.contact.save()
+
+    send_ticket_resolved_email(ticket.id)
+    assert mail.outbox == []
+
     ticket.source = Ticket.Source.EMAIL
     ticket.save()
     send_ticket_resolved_email(ticket.id)
+    assert [sent.to for sent in mail.outbox] == [[ADDRESS]]
+
+
+# Who gets a conversation link
+
+
+def _link_and_history(ticket, agent) -> tuple[bool, bool]:
+    _from_user(ticket, "widget", body="Earlier words")
+    send_ticket_reply_email(_reply(ticket, agent).id)
+    body = mail.outbox[-1].body
+    return "/c/" in body, "Earlier words" in body
+
+
+def test_a_link_and_the_history_go_to_the_address_the_contact_holds(ticket, agent):
+    ticket.requester_email = ADDRESS.upper()
+    ticket.save()
+
+    assert _link_and_history(ticket, agent) == (True, True)
+
+
+def test_no_link_nor_history_to_an_address_the_contact_doesnt_hold(ticket, agent):
+    """An agent relinked the ticket: the mail goes to whoever wrote it."""
+    ticket.contact = ContactFactory(organization=ticket.organization)
+    ticket.save()
+
+    assert _link_and_history(ticket, agent) == (False, False)
+
+
+def test_no_link_nor_history_on_a_ticket_a_login_moved(ticket, agent):
+    ticket.context_metadata = {"pre_login_anonymous": True}
+    ticket.save()
+
+    assert _link_and_history(ticket, agent) == (False, False)
+
+
+def test_no_link_nor_history_to_a_merely_declared_address(ticket, agent):
+    contact = ticket.contact
+    contact.email, contact.declared_email = "", ADDRESS
+    contact.save()
+    ticket.requester_email = ""
+    ticket.save()
+
+    assert _link_and_history(ticket, agent) == (False, False)
+    assert mail.outbox[-1].to == [ADDRESS]
+
+
+def test_no_link_nor_history_without_a_contact(ticket, agent):
+    ticket.contact = None
+    ticket.save()
+
+    assert _link_and_history(ticket, agent) == (False, False)
+
+
+def test_no_link_nor_history_for_an_anonymized_contact(ticket, agent):
+    """Its mail only goes to an address left on the ticket by an older scrub."""
+    ticket.contact.is_anonymized = True
+    ticket.contact.save()
+
+    with mock.patch("apps.tickets.tasks._requester_address", return_value=ADDRESS):
+        assert _link_and_history(ticket, agent) == (False, False)
+
+
+# Mails that must not go wrong
+
+
+def test_a_two_line_widget_message_is_titled_and_emailed_on_one_line(
+    ticket, agent, settings
+):
+    session = ticket.widget_session
+    session.email = ADDRESS
+    session.save()
+    with (
+        mock.patch("apps.tickets.views.notify_new_ticket"),
+        mock.patch("apps.tickets.views.notify_new_message"),
+        mock.patch("apps.tickets.views.send_ticket_created_email.delay"),
+    ):
+        response = APIClient().post(
+            "/api/v1/tickets/widget_message/",
+            {"body": "My invoice\nis wrong"},
+            HTTP_X_WIDGET_TOKEN=str(ticket.organization.api_token),
+            HTTP_X_WIDGET_SESSION=str(session.id),
+            format="json",
+        )
+    assert response.status_code == 201, response.data
+    created = Ticket.objects.get(pk=response.data["ticket_id"])
+    assert created.title == "My invoice is wrong"
+
+    Ticket.objects.filter(pk=created.pk).update(title="Two\nlines")
+    send_ticket_reply_email(_reply(created, agent).id)
+
+    assert mail.outbox[-1].subject == f"Re: [{created.reference}] Two lines"
+
+
+def test_a_from_name_on_two_lines_is_sent_on_one(ticket, agent):
+    organization = ticket.organization
+    organization.email_from_name = "Acme\nSupport"
+    organization.save()
+    MailboxFactory(organization=organization)
+
+    send_ticket_reply_email(_reply(ticket, agent).id)
+
+    assert mail.outbox[0].from_email.startswith("Acme Support <")
+
+
+def test_the_text_part_shows_bodies_unescaped(ticket, agent):
+    send_ticket_reply_email(_reply(ticket, agent, body="Tom & Jerry's <tag>").id)
+
+    assert "Tom & Jerry's <tag>" in mail.outbox[0].body
+
+
+def test_a_third_party_is_quoted_by_name_and_the_requester_as_you(ticket, agent):
+    for body, sender in (
+        ("Colleague", "Bob Other <bob@example.net>"),
+        ("Unnamed", "carol@example.net"),
+        ("Mine", f"Ann <{ADDRESS.upper()}>"),
+    ):
+        _from_user(ticket, "email", body=body, external_sender=sender)
+
+    send_ticket_reply_email(_reply(ticket, agent).id)
+
+    history = mail.outbox[0].body.partition("Earlier in this conversation:")[2]
+    labels = [line.partition(" (")[0] for line in history.splitlines() if " (" in line]
+    assert labels == ["Bob Other", "carol@example.net", "You"]
+
+
+# Grouping, ordering and concurrency
+
+
+def test_a_scheduled_reply_is_sent_when_a_later_one_wont_carry_it(ticket, agent):
+    first = _reply(ticket, agent, body="First reply")
+    _from_user(ticket, "email", body="Answered by mail")
+    second = _reply(ticket, agent, body="Second reply")
+
+    send_ticket_reply_email(second.id)
+    send_unread_reply_email(first.id)
+
+    assert len(mail.outbox) == 2
+    assert "First reply" in mail.outbox[1].body
+    first.refresh_from_db()
+    assert first.email_delivery_status == TicketMessage.DeliveryStatus.SENT
+
+
+def test_a_ticket_sends_one_reply_mail_at_a_time(ticket, agent):
+    message = _reply(ticket, agent)
+    cache.add(reply_lock_key(ticket), "busy")
+
+    with pytest.raises(Retry):
+        send_ticket_reply_email(message.id)
+    assert mail.outbox == []
+
+    cache.delete(reply_lock_key(ticket))
+    send_ticket_reply_email(message.id)
     assert len(mail.outbox) == 1
+    assert cache.get(reply_lock_key(ticket)) is None
+
+
+def test_the_delay_stays_below_the_brokers_redelivery(ticket, agent, settings):
+    settings.WIDGET_UNREAD_EMAIL_DELAY_MINUTES = 600
+    _connect(ticket)
+
+    with mock.patch("apps.tickets.tasks.send_unread_reply_email.apply_async") as later:
+        queue_reply_email(_reply(ticket, agent))
+
+    assert later.call_args.kwargs["countdown"] == 55 * 60
+
+
+def test_an_agent_cant_post_a_message_as_the_requester(ticket, agent):
+    client = APIClient()
+    client.force_authenticate(agent)
+
+    with (
+        mock.patch("apps.tickets.views.notify_new_message"),
+        mock.patch("apps.tickets.tasks.send_ticket_reply_email.delay") as now,
+    ):
+        response = client.post(
+            "/api/v1/messages/",
+            {"ticket": str(ticket.id), "body": "Hi", "sender_type": "user"},
+        )
+
+    assert response.status_code == 201
+    assert TicketMessage.objects.get(pk=response.data["id"]).sender_type == "agent"
+    now.assert_called_once()

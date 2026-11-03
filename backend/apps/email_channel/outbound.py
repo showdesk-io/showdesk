@@ -9,18 +9,30 @@ import enum
 from email.utils import formataddr, parseaddr
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db.models import Q
 
 from apps.email_channel import presence
 from apps.email_channel.content import REPLY_MARKER
 from apps.email_channel.models import Mailbox
+from apps.email_channel.recipients import one_line
 from apps.email_channel.tokens import conversation_token, reply_address
-from apps.tickets.models import Ticket, TicketMessage, WidgetSession
+from apps.tickets.models import (
+    PRE_LOGIN_ANONYMOUS_KEY,
+    Ticket,
+    TicketMessage,
+    WidgetSession,
+)
 
 # Enough for a mail client to thread on, and a bound on the headers of a long one.
 MAX_REFERENCES = 20
 # What a reply mail recalls of the conversation before its new replies.
 CONTEXT_MESSAGES = 3
+# Below the broker's visibility timeout (an hour with Redis), past which a task
+# not yet run is delivered again.
+MAX_DELAY_MINUTES = 55
+# How long a ticket's reply mail may take to build and send, at most.
+REPLY_LOCK_SECONDS = 300
 
 
 class Delivery(enum.StrEnum):
@@ -85,17 +97,27 @@ def queue_reply_email(message) -> None:
     elif decision == Delivery.LATER:
         send_unread_reply_email.apply_async(
             args=[str(message.id)],
-            countdown=settings.WIDGET_UNREAD_EMAIL_DELAY_MINUTES * 60,
+            countdown=min(settings.WIDGET_UNREAD_EMAIL_DELAY_MINUTES, MAX_DELAY_MINUTES)
+            * 60,
         )
 
 
-def superseded(message) -> bool:
-    """Tell if a later reply of an agent's will email ``message`` with it."""
-    return message.ticket.messages.filter(
-        sender_type=TicketMessage.SenderType.AGENT,
-        message_type=TicketMessage.MessageType.REPLY,
-        created_at__gt=message.created_at,
-    ).exists()
+def carried_by_later_reply(message) -> bool:
+    """Tell if the next reply of an agent's carries ``message`` in its mail.
+
+    It does unless the requester read, wrote or was emailed in between: that
+    reply's mail then starts after ``message``, which goes on its own.
+    """
+    later = (
+        message.ticket.messages.filter(
+            sender_type=TicketMessage.SenderType.AGENT,
+            message_type=TicketMessage.MessageType.REPLY,
+            created_at__gt=message.created_at,
+        )
+        .order_by("created_at")
+        .first()
+    )
+    return later is not None and message in unread_replies(later)
 
 
 def read_in_widget(message) -> bool:
@@ -170,9 +192,8 @@ def from_address(ticket) -> str | None:
     if mailbox is None:
         return None
     organization = ticket.organization
-    return formataddr(
-        (organization.email_from_name or organization.name, mailbox.inbound_address)
-    )
+    name = one_line(organization.email_from_name) or one_line(organization.name)
+    return formataddr((name, mailbox.inbound_address))
 
 
 def reply_to(ticket) -> list[str] | None:
@@ -185,19 +206,19 @@ def reply_marker() -> str:
     return REPLY_MARKER if settings.INBOUND_EMAIL_DOMAIN else ""
 
 
-def threading_headers(message) -> dict[str, str]:
-    """``In-Reply-To`` and ``References`` on the ticket's mails before ``message``.
+def threading_headers(ticket, before=None) -> dict[str, str]:
+    """``In-Reply-To`` and ``References`` on the ticket's mails, those before ``before``.
 
     At most ``MAX_REFERENCES`` ids: the thread's first, and the latest.
     """
+    messages = ticket.messages.exclude(external_id="")
+    if before is not None:
+        messages = messages.filter(created_at__lt=before)
     ids = [
         message_id
-        for message_id in message.ticket.messages.filter(
-            created_at__lt=message.created_at
+        for message_id in messages.order_by("created_at").values_list(
+            "external_id", flat=True
         )
-        .exclude(external_id="")
-        .order_by("created_at")
-        .values_list("external_id", flat=True)
         if message_id.startswith("<") and message_id.endswith(">")
     ]
     if not ids:
@@ -208,21 +229,55 @@ def threading_headers(message) -> dict[str, str]:
 
 
 def conversation_url(ticket, address: str) -> str:
-    """A link to the ticket's conversation, mailed to ``address``; "" without a contact."""
+    """A link to the ticket's conversation, mailed to ``address``, or "".
+
+    Only to the address its contact holds: a link opens the contact's
+    conversation, and the ticket's address may be someone else's (an agent
+    relinked the ticket) or merely declared. Never on a ticket a login moved, whose
+    contact isn't necessarily who wrote it.
+    """
     contact = ticket.contact
-    if contact is None or contact.is_anonymized:
+    metadata = ticket.context_metadata
+    if (
+        contact is None
+        or contact.is_anonymized
+        or not contact.email
+        or contact.email.strip().lower() != address.strip().lower()
+        or (isinstance(metadata, dict) and PRE_LOGIN_ANONYMOUS_KEY in metadata)
+    ):
         return ""
     token = conversation_token(ticket, contact, address)
     return f"{settings.SITE_URL.rstrip('/')}/c/{token}"
 
 
-def sender_label(message) -> str:
-    """Who wrote ``message``, as the requester reads it."""
+def sender_label(message, address: str = "") -> str:
+    """Who wrote ``message``, as the requester mailed at ``address`` reads it.
+
+    "You" for their own words; a third party copied on the thread by name, else
+    by address.
+    """
     if message.sender_type == TicketMessage.SenderType.USER:
-        return parseaddr(message.external_sender)[0] or "You"
+        name, sender = parseaddr(message.external_sender)
+        if not sender or sender.strip().lower() == address.strip().lower():
+            return "You"
+        return one_line(name) or sender
     author = message.author
     if author is None:
         return "Support"
-    return (author.first_name or "").strip() or (
+    return one_line(author.first_name) or (
         author.email.split("@")[0] if author.email else "Support"
     )
+
+
+def reply_lock_key(ticket) -> str:
+    """The cache key held while a reply mail of ``ticket`` is built and sent."""
+    return f"email_channel:reply_lock:{ticket.pk}"
+
+
+def lock_replies(ticket) -> bool:
+    """Take the ticket's reply lock, if free: one reply mail at a time per ticket."""
+    return cache.add(reply_lock_key(ticket), 1, REPLY_LOCK_SECONDS)
+
+
+def unlock_replies(ticket) -> None:
+    cache.delete(reply_lock_key(ticket))

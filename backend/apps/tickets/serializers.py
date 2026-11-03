@@ -173,7 +173,9 @@ class TicketMessageSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "author", "created_at", "updated_at"]
+        # Staff write as agents: what the requester says comes from the widget,
+        # mail or the conversation page.
+        read_only_fields = ["id", "author", "sender_type", "created_at", "updated_at"]
 
 
 # Who a ticket can be assigned to, as in the bulk_update action.

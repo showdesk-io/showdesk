@@ -90,6 +90,13 @@ from .tasks import (
 
 logger = logging.getLogger(__name__)
 
+
+def _ticket_title(body: str, body_type: str) -> str:
+    """A widget ticket's title: its first message, on one line, cut to 100."""
+    title = " ".join(body.split())[:100]
+    return title or f"[{body_type.capitalize()}]"
+
+
 # Next to ``PRE_LOGIN_ANONYMOUS_KEY``: the digest of the anonymous session it came
 # from, to trace the move.
 PRE_LOGIN_SESSION_HASH_KEY = "pre_login_session_hash"
@@ -1131,7 +1138,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 )
         else:
             # First message — create ticket
-            title = body[:100] if body else f"[{body_type.capitalize()}]"
+            title = _ticket_title(body, body_type)
             ticket = Ticket.objects.create(
                 organization=org,
                 reference=org.next_ticket_reference(),
@@ -1217,7 +1224,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND,
                 )
         else:
-            title = body[:100] if body else f"[{body_type.capitalize()}]"
+            title = _ticket_title(body, body_type)
             ticket = Ticket.objects.create(
                 organization=org,
                 reference=org.next_ticket_reference(),
@@ -1495,7 +1502,9 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer) -> None:
         """Set author on creation and send notifications."""
         message = serializer.save(
-            author=self.request.user, channel=TicketMessage.Channel.AGENT
+            author=self.request.user,
+            channel=TicketMessage.Channel.AGENT,
+            sender_type=TicketMessage.SenderType.AGENT,
         )
 
         # WebSocket notification

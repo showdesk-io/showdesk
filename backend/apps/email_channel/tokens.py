@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from email.utils import parseaddr
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core import signing
@@ -97,13 +98,27 @@ def read_conversation_token(
         return None
 
 
-def outbound_message_id(message) -> str:
-    """The Message-ID of the mail sending ``message``: the same on every retry.
-
-    On the inbound domain, or without one on the domain mail goes out from.
-    """
-    domain = (
+def _outbound_domain() -> str:
+    """The domain of our Message-IDs: inbound, else of the mail's From, else the site's."""
+    _, at, from_domain = parseaddr(settings.DEFAULT_FROM_EMAIL)[1].rpartition("@")
+    return (
         settings.INBOUND_EMAIL_DOMAIN
-        or (parseaddr(settings.DEFAULT_FROM_EMAIL)[1].rpartition("@")[2])
+        or (from_domain if at else "")
+        or urlsplit(settings.SITE_URL).hostname
+        or "localhost"
     )
-    return f"<{message.id}@{domain}>"
+
+
+def outbound_message_id(message) -> str:
+    """The Message-ID of the mail sending ``message``: the same on every retry."""
+    return f"<{message.id}@{_outbound_domain()}>"
+
+
+def resolution_message_id(ticket) -> str:
+    """The Message-ID of the mail telling ``ticket`` was resolved, at its resolution.
+
+    The same on every retry; a later resolution gets its own.
+    """
+    resolved_at = ticket.resolved_at
+    stamp = int(resolved_at.timestamp()) if resolved_at else 0
+    return f"<resolved-{ticket.id}-{stamp}@{_outbound_domain()}>"
