@@ -101,6 +101,13 @@ class PostalInboundView(PostalInboundWebhookView):
         message.raw_bytes = raw
         message.envelope_sender = esp_event.get("mail_from")
         message.envelope_recipient = esp_event.get("rcpt_to")
+        # Postal's raw mode sends no verdict but adds its own header. A sender who
+        # forges it only gets their own mail ignored.
+        if any(
+            str(value).strip().lower() == "yes"
+            for value in message.get_all("X-Postal-Spam", [])
+        ):
+            message.spam_detected = True
         return [
             AnymailInboundEvent(
                 event_type=EventType.INBOUND,

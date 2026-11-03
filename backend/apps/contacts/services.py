@@ -218,6 +218,18 @@ def resolve_contact_for_email(
     return contact
 
 
+def is_staff_address(organization_id, email: str) -> bool:
+    """Tell if ``email`` is the address of an agent, admin or superuser of the organization.
+
+    Such an address never becomes a contact, whatever channel it comes through.
+    """
+    return (
+        User.objects.filter(organization_id=organization_id, email__iexact=email)
+        .exclude(role=User.Role.END_USER, is_superuser=False)
+        .exists()
+    )
+
+
 def resolve_contact_for_ticket(ticket) -> Contact | None:
     """Find or create the contact of a ticket filed through the API.
 
@@ -239,12 +251,7 @@ def resolve_contact_for_ticket(ticket) -> Contact | None:
         account = None
     account_email = _clean_email(account.email) if account else ""
     email = email or account_email
-    if (
-        not email
-        or User.objects.filter(organization_id=organization_id, email__iexact=email)
-        .exclude(role=User.Role.END_USER, is_superuser=False)
-        .exists()
-    ):
+    if not email or is_staff_address(organization_id, email):
         return None
     name = _clean_text(ticket.requester_name)
     if not name and email == account_email:

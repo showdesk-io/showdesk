@@ -1,8 +1,11 @@
 """What of an inbound mail becomes a message: its text and its files (design §4.4)."""
 
+from email.message import EmailMessage
+
 import pytest
 
 from apps.email_channel.content import (
+    MAX_ATTACHMENTS,
     dropped_note,
     extract_attachments,
     extract_body,
@@ -94,3 +97,21 @@ def test_attachments_over_the_cap_are_dropped_and_named():
         "notes.txt (over the size limit)."
     )
     assert dropped_note([]) == ""
+
+
+def test_files_past_the_fiftieth_are_dropped_and_named():
+    message = EmailMessage()
+    message["From"] = "ann@example.org"
+    message.set_content("Many files.")
+    for index in range(52):
+        message.add_attachment(
+            b"x", maintype="text", subtype="plain", filename=f"{index}.txt"
+        )
+
+    attachments, dropped = extract_attachments(parse(message.as_bytes()), 1024)
+
+    assert len(attachments) == MAX_ATTACHMENTS == 50
+    assert dropped == [
+        "50.txt (over the limit of 50 files)",
+        "51.txt (over the limit of 50 files)",
+    ]

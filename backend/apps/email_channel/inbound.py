@@ -12,6 +12,7 @@ from apps.email_channel.recipients import one_line, recipient_addresses, resolve
 _MESSAGE_ID_MAX_LENGTH = InboundEmail._meta.get_field("message_id").max_length
 _SENDER_MAX_LENGTH = InboundEmail._meta.get_field("sender").max_length
 _SUBJECT_MAX_LENGTH = InboundEmail._meta.get_field("subject").max_length
+_ENVELOPE_MAX_LENGTH = InboundEmail._meta.get_field("envelope_recipient").max_length
 
 
 def _hashed_message_id(value: bytes) -> str:
@@ -30,6 +31,27 @@ def normalize_message_id(message, raw: bytes) -> str:
     if len(message_id) > _MESSAGE_ID_MAX_LENGTH:
         return _hashed_message_id(message_id.encode("utf-8", "surrogateescape"))
     return message_id
+
+
+def _envelope_address(value) -> str:
+    """An envelope address as stored: lowercased, or "" if it can't fit.
+
+    Truncated, it would be another address.
+    """
+    address = one_line(value).lower()
+    return address if len(address) <= _ENVELOPE_MAX_LENGTH else ""
+
+
+def _provider_verdict(message) -> dict:
+    """What the provider said of the mail, which its raw bytes don't hold."""
+    spam_detected = getattr(message, "spam_detected", None)
+    spam_score = getattr(message, "spam_score", None)
+    return {
+        "envelope_recipient": _envelope_address(message.envelope_recipient),
+        "envelope_sender": _envelope_address(getattr(message, "envelope_sender", "")),
+        "spam_detected": spam_detected if isinstance(spam_detected, bool) else None,
+        "spam_score": float(spam_score) if spam_score is not None else None,
+    }
 
 
 def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
@@ -51,6 +73,7 @@ def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
             "sender": sender.lower()[:_SENDER_MAX_LENGTH],
             "recipients": recipient_addresses(message),
             "subject": one_line(message.get("Subject"))[:_SUBJECT_MAX_LENGTH],
+            **_provider_verdict(message),
         }
         if recipient is None:
             defaults["status"] = InboundEmail.Status.REJECTED

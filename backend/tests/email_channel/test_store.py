@@ -62,6 +62,23 @@ def test_storing_twice_keeps_one_row_and_requeues_only_while_pending(
         assert file.read() == raw
 
 
+def test_what_parsing_the_raw_mail_loses_is_stored(mailbox, delay):
+    message = parse(build(), envelope_recipient="Support@Acme.example.com")
+    message.envelope_sender = "bounces@example.org"
+    message.spam_detected = False
+    message.spam_score = 1.5
+
+    stored = store(message)
+
+    assert stored.envelope_recipient == "support@acme.example.com"
+    assert stored.envelope_sender == "bounces@example.org"
+    assert (stored.spam_detected, stored.spam_score) == (False, 1.5)
+
+    unknown = store(parse(build(Message_ID="<2@mail.example.org>")))
+    assert unknown.envelope_recipient == unknown.envelope_sender == ""
+    assert (unknown.spam_detected, unknown.spam_score) == (None, None)
+
+
 def test_no_message_id_gets_a_stable_one_from_the_content(mailbox, delay):
     raw = fixture_bytes("no_message_id.eml")
     stored = store(parse(raw))

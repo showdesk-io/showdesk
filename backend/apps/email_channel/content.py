@@ -199,6 +199,12 @@ def strip_history(text: str) -> str:
 # Attachments
 
 
+# Files kept from one mail: each one is a row and a stored file.
+MAX_ATTACHMENTS = 50
+# Dropped files named in the note: the rest are counted.
+_MAX_NAMED_DROPPED = 20
+
+
 @dataclass(frozen=True)
 class Attachment:
     """A file of an inbound mail, to keep as a ``TicketAttachment``."""
@@ -250,7 +256,8 @@ def extract_attachments(message, max_bytes: int) -> tuple[list[Attachment], list
     """The mail's files, and a description of each one dropped.
 
     A file whose extension is blocked for uploads is dropped, and so is any file
-    that would take the total over ``max_bytes``.
+    that would take the total over ``max_bytes`` or the count over
+    ``MAX_ATTACHMENTS``.
     """
     attachments: list[Attachment] = []
     dropped: list[str] = []
@@ -262,6 +269,9 @@ def extract_attachments(message, max_bytes: int) -> tuple[list[Attachment], list
         filename = safe_filename(part.get_filename(), content_type)
         if os.path.splitext(filename)[1].lower() in BLOCKED_EXTENSIONS:
             dropped.append(f"{filename} (file type not allowed)")
+            continue
+        if len(attachments) >= MAX_ATTACHMENTS:
+            dropped.append(f"{filename} (over the limit of {MAX_ATTACHMENTS} files)")
             continue
         content = _content(part)
         if total + len(content) > max_bytes:
@@ -276,4 +286,8 @@ def dropped_note(dropped: list[str]) -> str:
     """The line telling agents which files of the mail weren't kept, or ""."""
     if not dropped:
         return ""
-    return f"Attachments not kept: {', '.join(dropped)}."
+    named = ", ".join(dropped[:_MAX_NAMED_DROPPED])
+    rest = len(dropped) - _MAX_NAMED_DROPPED
+    if rest > 0:
+        named += f" and {rest} more"
+    return f"Attachments not kept: {named}."

@@ -150,6 +150,15 @@ class InboundEmail(TimestampedModel):
     )
     sender = models.EmailField(max_length=320, blank=True, db_index=True)
     recipients = models.JSONField(default=list, blank=True)
+    # What the provider said, which the raw mail doesn't hold. The envelope
+    # recipient is where the mail was delivered: its headers only say where the
+    # sender claims it went.
+    envelope_recipient = models.CharField(max_length=320, blank=True)
+    envelope_sender = models.CharField(max_length=320, blank=True)
+    spam_detected = models.BooleanField(
+        null=True, blank=True, help_text="The provider's verdict, when it gives one."
+    )
+    spam_score = models.FloatField(null=True, blank=True)
     subject = models.CharField(max_length=998, blank=True)
     # Never exposed by URL: a mail holds personal data.
     raw = models.FileField(upload_to=_raw_path, blank=True)

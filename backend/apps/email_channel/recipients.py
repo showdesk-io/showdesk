@@ -110,3 +110,28 @@ def resolve(message) -> Recipient | None:
             if address in (mailbox.inbound_address.lower(), mailbox.public_address):
                 return Recipient(mailbox=mailbox, ticket=None, address=address)
     return None
+
+
+def stored_recipient(inbound, message) -> Recipient | None:
+    """What a stored mail was found to be for, rebuilt from its row.
+
+    The mailbox and ticket are those found on arrival. The address is the stored
+    envelope recipient. Only a mail stored without one, as ``ingest_eml`` without
+    ``--recipient`` stores it, takes it from the headers, and only one of the
+    mailbox's or ticket's own addresses. None when neither still exists.
+    """
+    mailbox, ticket = inbound.mailbox, inbound.ticket
+    if mailbox is None and ticket is None:
+        return None
+    if inbound.envelope_recipient:
+        return Recipient(mailbox, ticket, inbound.envelope_recipient.lower())
+    own = set()
+    if mailbox is not None:
+        own.update({mailbox.inbound_address.lower(), mailbox.public_address} - {""})
+    for address in recipient_addresses(message):
+        is_reply = ticket is not None and ticket_id_from_reply_address(address) == (
+            ticket.pk
+        )
+        if address in own or is_reply:
+            return Recipient(mailbox, ticket, address)
+    return Recipient(mailbox, ticket, "")
