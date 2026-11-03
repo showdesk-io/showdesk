@@ -9,11 +9,12 @@ from unittest import mock
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.email_channel import outbound
-from apps.notifications.signals import notify_new_message
+from apps.notifications.signals import notify_message_deleted, notify_new_message
 from apps.tickets.access import contact_history_opens, session_tickets
 from apps.tickets.models import Ticket, TicketMessage, WidgetSession
 from tests.factories import (
@@ -57,6 +58,8 @@ def _email_ticket(org, contact):
 
 def _session(org, contact=None, *, proven=False, **fields):
     fields.setdefault("email", contact.email if contact else "")
+    if proven:
+        fields.setdefault("email_verified_for", fields["email"].strip().lower())
     return WidgetSession.objects.create(
         organization=org,
         contact=contact,
@@ -217,3 +220,118 @@ class TestReplies:
 
         assert outbound.entitled_session_ids(email_ticket) == [str(proven.pk)]
         assert sent == [f"org_{org.id}", f"widget_session_{proven.pk}"]
+
+
+def _sent_groups(notify, *args) -> list[str]:
+    sent = []
+
+    async def group_send(group, event):
+        sent.append(group)
+
+    with mock.patch("apps.notifications.signals.get_channel_layer") as layer:
+        layer.return_value.group_send = group_send
+        notify(*args)
+    return sent
+
+
+class TestProofOfAnotherAddress:
+    def test_a_proof_recorded_for_another_address_opens_nothing(
+        self, org, holder, email_ticket
+    ):
+        """What a verify racing an email change would have left: a date, not for this."""
+        session = _session(org, holder, proven=True, email_verified_for="b@x.io")
+        assert not contact_history_opens(session)
+        assert _history(_client(org, session)) == []
+        assert outbound.entitled_session_ids(email_ticket) == []
+
+    def test_a_ticket_written_under_it_is_not_verified(self, org, holder):
+        session = _session(org, holder, proven=True, email_verified_for="b@x.io")
+        ticket = TicketFactory(organization=org, contact=holder, widget_session=session)
+        assert ticket.sender_verified is False
+
+
+@pytest.mark.usefixtures("local_media")
+class TestWritingFromHistory:
+    def test_not_on_a_ticket_opened_by_a_session_without_access(self, org, holder):
+        """The owner's unproven session opened it: posting would send them our words."""
+        opener = _session(org, holder)
+        ticket = TicketFactory(organization=org, contact=holder, widget_session=opener)
+        client = _client(org, _session(org, holder, proven=True))
+
+        res = client.post(
+            f"{API}widget_message/",
+            {"ticket_id": str(ticket.pk), "body": "Hello"},
+            format="json",
+        )
+        conversation = client.get(
+            f"{API}widget_conversation/", {"ticket_id": str(ticket.pk)}
+        )
+
+        assert res.status_code == 403
+        assert "Start a new conversation" in res.data["error"]
+        assert not ticket.messages.exists()
+        assert (conversation.status_code, conversation.data["read_only"]) == (200, True)
+
+    def test_on_a_ticket_opened_by_an_entitled_session(self, org, holder):
+        opener = _session(org, holder, proven=True)
+        ticket = TicketFactory(organization=org, contact=holder, widget_session=opener)
+        client = _client(org, _session(org, holder, proven=True))
+
+        res = client.post(
+            f"{API}widget_message/",
+            {"ticket_id": str(ticket.pk), "body": "Hello"},
+            format="json",
+        )
+
+        assert res.status_code == 201
+        conversation = client.get(
+            f"{API}widget_conversation/", {"ticket_id": str(ticket.pk)}
+        )
+        assert conversation.data["read_only"] is False
+
+
+class TestDeleting:
+    def test_not_on_a_ticket_the_session_no_longer_sees(
+        self, org, holder, email_ticket
+    ):
+        session = _session(org, holder, proven=True)
+        mine = TicketMessageFactory(
+            ticket=email_ticket,
+            author=None,
+            widget_session=session,
+            sender_type=TicketMessage.SenderType.USER,
+        )
+        client = _client(org, session)
+        client.patch(f"{API}widget_session/", {"email": "b@x.io"}, format="json")
+
+        res = client.delete(f"{API}widget_message_delete/?message_id={mine.pk}")
+
+        assert res.status_code == 404
+        assert TicketMessage.objects.filter(pk=mine.pk).exists()
+
+    def test_a_deletion_reaches_every_entitled_session(self, org, holder, email_ticket):
+        proven = _session(org, holder, proven=True)
+        _session(org, holder)
+
+        groups = _sent_groups(notify_message_deleted, email_ticket, "m1")
+
+        assert groups == [f"org_{org.id}", f"widget_session_{proven.pk}"]
+
+
+def test_a_first_message_survives_a_contact_deleted_meanwhile(org, holder):
+    """The session as read names a contact a reunion has since deleted."""
+    session = _session(org, holder)
+    stale = WidgetSession.objects.get(pk=session.pk)
+    holder.delete()
+    with connection.cursor() as cursor:
+        cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+    with mock.patch(
+        "apps.tickets.views._get_widget_session", return_value=(stale, None)
+    ):
+        res = _client(org, session).post(
+            f"{API}widget_message/", {"body": "Hello"}, format="json"
+        )
+
+    assert res.status_code == 201
+    assert Ticket.objects.get(pk=res.data["ticket_id"]).contact_id is None

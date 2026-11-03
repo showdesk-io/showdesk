@@ -310,8 +310,16 @@ showing the channel.
   answers 202, and a code is only mailed when the Contact owning the address in
   `Contact.email` has tickets outside this session that the proof would open.
   Six-digit code via the existing `OTPCode`, with its own purpose (`widget_email`)
-  and throttles, so it neither spends nor cancels a login code. A code proof is
-  recorded as such (`email_proof_source = code`) and survives an unsigned init.
+  and throttles, so it neither spends nor cancels a login code, and good only in the
+  organization and the session that asked for it. A code proof is recorded as such
+  (`email_proof_source = code`) and survives an unsigned init, but not one declaring
+  another email.
+- A proof is about the address it was made for (`WidgetSession.email_verified_for`),
+  written only if the session still has that address: a proof racing an email change
+  proves nothing.
+- From the history, a session writes on its own tickets, on tickets opened by email,
+  and on those opened by a session that's entitled too. Others are read-only there:
+  a message would reach whoever opened them.
 - Proof is stored **per session** (`WidgetSession.email_verified_at`); a
   verification made elsewhere never opens anything in this session.
 - Widget history = session tickets ∪ `external_user_id` tickets (unchanged) ∪

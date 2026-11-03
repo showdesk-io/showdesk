@@ -122,41 +122,32 @@ class ConversationRenewThrottle(_ConversationThrottle):
     scope = "conversation_renew"
 
 
-def _widget_session_email(request) -> str | None:
-    """Return the normalized email of the widget session a request names, if any."""
-    from apps.core.permissions import LOOKUP_ERRORS
-    from apps.tickets.models import WidgetSession
-
-    session_id = request.headers.get("X-Widget-Session")
-    if not session_id:
-        return None
-    try:
-        email = (
-            WidgetSession.objects.filter(pk=session_id)
-            .values_list("email", flat=True)
-            .first()
-        )
-    except LOOKUP_ERRORS:
-        return None
-    email = (email or "").strip().lower()
-    return email or None
-
-
 class _WidgetEmailThrottle(SimpleRateThrottle):
     """Count a widget email code's traffic per address, whichever session asks.
 
-    The address is the session's own, since the widget sends none. A request with
-    no session or no email isn't counted here: the view refuses it or does nothing.
+    Not a DRF ``throttle_classes`` entry: the view applies it once it has read the
+    session, with the address it acts on (``check_address``), so the counter and the
+    code can't be about two different addresses.
     """
 
+    def __init__(self, email: str) -> None:
+        super().__init__()
+        self.email = email
+
     def get_cache_key(self, request, view) -> str | None:
-        email = _widget_session_email(request)
-        if email is None:
+        if not self.email:
             return None
         return self.cache_format % {
             "scope": self.scope,
-            "ident": hashlib.sha256(email.encode()).hexdigest(),
+            "ident": hashlib.sha256(self.email.encode()).hexdigest(),
         }
+
+    @classmethod
+    def check_address(cls, request, view, email: str) -> None:
+        """Count a request for ``email``. Raise ``Throttled`` past the rate."""
+        throttle = cls(email)
+        if not throttle.allow_request(request, view):
+            view.throttled(request, throttle.wait())
 
 
 class WidgetEmailCodeIPThrottle(_OTPIPThrottle):
@@ -176,9 +167,6 @@ class WidgetEmailVerifyEmailThrottle(_WidgetEmailThrottle):
 
 
 # Their own scopes: a widget visitor naming someone's address must not use up the
-# login codes that person can ask for.
-WIDGET_EMAIL_CODE_THROTTLES = [WidgetEmailCodeIPThrottle, WidgetEmailCodeEmailThrottle]
-WIDGET_EMAIL_VERIFY_THROTTLES = [
-    WidgetEmailVerifyIPThrottle,
-    WidgetEmailVerifyEmailThrottle,
-]
+# login codes that person can ask for. Per IP here, per address in the views.
+WIDGET_EMAIL_CODE_THROTTLES = [WidgetEmailCodeIPThrottle]
+WIDGET_EMAIL_VERIFY_THROTTLES = [WidgetEmailVerifyIPThrottle]

@@ -315,6 +315,7 @@ def anonymize_contact(contact: Contact) -> Contact | None:
         name="",
         external_user_id="",
         email_verified_at=None,
+        email_verified_for="",
         email_proof_source="",
         user_agent="",
         contact=None,

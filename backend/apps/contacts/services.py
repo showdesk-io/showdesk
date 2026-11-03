@@ -345,6 +345,22 @@ def _resolve_company(
     )
 
 
+def session_external_id(session) -> str:
+    """The external id of an identified session, or "" if we wouldn't use it.
+
+    Not something we'd store as is, so it can't be looked up either, or a hash from
+    before those prefixes were reserved: it may sign something else.
+    """
+    external_id = _clean_external_id(session.external_user_id, _EXTERNAL_ID_MAX)
+    if (
+        not external_id
+        or external_id != session.external_user_id
+        or external_id.startswith(RESERVED_EXTERNAL_ID_PREFIXES)
+    ):
+        return ""
+    return external_id
+
+
 def _find_identified(
     org, external_id: str, proven_email: str, changed: set[str]
 ) -> Contact | None:
@@ -424,10 +440,15 @@ def _absorb_email_only_contact(
         _set(contact, changed, attributes={**theirs, **contact.attributes})
     if other.is_unsubscribed:
         _set(contact, changed, is_unsubscribed=True)
-    if other.first_seen_at and (
-        contact.first_seen_at is None or other.first_seen_at < contact.first_seen_at
+    # The earliest first visit, the latest last visit and contact.
+    for field, pick in (
+        ("first_seen_at", min),
+        ("last_seen_at", max),
+        ("last_contacted_at", max),
     ):
-        _set(contact, changed, first_seen_at=other.first_seen_at)
+        dates = [d for d in (getattr(contact, field), getattr(other, field)) if d]
+        if dates:
+            _set(contact, changed, **{field: pick(dates)})
     email = other.email
     # Frees the email in this transaction, before ours takes it.
     other.delete()
@@ -446,15 +467,9 @@ def _resolve_session_once(
     changed: set[str] = set()
 
     if identified:
-        external_id = _clean_external_id(session.external_user_id, _EXTERNAL_ID_MAX)
-        if (
-            not external_id
-            or external_id != session.external_user_id
-            or external_id.startswith(RESERVED_EXTERNAL_ID_PREFIXES)
-        ):
-            # Not something we'd store as is, so it can't be looked up either, or a
-            # hash from before those prefixes were reserved: it may sign something
-            # else. Don't fall back on the email: this session claimed an identity.
+        external_id = session_external_id(session)
+        if not external_id:
+            # Don't fall back on the email: this session claimed an identity.
             contact = None
         else:
             proven_email = email if email_verified else ""
@@ -521,11 +536,24 @@ def _resolve_session_once(
     if session.contact_id != contact.pk:
         session.contact = contact
         session_changed.add("contact")
-    if email_proven and session.email_verified_at is None:
-        session.email_verified_at = timezone.now()
-        session_changed.add("email_verified_at")
     _save_changes(session, session_changed)
+    if email_proven and session.email_verified_for != email:
+        _record_session_proof(session, email)
     return contact
+
+
+def _record_session_proof(session, email: str) -> None:
+    """Mark ``session`` proven for ``email``, if that's still the email it has.
+
+    A conditional write: a request changing the session's email meanwhile clears the
+    proof, and this must not land on the new, unproven address.
+    """
+    now = timezone.now()
+    if WidgetSession.objects.filter(pk=session.pk, email__iexact=email).update(
+        email_verified_at=now, email_verified_for=email, updated_at=now
+    ):
+        session.email_verified_at = now
+        session.email_verified_for = email
 
 
 def _resolve_session_atomically(
@@ -538,6 +566,7 @@ def _resolve_session_atomically(
     """
     contact_id = session.contact_id
     email_verified_at = session.email_verified_at
+    email_verified_for = session.email_verified_for
     try:
         with transaction.atomic():
             return _resolve_session_once(
@@ -546,6 +575,7 @@ def _resolve_session_atomically(
     except DatabaseError:
         session.contact_id = contact_id
         session.email_verified_at = email_verified_at
+        session.email_verified_for = email_verified_for
         raise
 
 

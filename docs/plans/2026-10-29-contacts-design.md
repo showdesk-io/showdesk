@@ -206,7 +206,10 @@ a malformed `external_user_id` is a 400.
      init keeps its session. A wrong `user_hash` here is refused (403) as on an identified
      session, since nothing else in the request proves anything. An email proven by a
      code mailed to it (`WidgetSession.email_proof_source = code`, email channel design
-     §6.2) isn't lost this way: a page that never signs couldn't sign it again.
+     §6.2) isn't lost this way, since a page that never signs couldn't sign it again,
+     unless the init declares a different, non-empty email: that's someone else on the
+     same browser, and it's a logout too. A reload declaring the same email, or none,
+     keeps the session.
    - **Anonymous, valid hash (login)**: the identified session is found or created,
      and returned for the widget to store instead. In one transaction, within the
      organization, the anonymous session's tickets move to it and to its Contact
@@ -460,6 +463,14 @@ in the widget.
   A moved ticket with a blank `requester_email` gets no reply by email: a later `PATCH`
   doesn't fill it, and it doesn't fall back on its Contact's address (§5). Nothing marks the identified Contact as having
   that address, so it isn't found by it.
+- Anonymizing an email-only Contact that a reunion absorbed meanwhile answers 404: the
+  row is gone, and its tickets, sessions and notes are on the identified Contact that
+  proved the address. An admin anonymizes that Contact instead.
+- A message an anonymous session posts on a ticket it sees through its Contact's history
+  belongs to that session, and a login moves it with the session's other messages. One
+  committed after the login's move stays on the blanked anonymous session: agents see it
+  on its ticket, and nobody can delete it from the widget any more, since that session
+  no longer sees the ticket.
 - A tab still holding the anonymous session after a login, in another window or as a
   recording popup, gets a 404 on the tickets that moved, misses their replies, and a
   new conversation it starts stays with the anonymous session.

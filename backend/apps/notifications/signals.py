@@ -118,3 +118,17 @@ def notify_message_deleted(ticket, message_id: str) -> None:
             },
         },
     )
+
+    # And every widget session that sees the ticket, so it can take the message off.
+    for session_id in ticket_session_ids(ticket):
+        async_to_sync(channel_layer.group_send)(
+            f"widget_session_{session_id}",
+            {
+                "type": "widget_message",
+                "data": {
+                    "event": "message.deleted",
+                    "ticket_id": str(ticket.id),
+                    "message_id": message_id,
+                },
+            },
+        )

@@ -6,12 +6,17 @@ mails a code only when proving it would open conversations the session can't see
 
 import hashlib
 import hmac
+from unittest import mock
 
 import pytest
 from django.core import mail
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.contacts.models import Contact
+from apps.contacts.services import resolve_contact_for_widget_session
 from apps.organizations.models import OTPCode
 from apps.tickets.models import Ticket, WidgetSession
 from tests.factories import (
@@ -210,7 +215,12 @@ class TestVerify:
         session = WidgetSession.objects.create(
             organization=org, email="a@x.io", external_user_id="u1"
         )
-        code = OTPCode.generate("a@x.io", purpose=OTPCode.Purpose.WIDGET_EMAIL)
+        code = OTPCode.generate(
+            "a@x.io",
+            purpose=OTPCode.Purpose.WIDGET_EMAIL,
+            organization=org,
+            widget_session=session,
+        )
 
         res = _post(org, VERIFY_URL, session, code=code.code)
 
@@ -281,3 +291,152 @@ class TestProofSource:
         assert res.data["email_proof_offered"] is True
         res = _post(org, SESSION_URL)
         assert res.data["email_proof_offered"] is False
+
+
+def _asking(org, email="a@x.io", **fields):
+    """A session whose address holds a ticket it can't see, having asked for a code."""
+    holder = Contact.objects.filter(organization=org, email=email).first()
+    if holder is None:
+        holder = ContactFactory(organization=org, email=email)
+        _email_ticket(org, holder)
+    session = WidgetSession.objects.create(organization=org, email=email, **fields)
+    _post(org, CODE_URL, session)
+    return session
+
+
+class TestBoundCodes:
+    def test_a_code_works_only_for_the_organization_and_session_that_asked(self, org):
+        """Evil Inc. relays a code its own widget had mailed to the victim."""
+        evil = OrganizationFactory()
+        asking = _asking(evil)
+        code = _code()
+        _email_ticket(org, ContactFactory(organization=org, email="a@x.io"))
+        attacker = WidgetSession.objects.create(organization=org, email="a@x.io")
+        sibling = WidgetSession.objects.create(organization=evil, email="a@x.io")
+
+        assert _post(org, VERIFY_URL, attacker, code=code).status_code == 400
+        assert _post(evil, VERIFY_URL, sibling, code=code).status_code == 400
+        assert _post(evil, VERIFY_URL, asking, code=code).data == {"verified": True}
+        attacker.refresh_from_db()
+        assert attacker.email_verified_at is None
+
+    def test_another_session_asking_does_not_cancel_a_pending_code(self, org):
+        asking = _asking(org)
+        code = OTPCode.objects.get(widget_session=asking).code
+        _asking(org)
+
+        assert _post(org, VERIFY_URL, asking, code=code).data == {"verified": True}
+
+    def test_a_verified_session_is_refused_the_same_way(self, org):
+        session = _asking(org)
+        code = _code()
+        WidgetSession.objects.filter(pk=session.pk).update(
+            email_verified_at=session.created_at, email_verified_for="a@x.io"
+        )
+
+        res = _post(org, VERIFY_URL, session, code=code)
+
+        assert (res.status_code, res.data) == (
+            400,
+            {"error": "Invalid or expired code."},
+        )
+
+
+class TestRacingAnEmailChange:
+    def test_a_code_proves_nothing_once_the_email_changed(self, org):
+        session = _asking(org)
+        real_redeem = OTPCode.redeem
+
+        def redeem_then_patch(*args, **kwargs):
+            otp = real_redeem(*args, **kwargs)
+            WidgetSession.objects.filter(pk=session.pk).update(email="b@x.io")
+            return otp
+
+        with mock.patch.object(OTPCode, "redeem", side_effect=redeem_then_patch):
+            res = _post(org, VERIFY_URL, session, code=_code())
+
+        assert res.data == {"verified": False}
+        session.refresh_from_db()
+        assert (session.email, session.email_verified_at) == ("b@x.io", None)
+        assert session.email_verified_for == ""
+
+    def test_a_signature_proves_nothing_once_the_email_changed(self, org):
+        ContactFactory(organization=org, email="a@x.io")
+        session = WidgetSession.objects.create(organization=org, email="a@x.io")
+        WidgetSession.objects.filter(pk=session.pk).update(email="b@x.io")
+
+        resolve_contact_for_widget_session(session, email_verified=True)
+
+        session.refresh_from_db()
+        assert (session.email_verified_at, session.email_verified_for) == (None, "")
+
+
+class TestCodeRouteTiming:
+    def test_always_queues_one_task_and_decides_nothing_itself(self, org):
+        holder = ContactFactory(organization=org, email="a@x.io")
+        _email_ticket(org, holder)
+        sessions = [
+            WidgetSession.objects.create(organization=org, email=email)
+            for email in ("a@x.io", "b@x.io", "unknown@x.io")
+        ]
+        with mock.patch("apps.tickets.views.send_widget_email_code") as task:
+            for session in sessions:
+                assert _post(org, CODE_URL, session).status_code == 202
+
+        assert [c.args for c in task.delay.call_args_list] == [
+            (str(s.pk), s.email) for s in sessions
+        ]
+        assert not OTPCode.objects.exists()
+
+    def test_no_code_for_an_external_id_the_service_rejects(self, org):
+        holder = ContactFactory(organization=org, email="a@x.io")
+        _email_ticket(org, holder)
+        session = WidgetSession.objects.create(
+            organization=org, email="a@x.io", external_user_id="email:a@x.io"
+        )
+
+        _post(org, CODE_URL, session)
+
+        assert mail.outbox == []
+
+
+class TestCodeProofAndAnotherEmail:
+    def test_an_init_declaring_another_email_is_a_logout(self, org):
+        session = _asking(org)
+        _post(org, VERIFY_URL, session, code=_code())
+
+        same = _post(org, SESSION_URL, session_id=str(session.pk), email="A@x.io")
+        other = _post(org, SESSION_URL, session_id=str(session.pk), email="b@x.io")
+
+        assert same.data["session_id"] == str(session.pk)
+        assert other.data["session_id"] != str(session.pk)
+        session.refresh_from_db()
+        assert session.email == "a@x.io"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_migration_records_what_proven_sessions_proved():
+    before = ("tickets", "0016_widgetsession_email_proof_source")
+    executor = MigrationExecutor(connection)
+    executor.migrate([before])
+    Session = executor.loader.project_state(before).apps.get_model(
+        "tickets", "WidgetSession"
+    )
+    org = OrganizationFactory()
+    proven = Session.objects.create(
+        organization_id=org.pk, email=" A@x.io", email_verified_at=timezone.now()
+    )
+    unproven = Session.objects.create(organization_id=org.pk, email="b@x.io")
+    try:
+        executor = MigrationExecutor(connection)
+        executor.migrate([("tickets", "0017_widgetsession_email_verified_for")])
+    finally:
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+
+    rows = dict(
+        WidgetSession.objects.filter(organization=org).values_list(
+            "pk", "email_verified_for"
+        )
+    )
+    assert rows == {proven.pk: "a@x.io", unproven.pk: ""}

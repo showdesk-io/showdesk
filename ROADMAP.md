@@ -753,6 +753,7 @@ model, no inbound pipeline feeds it.
 - [ ] Agent replies on email tickets go out as email from the org's address (sender domain / DKIM per org)
 - [x] Requester identity unification: email requesters and widget `external_user_id` share one `Contact` per person (Contacts & Companies above)
 - [ ] History reunion once an email is proven: reassign an email-only contact's tickets to the identified contact holding the proof
+- [ ] Security follow-up: widget upload routes accept any ticket id of the organization with the public token alone (`tickets/widget_upload_attachment/`, `videos/widget_upload/`)
 - [x] Model refactor decision: keep `Ticket → TicketMessage` + `channel`/`external_id` on messages (decided 2026-10-29, see `docs/plans/2026-10-29-email-channel-design.md`); revisit when designing a third channel
 
 ### MCP server -- see `docs/brainstorm/mcp-server.md`

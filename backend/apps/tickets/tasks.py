@@ -481,27 +481,43 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_widget_email_code(self, otp_id: str, organization_id: str) -> None:
-    """Mail a widget visitor the code proving their email (§6.2).
+def send_widget_email_code(self, session_id: str, email: str) -> None:
+    """Mail a widget session the code proving ``email``, if there's anything to see.
 
-    By id: the code itself never goes through the broker. Not once it's used or
-    replaced by a newer one.
+    The route queues this for every request, so its answer and its time say nothing
+    of the address. Here: only while the session still has that email and no proof,
+    and only when the proof would open conversations it can't see (§6.2, Decision
+    A). The code is good for this session and its organization alone.
     """
-    from apps.organizations.models import Organization, OTPCode
+    from apps.organizations.models import OTPCode
+    from apps.tickets.access import email_proof_would_open
+    from apps.tickets.models import WidgetSession, normalized_email
 
-    otp = OTPCode.objects.filter(
-        pk=otp_id,
-        purpose=OTPCode.Purpose.WIDGET_EMAIL,
-        used_at__isnull=True,
-    ).first()
-    organization = Organization.objects.filter(pk=organization_id).first()
-    if otp is None or organization is None:
+    session = (
+        WidgetSession.objects.select_related("organization", "contact")
+        .filter(pk=session_id)
+        .first()
+    )
+    if (
+        session is None
+        or not email
+        or normalized_email(session.email) != email
+        or session.email_verified_at
+        or not email_proof_would_open(session, email)
+    ):
         return
+    organization = session.organization
+    otp = OTPCode.generate(
+        email,
+        purpose=OTPCode.Purpose.WIDGET_EMAIL,
+        organization=organization,
+        widget_session=session,
+    )
     try:
         send_branded_email(
             template="widget_email_code",
             subject=f"Your code to see your conversations with {organization.name}",
-            to=[otp.email],
+            to=[email],
             organization=organization,
             context={
                 "organization": organization,

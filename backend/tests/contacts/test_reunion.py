@@ -4,7 +4,10 @@ An identified contact with no email that proves an address held by an email-only
 contact takes that contact's tickets, sessions and notes, and then its email.
 """
 
+from datetime import timedelta
+
 import pytest
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.contacts.models import Contact, ContactNote
@@ -202,3 +205,18 @@ def test_two_concurrent_proofs_leave_one_contact(org):
     assert waiting.email_verified_at is None
     second.refresh_from_db()
     assert (second.email, second.email_verified_at) == ("", None)
+
+
+def test_the_seen_dates_span_both_contacts(org):
+    early, middle, late = (timezone.now() - timedelta(days=d) for d in (30, 10, 1))
+    _email_only(org, first_seen_at=early, last_seen_at=late, last_contacted_at=late)
+    contact = _identified(
+        org, first_seen_at=middle, last_seen_at=middle, last_contacted_at=middle
+    )
+
+    _prove(org)
+
+    contact.refresh_from_db()
+    assert contact.first_seen_at == early
+    assert contact.last_seen_at >= late
+    assert contact.last_contacted_at == late

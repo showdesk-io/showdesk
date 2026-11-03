@@ -141,6 +141,27 @@ class SLAPolicy(TimestampedModel):
         return f"{self.name} ({self.priority})"
 
 
+def normalized_email(value) -> str:
+    """An address as proofs and contacts compare it: stripped and lowercased."""
+    return (value or "").strip().lower()
+
+
+def proof_holds(session, contact) -> bool:
+    """Tell if ``session`` proved the email it has, and ``contact`` holds that email.
+
+    The proof is about the address it was made for (``email_verified_for``): a date
+    left by a write racing an email change says nothing of the new one.
+    """
+    email = normalized_email(session.email)
+    return bool(
+        session.email_verified_at
+        and email
+        and session.email_verified_for == email
+        and contact is not None
+        and normalized_email(contact.email) == email
+    )
+
+
 class WidgetSession(TimestampedModel):
     """Anonymous or identified widget user session.
 
@@ -180,6 +201,12 @@ class WidgetSession(TimestampedModel):
         null=True,
         blank=True,
         help_text="Set when this session proved ownership of its email.",
+    )
+    email_verified_for = models.EmailField(
+        blank=True,
+        default="",
+        help_text="The lowercased address the proof is about. It only counts while "
+        "it is the session's email and its contact's.",
     )
     email_proof_source = models.CharField(
         max_length=10,
@@ -419,12 +446,9 @@ class Ticket(TimestampedModel):
             return False
         if session.external_user_id:
             return True
-        email = session.email.strip().lower()
         return bool(
-            session.email_verified_at
+            proof_holds(session, self.contact)
             and self.created_at >= session.email_verified_at
-            and email
-            and email == self.contact.email.strip().lower()
         )
 
     def clean(self) -> None:

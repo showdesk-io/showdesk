@@ -26,6 +26,7 @@ from .models import (
     TicketAttachment,
     TicketMessage,
     WidgetSession,
+    normalized_email,
 )
 
 
@@ -669,7 +670,10 @@ class WidgetSessionSerializer(serializers.ModelSerializer):
 
         Whatever exists behind the address, so the answer tells nothing about it.
         """
-        return bool(obj.email.strip()) and obj.email_verified_at is None
+        email = normalized_email(obj.email)
+        return bool(email) and not (
+            obj.email_verified_at and obj.email_verified_for == email
+        )
 
 
 class WidgetMessageCreateSerializer(serializers.Serializer):

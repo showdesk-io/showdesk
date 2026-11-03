@@ -66,6 +66,7 @@ def _verified_session(organization, contact) -> WidgetSession:
         contact,
         email=contact.email,
         email_verified_at=timezone.now(),
+        email_verified_for=contact.email.lower(),
     )
 
 
@@ -158,6 +159,7 @@ class TestSenderVerified:
             contact,
             email=" Alice@X.io",
             email_verified_at=timezone.now(),
+            email_verified_for="alice@x.io",
         )
         ticket = _ticket(organization, contact=contact, widget_session=session)
         assert _sender_verified(authenticated_client, ticket) is True
