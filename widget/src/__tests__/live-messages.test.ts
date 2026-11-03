@@ -13,6 +13,7 @@ function deliver(
   senderType: string,
   body: string,
   attachments: unknown[] = [],
+  extra: Record<string, unknown> = {},
 ): void {
   const socket = b.openSockets().at(-1);
   socket?.onmessage?.({
@@ -26,6 +27,7 @@ function deliver(
       sender_name: "",
       attachments,
       created_at: "2026-01-01T00:01:00Z",
+      ...extra,
     }),
   });
 }
@@ -69,6 +71,66 @@ describe("a user message from elsewhere", () => {
 
     expect(bubbles()).toHaveLength(2);
     expect(texts().filter((text) => text.includes("second"))).toHaveLength(1);
+  });
+});
+
+describe("user messages over the WebSocket", () => {
+  it("aren't shown on the open conversation when written on another", async () => {
+    const b = await bootOnConversation();
+
+    deliver(b, "elsewhere-1", "user", "On another ticket", [], { ticket_id: "t2" });
+    await tick();
+
+    expect(bubbles()).toHaveLength(1);
+    expect(texts().some((text) => text.includes("On another ticket"))).toBe(false);
+  });
+
+  it("wait for a send, then take their place in time", async () => {
+    const b = await bootOnConversation();
+    b.server.delay = 50;
+    pressSend("second");
+    await tick(10);
+    // Written by email before this send.
+    deliver(b, "mail-1", "user", "From my phone", [], {
+      created_at: "2026-01-01T00:00:30Z",
+    });
+    await tick(10);
+    expect(texts().some((text) => text.includes("From my phone"))).toBe(false);
+
+    await tick(100);
+
+    const order = texts();
+    const phone = order.findIndex((text) => text.includes("From my phone"));
+    const second = order.findIndex((text) => text.includes("second"));
+    expect(phone).toBeGreaterThan(-1);
+    expect(phone).toBeLessThan(second);
+  });
+
+  it("are released when the send fails", async () => {
+    const b = await bootOnConversation();
+    const base = b.server.handler;
+    b.server.handler = (call) =>
+      call.url.includes("widget_message") ? { status: 500, data: {} } : base(call);
+    b.server.delay = 50;
+    pressSend("doomed");
+    await tick(10);
+    deliver(b, "mail-2", "user", "Sent meanwhile");
+
+    await tick(100);
+
+    expect(texts().some((text) => text.includes("Sent meanwhile"))).toBe(true);
+  });
+
+  it("are released when the send never answers", async () => {
+    const b = await bootOnConversation();
+    b.server.delay = 120_000;
+    pressSend("stuck");
+    await tick(10);
+    deliver(b, "mail-3", "user", "Sent meanwhile");
+
+    await tick(20_000);
+
+    expect(texts().some((text) => text.includes("Sent meanwhile"))).toBe(true);
   });
 });
 

@@ -210,7 +210,8 @@ function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
     .querySelectorAll("[data-message-id]")
     .forEach((el) => existingIds.add((el as HTMLElement).dataset.messageId!));
 
-  for (const msg of store.state.messages) {
+  const messages = store.state.messages;
+  for (const [index, msg] of messages.entries()) {
     if (existingIds.has(msg.id)) {
       // Update status if changed
       const existing = messageListEl.querySelector(
@@ -225,7 +226,14 @@ function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
       continue;
     }
     const bubble = renderMessageBubble(msg, onDelete);
-    messageListEl.appendChild(bubble);
+    // In its place among those shown: a message can arrive after later ones.
+    const next = messages
+      .slice(index + 1)
+      .find((later) => existingIds.has(later.id));
+    const before = next
+      ? messageListEl.querySelector(`[data-message-id="${CSS.escape(next.id)}"]`)
+      : null;
+    messageListEl.insertBefore(bubble, before);
   }
 
   scrollToBottom();
@@ -930,6 +938,7 @@ async function loadPopupUploadedMessage(
       activeTicketId: conv.ticketId,
       activeTicketReference: conv.reference,
       activeTicketReadOnly: conv.readOnly,
+      closedTicketId: conv.closed ? conv.ticketId : null,
       messages: conv.messages,
     });
   } catch (err) {

@@ -284,6 +284,31 @@ describe("a conversation seen through the history only", () => {
     expect(inputBar()?.style.display).toBe("none");
   });
 
+  it("is shown closed up front when it takes no more messages", async () => {
+    const b = await bootOffered(undefined, {
+      history: { "anon-1": [historyItem("o1", "Old one", "closed")] },
+    });
+    await openOther(b, (call) =>
+      call.url.includes("widget_conversation")
+        ? {
+            status: 200,
+            data: {
+              ticket_id: "o1",
+              reference: "T-o1",
+              status: "closed",
+              read_only: false,
+              can_reply: false,
+              messages: [],
+            },
+          }
+        : { status: 0, data: null },
+    );
+
+    expect(notice()?.style.display).not.toBe("none");
+    expect(notice()?.textContent).toContain("This conversation is closed.");
+    expect(inputBar()?.style.display).toBe("none");
+  });
+
   it("is closed for writing when the ticket was closed too long ago", async () => {
     const b = await bootOffered(undefined, {
       history: { "anon-1": [historyItem("o1", "Old one", "closed")] },

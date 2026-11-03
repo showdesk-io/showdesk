@@ -273,18 +273,43 @@ async function runSession(config: ShowdeskConfig, run: number): Promise<void> {
 /** User messages from the WebSocket, waiting for this widget's sends to answer. */
 let heldUserMessages: ChatMessage[] = [];
 let releaseHeld: (() => void) | null = null;
+let heldTimer: ReturnType<typeof setTimeout> | null = null;
+/** How long they wait at most, should a send never answer. */
+const HOLD_MAX_MS = 15_000;
 
-/** Show the held user messages of the open conversation not on screen yet. */
-function showHeldUserMessages(s: WidgetStore): void {
+/** ``messages`` with ``fresh`` ones put in their place by time. */
+function insertByTime(messages: ChatMessage[], fresh: ChatMessage[]): ChatMessage[] {
+  const result = [...messages];
+  for (const msg of fresh) {
+    const at = result.findIndex((m) => m.createdAt > msg.createdAt);
+    if (at === -1) result.push(msg);
+    else result.splice(at, 0, msg);
+  }
+  return result;
+}
+
+/**
+ * Show the held user messages of the open conversation not on screen yet, once no
+ * send is waiting for its answer, or at once with ``force``.
+ */
+function showHeldUserMessages(s: WidgetStore, force = false): void {
   if (!heldUserMessages.length) return;
-  if (s.state.messages.some((m) => m._status === "sending")) return;
+  if (!force && s.state.messages.some((m) => m._status === "sending")) {
+    heldTimer ??= setTimeout(() => {
+      heldTimer = null;
+      showHeldUserMessages(s, true);
+    }, HOLD_MAX_MS);
+    return;
+  }
+  if (heldTimer) clearTimeout(heldTimer);
+  heldTimer = null;
   const held = heldUserMessages;
   heldUserMessages = [];
   const shown = new Set(s.state.messages.map((m) => m.id));
   const fresh = held.filter(
     (m) => m.ticketId === s.state.activeTicketId && !shown.has(m.id),
   );
-  if (fresh.length) s.update({ messages: [...s.state.messages, ...fresh] });
+  if (fresh.length) s.update({ messages: insertByTime(s.state.messages, fresh) });
 }
 
 /** Point the shared WebSocket at a session, instead of the one it was on. */
@@ -296,6 +321,8 @@ function connectWebSocket(
   const socket = getWebSocket();
   socket.disconnect();
   heldUserMessages = [];
+  if (heldTimer) clearTimeout(heldTimer);
+  heldTimer = null;
   releaseHeld?.();
   releaseHeld = s.subscribe(() => showHeldUserMessages(s));
   socket.onMessage = (msg: ChatMessage) => {
@@ -370,6 +397,7 @@ async function refreshActiveConversation(
     s.update({
       activeTicketReference: data.reference,
       activeTicketReadOnly: data.readOnly,
+      closedTicketId: data.closed ? data.ticketId : null,
       messages: [...data.messages, ...unsent],
     });
   } catch (err) {
@@ -420,6 +448,7 @@ function resumeActiveConversation(config: ShowdeskConfig): void {
             activeTicketId: data.ticketId,
             activeTicketReference: data.reference,
             activeTicketReadOnly: data.readOnly,
+            closedTicketId: data.closed ? data.ticketId : null,
             messages: data.messages,
             isLoading: false,
           });

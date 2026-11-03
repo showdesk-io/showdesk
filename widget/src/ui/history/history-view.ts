@@ -163,6 +163,7 @@ async function openConversation(
       activeTicketId: data.ticketId,
       activeTicketReference: data.reference,
       activeTicketReadOnly: data.readOnly,
+      closedTicketId: data.closed ? data.ticketId : null,
       messages: data.messages,
       isLoading: false,
       conversations: store.state.conversations.map((c) =>

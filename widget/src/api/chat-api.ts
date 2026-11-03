@@ -204,8 +204,13 @@ export async function fetchConversation(
   ticketId: string;
   reference: string;
   status: string;
-  /** Seen through the contact's history, but not this session's to write on. */
+  /**
+   * Not to be written on: seen through the contact's history but not this
+   * session's, or closed too long ago to reopen.
+   */
   readOnly: boolean;
+  /** Closed too long ago to reopen: a message would be refused. */
+  closed: boolean;
   messages: ChatMessage[];
 }> {
   const res = await fetch(
@@ -219,7 +224,8 @@ export async function fetchConversation(
     ticketId: data.ticket_id,
     reference: data.reference,
     status: data.status,
-    readOnly: data.read_only === true,
+    readOnly: data.read_only === true || data.can_reply === false,
+    closed: data.can_reply === false,
     messages: (data.messages || []).map(mapMessage),
   };
 }
