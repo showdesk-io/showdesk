@@ -42,6 +42,7 @@ from apps.core.throttling import (
     WidgetUploadThrottle,
 )
 from apps.email_channel.outbound import queue_reply_email
+from apps.email_channel.thread_matching import ReopenOutcome, apply_reopen_rule
 from apps.notifications.signals import (
     notify_message_deleted,
     notify_new_message,
@@ -57,7 +58,7 @@ from apps.organizations.models import (
 )
 
 from .access import session_tickets, writable_from
-from .messages import MessageRefused, create_user_message
+from .messages import MessageRefused, create_user_message, lock_ticket_with_contact
 from .models import (
     PRE_LOGIN_ANONYMOUS_KEY,
     CannedResponse,
@@ -384,6 +385,33 @@ def _new_ticket_contact_id(session):
 READ_ONLY = (
     "This conversation can only be read here. Start a new conversation to write to us."
 )
+CLOSED = "This conversation is closed. Start a new conversation to write to us."
+
+
+class ConversationClosed(Exception):
+    """The ticket was resolved or closed too long ago to reopen."""
+
+
+def _widget_user_message(ticket, session, **fields) -> TicketMessage:
+    """Write the session's message on ``ticket``, reopening it as a mail would.
+
+    Within ``INBOUND_EMAIL_REOPEN_DAYS`` of its resolution the ticket reopens; past
+    that it takes nothing more (``ConversationClosed``), as on the conversation page.
+    """
+    with transaction.atomic():
+        locked, _ = lock_ticket_with_contact(ticket.pk)
+        if locked is None:
+            raise MessageRefused
+        outcome = apply_reopen_rule(locked)
+        if outcome == ReopenOutcome.EXPIRED:
+            raise ConversationClosed
+        message = create_user_message(ticket, session=session, **fields)
+    if outcome == ReopenOutcome.REOPENED:
+        try:
+            notify_ticket_update(locked)
+        except Exception:
+            logger.exception("WebSocket notification failed for %s", locked.reference)
+    return message
 
 
 def _ticket_context(context) -> dict:
@@ -1242,14 +1270,16 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         # Create message
         try:
-            message = create_user_message(
-                ticket, session=session, body=body, body_type=body_type
+            message = _widget_user_message(
+                ticket, session, body=body, body_type=body_type
             )
         except MessageRefused:
             return Response(
                 {"error": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except ConversationClosed:
+            return Response({"error": CLOSED}, status=status.HTTP_409_CONFLICT)
 
         try:
             notify_new_message(message)
@@ -1335,14 +1365,16 @@ class TicketViewSet(viewsets.ModelViewSet):
 
         # Create message
         try:
-            message = create_user_message(
-                ticket, session=session, body=body, body_type=body_type
+            message = _widget_user_message(
+                ticket, session, body=body, body_type=body_type
             )
         except MessageRefused:
             return Response(
                 {"error": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except ConversationClosed:
+            return Response({"error": CLOSED}, status=status.HTTP_409_CONFLICT)
 
         # Validate and save attachment
         att_serializer = TicketAttachmentSerializer(
