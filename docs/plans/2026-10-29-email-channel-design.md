@@ -343,8 +343,10 @@ showing the channel.
   proven only (or set by an agent): an identified session's unproven email goes to
   `Contact.declared_email`, so forging somebody's address can never attach their
   email-born tickets to the forger's Contact. `declared_email` is never used to
-  match a Contact, to send mail or to open history. The rule is in the Contacts
-  design, §3.
+  match a Contact or to open history. It is only mailed an agent's reply, as the
+  last fallback of a ticket with no `requester_email` and a Contact with no `email`
+  (Contacts §5): that reply carries no conversation link, which only goes to the
+  address the Contact holds. The rule is in the Contacts design, §3.
 
 ---
 
