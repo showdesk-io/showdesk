@@ -1,12 +1,12 @@
 """Which mailbox, or which ticket, an inbound mail is for (design §4.1)."""
 
-import re
 from dataclasses import dataclass
 from email.utils import getaddresses
 
 from django.conf import settings
 from django.db.models import Q
 
+from apps.core.text import one_line
 from apps.email_channel.models import Mailbox
 from apps.email_channel.tokens import ticket_id_from_reply_address
 from apps.tickets.models import Ticket
@@ -34,18 +34,6 @@ class Recipient:
     def organization(self):
         """The organization the mail is for."""
         return self.ticket.organization if self.ticket else self.mailbox.organization
-
-
-_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
-
-
-def one_line(value) -> str:
-    """``value`` as one line of text, without the control characters Postgres refuses.
-
-    Folding and tabs become single spaces; other control characters, such as NUL,
-    go away.
-    """
-    return _CONTROL_CHARACTERS.sub("", " ".join(str(value or "").split()))
 
 
 def _addresses(values: list[str]) -> list[str]:

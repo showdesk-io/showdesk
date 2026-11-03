@@ -17,9 +17,10 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.core.email import send_branded_email
+from apps.core.text import one_line
 from apps.email_channel.content import decoded_text, extract_body
 from apps.email_channel.models import InboundEmail, Mailbox
-from apps.email_channel.recipients import Recipient, one_line
+from apps.email_channel.recipients import Recipient
 from apps.organizations.models import User
 from apps.tickets.models import TicketMessage
 

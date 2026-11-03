@@ -11,10 +11,10 @@ from email.utils import formataddr, parseaddr
 from django.conf import settings
 from django.core.cache import cache
 
+from apps.core.text import one_line
 from apps.email_channel import presence
 from apps.email_channel.content import REPLY_MARKER
 from apps.email_channel.models import Mailbox
-from apps.email_channel.recipients import one_line
 from apps.email_channel.tokens import conversation_token, reply_address
 from apps.tickets.access import ticket_session_ids
 from apps.tickets.models import (
@@ -40,15 +40,6 @@ class Delivery(enum.StrEnum):
     NOW = "now"
     LATER = "later"  # Unless read in the widget first.
     NEVER = "never"
-
-
-def entitled_session_ids(ticket) -> list[str]:
-    """The widget sessions where ``ticket``'s replies show.
-
-    The one that opened it, its external user's, and those that may see its
-    contact's history (``apps.tickets.access``).
-    """
-    return ticket_session_ids(ticket)
 
 
 def suppressed_by_unsubscribe(ticket) -> bool:
@@ -80,7 +71,7 @@ def delivery_decision(message) -> Delivery:
     )
     if last is not None and last.channel == TicketMessage.Channel.EMAIL:
         return Delivery.NOW
-    if not any(presence.is_connected(s) for s in entitled_session_ids(ticket)):
+    if not any(presence.is_connected(s) for s in ticket_session_ids(ticket)):
         return Delivery.NOW
     return Delivery.LATER
 

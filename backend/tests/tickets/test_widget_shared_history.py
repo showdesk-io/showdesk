@@ -13,9 +13,12 @@ from django.db import connection
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.email_channel import outbound
 from apps.notifications.signals import notify_message_deleted, notify_new_message
-from apps.tickets.access import contact_history_opens, session_tickets
+from apps.tickets.access import (
+    contact_history_opens,
+    session_tickets,
+    ticket_session_ids,
+)
 from apps.tickets.models import Ticket, TicketMessage, WidgetSession
 from tests.factories import (
     ContactFactory,
@@ -249,7 +252,7 @@ class TestReplies:
             layer.return_value.group_send = group_send
             notify_new_message(reply)
 
-        assert outbound.entitled_session_ids(email_ticket) == [str(proven.pk)]
+        assert ticket_session_ids(email_ticket) == [str(proven.pk)]
         assert sent == [f"org_{org.id}", f"widget_session_{proven.pk}"]
 
 
@@ -273,7 +276,7 @@ class TestProofOfAnotherAddress:
         session = _session(org, holder, proven=True, email_verified_for="b@x.io")
         assert not contact_history_opens(session)
         assert _history(_client(org, session)) == []
-        assert outbound.entitled_session_ids(email_ticket) == []
+        assert ticket_session_ids(email_ticket) == []
 
     def test_a_ticket_written_under_it_is_not_verified(self, org, holder):
         session = _session(org, holder, proven=True, email_verified_for="b@x.io")

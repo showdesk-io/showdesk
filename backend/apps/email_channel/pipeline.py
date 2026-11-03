@@ -17,6 +17,7 @@ from django.utils import timezone
 
 from apps.contacts.gdpr import PREVIOUS_TICKET_KEY
 from apps.contacts.services import is_staff_address, resolve_contact_for_email
+from apps.core.text import one_line
 from apps.email_channel.content import (
     Attachment,
     dropped_note,
@@ -26,7 +27,7 @@ from apps.email_channel.content import (
 )
 from apps.email_channel.filters import classify
 from apps.email_channel.models import InboundEmail
-from apps.email_channel.recipients import Recipient, one_line, stored_recipient
+from apps.email_channel.recipients import Recipient, stored_recipient
 from apps.email_channel.thread_matching import (
     ReopenOutcome,
     apply_reopen_rule,

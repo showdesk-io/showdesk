@@ -6,7 +6,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from apps.contacts.models import Contact
+from apps.contacts.models import ANONYMIZED_EMAIL_DOMAIN, Contact
 from apps.core.models import TimestampedModel
 
 
@@ -165,6 +165,40 @@ def proof_holds(session, contact) -> bool:
         and contact is not None
         and normalized_email(contact.email) == normalized_email(session.email)
     )
+
+
+def requester_can_be_emailed(ticket) -> bool:
+    """Tell if the ticket has an address, and one that isn't an anonymized contact's.
+
+    Its contact says so. A ticket with none, scrubbed that way or left by a deleted
+    contact, only has the address to tell.
+    """
+    if not ticket.requester_email:
+        return False
+    if ticket.contact:
+        return not ticket.contact.is_anonymized
+    return not ticket.requester_email.lower().endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")
+
+
+def requester_reply_address(ticket) -> str:
+    """Return where an agent's reply goes, or "" if nowhere.
+
+    The ticket's address, or else what its contact holds, or, without one, the
+    address it declared (Contacts design §5): a resume doesn't fill in a ticket, and
+    an agent can link one. Not the contact of a ticket a login moved there, who isn't
+    necessarily who wrote it.
+    """
+    if ticket.requester_email:
+        return ticket.requester_email if requester_can_be_emailed(ticket) else ""
+    contact = ticket.contact
+    metadata = ticket.context_metadata
+    if (
+        contact is None
+        or contact.is_anonymized
+        or (isinstance(metadata, dict) and PRE_LOGIN_ANONYMOUS_KEY in metadata)
+    ):
+        return ""
+    return contact.email or contact.declared_email
 
 
 class WidgetSession(TimestampedModel):

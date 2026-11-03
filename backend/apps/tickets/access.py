@@ -16,7 +16,13 @@ from django.db.models import Q, QuerySet
 from apps.contacts.models import Contact
 from apps.contacts.services import session_external_id
 
-from .models import Ticket, WidgetSession, normalized_email, proof_holds
+from .models import (
+    Ticket,
+    WidgetSession,
+    normalized_email,
+    proof_holds,
+    requester_reply_address,
+)
 
 
 def contact_history_opens(session) -> bool:
@@ -58,15 +64,13 @@ def writable_from(session, ticket) -> bool:
     if ticket.widget_session_id == session.pk:
         return True
     if ticket.widget_session_id is None:
-        from .tasks import _reply_address
-
         contact = ticket.contact
         return bool(
             ticket.source == Ticket.Source.EMAIL
             and contact is not None
             and ticket.contact_id == session.contact_id
             and contact_history_opens(session)
-            and normalized_email(_reply_address(ticket))
+            and normalized_email(requester_reply_address(ticket))
             == normalized_email(contact.email)
         )
     opener = ticket.widget_session

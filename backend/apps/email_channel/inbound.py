@@ -10,8 +10,9 @@ from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from apps.core.text import one_line
 from apps.email_channel.models import InboundEmail
-from apps.email_channel.recipients import one_line, recipient_addresses, resolve
+from apps.email_channel.recipients import recipient_addresses, resolve
 
 logger = logging.getLogger(__name__)
 

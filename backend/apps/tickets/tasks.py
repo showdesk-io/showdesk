@@ -13,6 +13,7 @@ from celery import shared_task
 from django.conf import settings
 
 from apps.core.email import send_branded_email
+from apps.tickets.models import requester_can_be_emailed, requester_reply_address
 
 logger = logging.getLogger(__name__)
 
@@ -44,43 +45,6 @@ def _priority_label(ticket) -> str:
         return Ticket.Priority(slug).label
     except ValueError:
         return slug.replace("_", " ").title() or "—"
-
-
-def _requester_can_be_emailed(ticket) -> bool:
-    """Tell if the ticket has an address, and one that isn't an anonymized contact's.
-
-    Its contact says so. A ticket with none, scrubbed that way or left by a deleted
-    contact, only has the address to tell.
-    """
-    from apps.contacts.models import ANONYMIZED_EMAIL_DOMAIN
-
-    if not ticket.requester_email:
-        return False
-    if ticket.contact:
-        return not ticket.contact.is_anonymized
-    return not ticket.requester_email.lower().endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")
-
-
-def _reply_address(ticket) -> str:
-    """Return where an agent's reply goes, or "" if nowhere.
-
-    The ticket's address, or else what its contact holds: a resume doesn't fill in a
-    ticket, and an agent can link one. Not the contact of a ticket a login moved there,
-    who isn't necessarily who wrote it.
-    """
-    from apps.tickets.models import PRE_LOGIN_ANONYMOUS_KEY
-
-    if ticket.requester_email:
-        return ticket.requester_email if _requester_can_be_emailed(ticket) else ""
-    contact = ticket.contact
-    metadata = ticket.context_metadata
-    if (
-        contact is None
-        or contact.is_anonymized
-        or (isinstance(metadata, dict) and PRE_LOGIN_ANONYMOUS_KEY in metadata)
-    ):
-        return ""
-    return contact.email or contact.declared_email
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -201,7 +165,7 @@ def _requester_address(ticket) -> str:
 
     if suppressed_by_unsubscribe(ticket):
         return ""
-    return _reply_address(ticket)
+    return requester_reply_address(ticket)
 
 
 def _email_requester(task, message, address: str) -> None:
@@ -453,7 +417,7 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
     except Ticket.DoesNotExist:
         return
 
-    if not _requester_can_be_emailed(ticket) or outbound.suppressed_by_unsubscribe(
+    if not requester_can_be_emailed(ticket) or outbound.suppressed_by_unsubscribe(
         ticket
     ):
         return

@@ -16,12 +16,9 @@ from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 
+from apps.core.text import one_line
+
 logger = logging.getLogger(__name__)
-
-
-def _one_line(value: str | None) -> str:
-    """``value`` on one line: a header can't hold a line break (a widget title can)."""
-    return " ".join(str(value or "").split())
 
 
 def _default_logo_url() -> str:
@@ -97,7 +94,7 @@ def send_branded_email(
     ``<template>.txt``. ``attachments`` holds (name, content, mimetype) tuples.
     ``headers`` are extra headers, such as ``Message-ID`` or ``In-Reply-To``.
     """
-    subject = _one_line(subject)
+    subject = one_line(subject)
     recipients = [addr for addr in to if addr]
     if not recipients:
         logger.info("send_branded_email: no recipients for %s, skipping", template)
@@ -149,5 +146,5 @@ def _format_from_email(from_email: str | None, organization: Any | None) -> str:
         return raw  # Couldn't parse; let Django reject it downstream.
 
     org_name = getattr(organization, "email_from_name", "") if organization else ""
-    display = _one_line(org_name) or _one_line(name) or settings.BRAND_NAME
+    display = one_line(org_name) or one_line(name) or settings.BRAND_NAME
     return formataddr((display, address))

@@ -14,7 +14,8 @@ from django.conf import settings
 from django.db.models import Case, Value, When
 from django.utils import timezone
 
-from apps.email_channel.recipients import Recipient, one_line
+from apps.core.text import one_line
+from apps.email_channel.recipients import Recipient
 from apps.tickets.models import Ticket, TicketMessage
 
 _MESSAGE_ID = re.compile(r"<[^<>\s]{1,253}>")

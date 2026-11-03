@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 from pathlib import PureWindowsPath
 from urllib.parse import urlsplit
 
-from apps.email_channel.recipients import one_line
+from apps.core.text import one_line
 from apps.tickets.models import BLOCKED_EXTENSIONS, TicketAttachment
 
 # Above the quoted history of the mails we send: what a reply writes is above it.
