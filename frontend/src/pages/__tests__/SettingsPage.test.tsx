@@ -1,5 +1,5 @@
 /**
- * Tests for how the settings page reaches the custom attributes tabs.
+ * Tests for how the settings page reaches its tabs: custom attributes, email.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import { apiClient } from "@/api/client";
 import { SettingsPage } from "../SettingsPage";
 
 const auth = vi.hoisted(() => ({ role: "admin" }));
+const inbound = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("@/api/client", () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
@@ -20,7 +21,9 @@ vi.mock("@/hooks/useAuth", () => ({
 vi.mock("@/api/users", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/api/users")>()),
   fetchAgents: vi.fn().mockResolvedValue([]),
-  fetchOrganization: vi.fn().mockResolvedValue({ id: "o1", enabled_features: [] }),
+  fetchOrganization: vi.fn(() =>
+    Promise.resolve({ id: "o1", enabled_features: [], inbound_email_enabled: inbound.enabled }),
+  ),
 }));
 
 const client = vi.mocked(apiClient);
@@ -40,6 +43,7 @@ function renderPage() {
 beforeEach(() => {
   vi.clearAllMocks();
   auth.role = "admin";
+  inbound.enabled = false;
   client.get.mockResolvedValue({ data: [] });
 });
 
@@ -66,5 +70,23 @@ describe("SettingsPage attribute tabs", () => {
 
     await screen.findByRole("heading", { name: "Contact attributes" });
     expect(screen.queryByRole("button", { name: /New attribute/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("SettingsPage email tab", () => {
+  it("is there only when the instance receives mail", async () => {
+    renderPage();
+    await screen.findByRole("button", { name: "Organization" });
+    expect(screen.queryByRole("button", { name: "Email" })).not.toBeInTheDocument();
+  });
+
+  it("opens the mailboxes", async () => {
+    inbound.enabled = true;
+    const user = renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Email" }));
+
+    await screen.findByRole("heading", { name: "Email" });
+    expect(client.get).toHaveBeenCalledWith("/mailboxes/");
   });
 });

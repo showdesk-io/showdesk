@@ -60,6 +60,8 @@ function makeOrg(overrides: Partial<Organization> = {}): Organization {
       "ai_categorization",
       "webhooks",
     ],
+    inbound_email_enabled: false,
+    inbound_email_domain: "",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,

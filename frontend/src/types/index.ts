@@ -28,8 +28,50 @@ export interface Organization {
   widget_first_seen_at: string | null;
   plan: Plan;
   enabled_features: string[];
+  /** Whether this instance receives mail, i.e. it has an inbound domain. */
+  inbound_email_enabled: boolean;
+  inbound_email_domain: string;
   created_at: string;
   updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Email channel
+// ---------------------------------------------------------------------------
+
+/** A Gmail forwarding confirmation, taken from a mail whose sender can be forged. */
+export interface ForwardingConfirmation {
+  url: string;
+  code: string;
+  detected_at: string;
+}
+
+export interface Mailbox {
+  id: string;
+  name: string;
+  local_part: string;
+  /** Where the organization forwards its support mail. */
+  inbound_address: string;
+  public_address: string;
+  default_team: string | null;
+  is_active: boolean;
+  /** Only sent to admins; empty until Gmail sends one. */
+  forwarding_confirmation?: Partial<ForwardingConfirmation>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type InboundEmailStatus = "pending" | "processed" | "ignored" | "rejected" | "failed";
+
+/** A received mail that didn't become a message. */
+export interface InboundLogEntry {
+  id: string;
+  sender: string;
+  subject: string;
+  status: InboundEmailStatus;
+  reason: string;
+  received_at: string;
+  processed_at: string | null;
 }
 
 export type DomainStatus = "pending" | "verified" | "failed";
@@ -203,10 +245,17 @@ export interface TicketMessage {
   sender_type: SenderType;
   body_type: BodyType;
   sender_name: string;
+  channel: MessageChannel;
+  /** The display name and address of a mail's From, when it came by email. */
+  external_sender: string;
+  email_delivery_status: EmailDeliveryStatus;
   attachments: TicketAttachment[];
   created_at: string;
   updated_at: string;
 }
+
+export type MessageChannel = "widget" | "email" | "agent" | "api" | "system";
+export type EmailDeliveryStatus = "" | "sent" | "failed";
 
 export interface ConsoleErrorEntry {
   level: "error" | "warning";
@@ -260,6 +309,7 @@ export interface Ticket {
     [key: string]: unknown;
   };
   sla_policy: string | null;
+  mailbox: string | null;
   first_response_at: string | null;
   resolved_at: string | null;
   closed_at: string | null;
