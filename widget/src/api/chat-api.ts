@@ -3,6 +3,7 @@
  */
 
 import type {
+  ChatAttachment,
   ChatMessage,
   ConversationSummary,
   ShowdeskConfig,
@@ -281,6 +282,17 @@ export async function deleteMessage(
   if (!res.ok) throw new Error(`Delete message error: ${res.status}`);
 }
 
+/** Files as the API and the WebSocket list them. */
+export function mapAttachments(raw: unknown): ChatAttachment[] {
+  return ((raw as Array<Record<string, unknown>>) || []).map((a) => ({
+    id: a.id as string,
+    url: a.file as string,
+    filename: a.filename as string,
+    contentType: a.content_type as string,
+    fileSize: a.file_size as number,
+  }));
+}
+
 function mapMessage(raw: Record<string, unknown>): ChatMessage {
   return {
     id: raw.id as string,
@@ -289,15 +301,7 @@ function mapMessage(raw: Record<string, unknown>): ChatMessage {
     bodyType: (raw.body_type as ChatMessage["bodyType"]) || "text",
     senderType: (raw.sender_type as ChatMessage["senderType"]) || "agent",
     senderName: (raw.sender_name as string) || "",
-    attachments: ((raw.attachments as Array<Record<string, unknown>>) || []).map(
-      (a) => ({
-        id: a.id as string,
-        url: a.file as string,
-        filename: a.filename as string,
-        contentType: a.content_type as string,
-        fileSize: a.file_size as number,
-      }),
-    ),
+    attachments: mapAttachments(raw.attachments),
     createdAt: raw.created_at as string,
     ...(typeof raw.deletable === "boolean" ? { deletable: raw.deletable } : {}),
     _status: "sent",

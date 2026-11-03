@@ -7,7 +7,13 @@ afterEach(teardown);
 
 const CONFIG = { token: "tk", apiUrl: "/x" };
 
-function deliver(b: Booted, id: string, senderType: string, body: string): void {
+function deliver(
+  b: Booted,
+  id: string,
+  senderType: string,
+  body: string,
+  attachments: unknown[] = [],
+): void {
   const socket = b.openSockets().at(-1);
   socket?.onmessage?.({
     data: JSON.stringify({
@@ -18,6 +24,7 @@ function deliver(b: Booted, id: string, senderType: string, body: string): void 
       body_type: "text",
       sender_type: senderType,
       sender_name: "",
+      attachments,
       created_at: "2026-01-01T00:01:00Z",
     }),
   });
@@ -62,5 +69,27 @@ describe("a user message from elsewhere", () => {
 
     expect(bubbles()).toHaveLength(2);
     expect(texts().filter((text) => text.includes("second"))).toHaveLength(1);
+  });
+});
+
+describe("an agent's reply with files", () => {
+  it("shows its files as it arrives", async () => {
+    const b = await bootOnConversation();
+
+    deliver(b, "a-1", "agent", "Here is the invoice", [
+      {
+        id: "f1",
+        file: "https://files.example.com/invoice.pdf",
+        filename: "invoice.pdf",
+        content_type: "application/pdf",
+        file_size: 1200,
+      },
+    ]);
+    await tick();
+
+    const link = document.querySelector<HTMLAnchorElement>(
+      '[data-message-id="a-1"] a[href="https://files.example.com/invoice.pdf"]',
+    );
+    expect(link?.textContent).toContain("invoice.pdf");
   });
 });
