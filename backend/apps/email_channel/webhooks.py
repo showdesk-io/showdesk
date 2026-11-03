@@ -69,6 +69,8 @@ class PostalInboundView(PostalInboundWebhookView):
             # JSON can only carry text: 8-bit bytes come back as lone surrogates.
             raw = raw.encode("utf-8", "surrogateescape")
         message = AnymailInboundMessage.parse_raw_mime_bytes(raw)
+        # What is stored: serializing the parsed message again could alter it.
+        message.raw_bytes = raw
         message.envelope_sender = esp_event.get("mail_from")
         message.envelope_recipient = esp_event.get("rcpt_to")
         return [

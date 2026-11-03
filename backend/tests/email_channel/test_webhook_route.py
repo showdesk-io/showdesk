@@ -12,7 +12,11 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from django.test import Client, override_settings
 from django.urls import clear_url_caches
 
+from apps.email_channel.models import InboundEmail
+
 POSTAL_URL = "/anymail/postal/inbound/"
+# The inbound signal stores what it receives.
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("local_media")]
 
 
 def _new_key() -> rsa.RSAPrivateKey:
@@ -115,6 +119,7 @@ def test_a_signed_mail_is_accepted(postal_key, received):
     [event] = received
     assert event.message["Subject"] == "Printer on fire"
     assert event.message.envelope_recipient == "acme-abc@in.example.com"
+    assert InboundEmail.objects.get().subject == "Printer on fire"
 
 
 def test_a_forged_signature_is_refused(postal_key, received):
