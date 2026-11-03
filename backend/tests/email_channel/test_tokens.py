@@ -1,0 +1,93 @@
+"""Signed reply addresses, conversation links and outbound Message-IDs."""
+
+import time
+import uuid
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest import mock
+
+from django.core import signing
+
+from apps.email_channel.tokens import (
+    ConversationClaim,
+    conversation_token,
+    outbound_message_id,
+    read_conversation_token,
+    reply_address,
+    ticket_id_from_reply_address,
+)
+from tests.email_channel.mails import INBOUND_DOMAIN
+
+
+def _ticket():
+    return SimpleNamespace(id=uuid.uuid4())
+
+
+def test_a_reply_address_names_its_ticket_whatever_the_case():
+    ticket = _ticket()
+    address = reply_address(ticket)
+
+    assert address.endswith(f"@{INBOUND_DOMAIN}")
+    assert ticket_id_from_reply_address(address) == ticket.id
+    # Mail servers may change the case of an address.
+    assert ticket_id_from_reply_address(address.upper()) == ticket.id
+
+
+def test_a_reply_address_cannot_be_forged_or_moved():
+    ticket, other = _ticket(), _ticket()
+    address = reply_address(ticket)
+    signature = address.partition(".")[2].partition("@")[0]
+
+    tampered = address.replace(signature, "0" * len(signature))
+    moved = address.replace(ticket.id.hex, other.id.hex)
+    elsewhere = address.replace(INBOUND_DOMAIN, "example.net")
+
+    for address in (tampered, moved, elsewhere, "reply+@" + INBOUND_DOMAIN):
+        assert ticket_id_from_reply_address(address) is None
+
+
+def test_a_conversation_token_carries_ticket_contact_and_address():
+    ticket, contact = _ticket(), SimpleNamespace(id=uuid.uuid4())
+
+    token = conversation_token(ticket, contact, "Ann@Example.org ")
+
+    assert read_conversation_token(token) == ConversationClaim(
+        ticket_id=str(ticket.id), contact_id=str(contact.id), email="ann@example.org"
+    )
+    assert read_conversation_token(token[:-2] + "xx") is None
+
+
+def test_an_expired_conversation_token_is_only_read_to_renew(settings):
+    settings.CONVERSATION_LINK_MAX_AGE_DAYS = 30
+    ticket, contact = _ticket(), SimpleNamespace(id=uuid.uuid4())
+    token = conversation_token(ticket, contact, "ann@example.org")
+
+    later = time.time() + timedelta(days=31).total_seconds()
+    with mock.patch("django.core.signing.time") as clock:
+        clock.time.return_value = later
+        assert read_conversation_token(token) is None
+        claim = read_conversation_token(token, allow_expired=True)
+
+    assert claim.ticket_id == str(ticket.id)
+
+
+def test_other_signed_values_are_no_conversation_tokens():
+    ticket = _ticket()
+    payload = {"t": str(ticket.id), "c": str(uuid.uuid4()), "e": "ann@example.org"}
+    reply_token = reply_address(ticket).partition("+")[2].partition("@")[0]
+
+    assert read_conversation_token(reply_token) is None
+    assert read_conversation_token(signing.dumps(payload)) is None
+    assert read_conversation_token("") is None
+
+
+def test_an_outbound_message_id_is_stable_and_on_our_domain(settings):
+    message = SimpleNamespace(id=uuid.uuid4())
+
+    assert outbound_message_id(message) == f"<{message.id}@{INBOUND_DOMAIN}>"
+    assert outbound_message_id(message) == outbound_message_id(message)
+
+    # Without an inbound domain, the domain mail goes out from.
+    settings.INBOUND_EMAIL_DOMAIN = ""
+    settings.DEFAULT_FROM_EMAIL = "Showdesk <noreply@mail.example.com>"
+    assert outbound_message_id(message) == f"<{message.id}@mail.example.com>"
