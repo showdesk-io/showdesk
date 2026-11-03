@@ -1,13 +1,22 @@
 """Tests for ticket models."""
 
 import pytest
+from django.core.exceptions import ValidationError
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 
-from apps.tickets.models import Ticket, TicketMessage
+from apps.tickets.models import Ticket, TicketMessage, WidgetSession
 from tests.factories import (
+    ContactFactory,
+    MailboxFactory,
+    OrganizationFactory,
     TagFactory,
     TicketFactory,
     TicketMessageFactory,
 )
+
+BEFORE_CHANNEL_BACKFILL = ("tickets", "0012_email_channel_fields")
+CHANNEL_BACKFILL = ("tickets", "0013_backfill_message_channel")
 
 
 @pytest.mark.django_db
@@ -59,6 +68,14 @@ class TestTicket:
         assert ticket.context_url == "https://example.com/page"
         assert ticket.context_metadata == {"locale": "en-US"}
 
+    def test_mailbox_must_belong_to_the_organization(self) -> None:
+        ticket = TicketFactory.build(
+            organization=OrganizationFactory(), mailbox=MailboxFactory()
+        )
+        with pytest.raises(ValidationError) as error:
+            ticket.clean()
+        assert "mailbox" in error.value.message_dict
+
 
 @pytest.mark.django_db
 class TestTicketMessage:
@@ -87,3 +104,57 @@ class TestTicketMessage:
         TicketMessageFactory(ticket=ticket)
         TicketMessageFactory(ticket=ticket)
         assert ticket.messages.count() == 2
+
+    def test_sender_name_of_an_email_message_is_its_external_sender(self) -> None:
+        contact = ContactFactory(name="Ann Example")
+        ticket = TicketFactory(organization=contact.organization, contact=contact)
+
+        def user_message(**fields) -> TicketMessage:
+            return TicketMessageFactory(
+                ticket=ticket,
+                author=None,
+                sender_type=TicketMessage.SenderType.USER,
+                **fields,
+            )
+
+        third_party = user_message(
+            channel=TicketMessage.Channel.EMAIL,
+            external_sender='"Bob Other" <bob@example.org>',
+        )
+        unnamed = user_message(
+            channel=TicketMessage.Channel.EMAIL, external_sender="bob@example.org"
+        )
+        session = WidgetSession.objects.create(
+            organization=ticket.organization, name="Widget Ann"
+        )
+        assert third_party.sender_name == "Bob Other"
+        assert unnamed.sender_name == "bob@example.org"
+        assert user_message(widget_session=session).sender_name == "Widget Ann"
+        assert user_message().sender_name == "Ann Example"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backfill_sets_the_channel_from_the_sender_type() -> None:
+    executor = MigrationExecutor(connection)
+    executor.migrate([BEFORE_CHANNEL_BACKFILL])
+    try:
+        # The models of that time: today's may have columns the tables don't have.
+        historical = executor.loader.project_state(BEFORE_CHANNEL_BACKFILL).apps
+        ticket = historical.get_model("tickets", "Ticket").objects.create(
+            organization_id=OrganizationFactory().pk, reference="SD-0001", title="Old"
+        )
+        user, agent, system = (
+            historical.get_model("tickets", "TicketMessage").objects.create(
+                ticket_id=ticket.pk, sender_type=sender_type
+            )
+            for sender_type in ("user", "agent", "system")
+        )
+        executor = MigrationExecutor(connection)
+        executor.migrate([CHANNEL_BACKFILL])
+    finally:
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+    channels = dict(
+        TicketMessage.objects.filter(ticket_id=ticket.pk).values_list("pk", "channel")
+    )
+    assert channels == {user.pk: "widget", agent.pk: "agent", system.pk: "system"}

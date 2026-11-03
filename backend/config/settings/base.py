@@ -39,6 +39,7 @@ LOCAL_APPS = [
     "apps.videos",
     "apps.knowledge_base",
     "apps.notifications",
+    "apps.email_channel",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -339,6 +340,12 @@ ANYMAIL = {
     "MAILJET_API_KEY": config("MAILJET_API_KEY", default=""),
     "MAILJET_SECRET_KEY": config("MAILJET_SECRET_KEY", default=""),
 }
+
+# =============================================================================
+# Email channel (inbound mail), off while INBOUND_EMAIL_DOMAIN is empty
+# =============================================================================
+# Domain receiving the mail forwarded to mailboxes and the replies to tickets.
+INBOUND_EMAIL_DOMAIN = config("INBOUND_EMAIL_DOMAIN", default="").strip().lower()
 
 # Frontend URL for links in emails
 SITE_URL = config("SITE_URL", default="http://localhost")

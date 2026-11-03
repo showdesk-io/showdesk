@@ -1,5 +1,7 @@
 """Ticket-related models: Ticket, TicketMessage, TicketAttachment, Tag, SLAPolicy."""
 
+from email.utils import parseaddr
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -338,6 +340,19 @@ class Ticket(TimestampedModel):
         related_name="tickets",
         help_text="Widget session that created this ticket (messaging mode).",
     )
+    mailbox = models.ForeignKey(
+        "email_channel.Mailbox",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tickets",
+        help_text="Mailbox the ticket was opened through, for tickets opened by email.",
+    )
+    sender_verified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="A message of the contact's came through the conversation link.",
+    )
     widget_last_read_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -414,6 +429,14 @@ class Ticket(TimestampedModel):
             raise ValidationError(
                 {"contact": "This contact belongs to another organization."}
             )
+        if (
+            self.mailbox_id
+            and self.organization_id
+            and self.mailbox.organization_id != self.organization_id
+        ):
+            raise ValidationError(
+                {"mailbox": "This mailbox belongs to another organization."}
+            )
 
 
 class TicketMessage(TimestampedModel):
@@ -443,6 +466,22 @@ class TicketMessage(TimestampedModel):
         VIDEO = "video", "Video"
         SCREENSHOT = "screenshot", "Screenshot"
         SYSTEM = "system", "System"
+
+    class Channel(models.TextChoices):
+        """How the message came in."""
+
+        WIDGET = "widget", "Widget"
+        EMAIL = "email", "Email"
+        AGENT = "agent", "Agent"
+        API = "api", "API"
+        SYSTEM = "system", "System"
+
+    class DeliveryStatus(models.TextChoices):
+        """Whether the message reached the requester by email."""
+
+        NONE = "", "Not emailed"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
 
     ticket = models.ForeignKey(
         Ticket,
@@ -480,6 +519,27 @@ class TicketMessage(TimestampedModel):
         choices=BodyType.choices,
         default=BodyType.TEXT,
     )
+    channel = models.CharField(
+        max_length=10,
+        choices=Channel.choices,
+        default=Channel.WIDGET,
+    )
+    external_id = models.CharField(
+        max_length=255,
+        blank=True,
+        db_index=True,
+        help_text="Message-ID of the email this message came in or went out as.",
+    )
+    external_sender = models.CharField(
+        max_length=320,
+        blank=True,
+        help_text="The From of the email this message came in as: a claim, unverified.",
+    )
+    email_delivery_status = models.CharField(
+        max_length=10,
+        choices=DeliveryStatus.choices,
+        blank=True,
+    )
 
     class Meta:
         ordering = ["created_at"]
@@ -497,12 +557,22 @@ class TicketMessage(TimestampedModel):
 
     @property
     def sender_name(self) -> str:
-        """Display name for the message sender."""
+        """Display name for the message sender.
+
+        An email's sender can be someone other than the ticket's contact, such as a
+        colleague in copy: their own name shows.
+        """
         if self.sender_type == self.SenderType.AGENT and self.author:
             return self.author.get_full_name() or self.author.email
-        if self.sender_type == self.SenderType.USER and self.widget_session:
+        if self.sender_type != self.SenderType.USER:
+            return ""
+        if self.widget_session:
             return self.widget_session.name or self.widget_session.email or ""
-        return ""
+        if self.external_sender:
+            name, address = parseaddr(self.external_sender)
+            return name or address or self.external_sender
+        contact = self.ticket.contact
+        return contact.name if contact else ""
 
 
 class SavedView(TimestampedModel):

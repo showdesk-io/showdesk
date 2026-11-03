@@ -7,7 +7,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from rest_framework import status
 
-from apps.tickets.models import PriorityLevel, Ticket
+from apps.tickets.models import PriorityLevel, Ticket, TicketMessage
 from tests.factories import (
     OrganizationFactory,
     PriorityLevelFactory,
@@ -266,6 +266,8 @@ class TestTicketMessageAPI:
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data["body"] == "Looking into this now."
         assert str(response.data["author"]) == str(agent.id)
+        message = TicketMessage.objects.get(pk=response.data["id"])
+        assert message.channel == TicketMessage.Channel.AGENT
 
     def test_create_internal_note(self, authenticated_client, organization) -> None:
         """Agents can create internal notes."""

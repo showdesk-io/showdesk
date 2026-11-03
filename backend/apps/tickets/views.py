@@ -1489,7 +1489,9 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer) -> None:
         """Set author on creation and send notifications."""
-        message = serializer.save(author=self.request.user)
+        message = serializer.save(
+            author=self.request.user, channel=TicketMessage.Channel.AGENT
+        )
 
         # WebSocket notification
         try:

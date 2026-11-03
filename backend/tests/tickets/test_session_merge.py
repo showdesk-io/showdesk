@@ -186,14 +186,22 @@ def test_anonymous_sessions_and_other_organizations_arent_constrained():
 def test_migration_merges_then_constrains():
     # The merge leaves deferred foreign key checks pending, and Postgres refuses
     # to build an index on a table that has some: only a real migration shows it.
+    before = ("tickets", "0010_ticket_contact_widgetsession_contact_and_more")
     executor = MigrationExecutor(connection)
-    executor.migrate(
-        [("tickets", "0010_ticket_contact_widgetsession_contact_and_more")]
-    )
+    executor.migrate([before])
     org = OrganizationFactory()
     oldest = _session(org, age_days=2, external_user_id="u1")
     newest = _session(org, age_days=1, external_user_id="u1")
-    ticket = TicketFactory(organization=org, widget_session=newest, requester=None)
+    # The model of that time: today's has columns the table doesn't have yet.
+    HistoricalTicket = executor.loader.project_state(before).apps.get_model(
+        "tickets", "Ticket"
+    )
+    ticket = HistoricalTicket.objects.create(
+        organization_id=org.pk,
+        reference="SD-0001",
+        title="Before the merge",
+        widget_session_id=newest.pk,
+    )
     try:
         executor = MigrationExecutor(connection)
         executor.migrate([("tickets", MERGE_MIGRATION)])
