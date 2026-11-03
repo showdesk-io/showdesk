@@ -43,7 +43,11 @@ from apps.core.throttling import (
     WidgetUploadThrottle,
 )
 from apps.email_channel.outbound import queue_reply_email
-from apps.email_channel.thread_matching import ReopenOutcome, apply_reopen_rule
+from apps.email_channel.thread_matching import (
+    ReopenOutcome,
+    apply_reopen_rule,
+    reopen_expired,
+)
 from apps.notifications.signals import (
     notify_message_deleted,
     notify_new_message,
@@ -1494,6 +1498,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                 # Seen through the contact's history, but opened by a session that
                 # isn't entitled: writing there would reach that session.
                 "read_only": not writable_from(session, ticket),
+                # Closed for too long to reopen: a message would be refused.
+                "can_reply": not reopen_expired(ticket),
                 "messages": serializer.data,
             }
         )

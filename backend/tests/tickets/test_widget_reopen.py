@@ -105,3 +105,15 @@ def test_a_refused_file_reopens_nothing_and_writes_nothing(settings):
     # Nor does it open a ticket.
     assert send().status_code == 400
     assert Ticket.objects.count() == 1
+
+
+def test_the_conversation_says_whether_it_takes_more(settings):
+    settings.INBOUND_EMAIL_REOPEN_DAYS = 7
+
+    def can_reply(days_ago: int) -> bool:
+        ticket, client = _closed_ticket(days_ago=days_ago)
+        res = client.get(f"{API}widget_conversation/", {"ticket_id": str(ticket.pk)})
+        return res.data["can_reply"]
+
+    assert can_reply(2) is True
+    assert can_reply(8) is False
