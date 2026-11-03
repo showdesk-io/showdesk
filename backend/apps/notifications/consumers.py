@@ -131,8 +131,10 @@ class WidgetConsumer(AsyncJsonWebsocketConsumer):
         self.session_id = str(session.id)
         self.group_name = f"widget_session_{self.session_id}"
         await self.channel_layer.group_add(self.group_name, self.channel_name)
-        await self.accept()
+        # Before accepting, so the session counts as present as soon as the
+        # widget sees its socket open.
         await self._mark_present()
+        await self.accept()
 
     async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection."""
