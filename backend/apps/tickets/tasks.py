@@ -8,12 +8,14 @@ Handles email notifications for ticket lifecycle events:
 """
 
 import logging
+from email.utils import parseaddr
 
 from celery import shared_task
 from django.conf import settings
 from redis.exceptions import RedisError
 
 from apps.core.email import send_branded_email
+from apps.core.text import one_line
 from apps.tickets.models import requester_can_be_emailed, requester_reply_address
 
 logger = logging.getLogger(__name__)
@@ -323,7 +325,15 @@ def send_ticket_reply_email(self, message_id: str) -> None:
         )
     if not recipients:
         return
-    author_label = ticket.requester_name or ticket.requester_email or "Requester"
+    # A mail's own sender, who can be someone in copy rather than the requester.
+    sender_name, sender_address = parseaddr(message.external_sender)
+    author_label = (
+        one_line(sender_name)
+        or sender_address
+        or ticket.requester_name
+        or ticket.requester_email
+        or "Requester"
+    )
 
     try:
         send_branded_email(

@@ -536,3 +536,19 @@ def test_an_agent_cant_post_a_message_as_the_requester(ticket, agent):
     assert response.status_code == 201
     assert TicketMessage.objects.get(pk=response.data["id"]).sender_type == "agent"
     now.assert_called_once()
+
+
+def test_agents_are_told_who_wrote_a_mail_in_copy(ticket, agent):
+    ticket.requester_name = "Ann Customer"
+    ticket.save(update_fields=["requester_name"])
+    colleague = _from_user(
+        ticket, "email", body="Same here", external_sender="Bob <bob@example.org>"
+    )
+    own = _from_user(ticket, "email", body="Still broken")
+
+    send_ticket_reply_email(colleague.id)
+    send_ticket_reply_email(own.id)
+
+    assert [sent.to for sent in mail.outbox] == [[agent.email]] * 2
+    assert "Bob replied on ticket" in mail.outbox[0].body
+    assert "Ann Customer replied on ticket" in mail.outbox[1].body
