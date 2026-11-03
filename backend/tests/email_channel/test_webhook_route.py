@@ -11,6 +11,7 @@ import pytest
 from anymail.signals import inbound
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from django.conf import settings as django_settings
 from django.core.handlers.asgi import ASGIRequest
 from django.test import Client, override_settings
 from django.urls import clear_url_caches
@@ -136,8 +137,27 @@ def test_other_providers_are_only_mounted_with_a_secret(postal_key, mount, setti
     # Without a shared secret, Anymail's views for basic-auth providers accept anyone.
     assert Client().post("/anymail/mailjet/inbound/").status_code == 404
 
+    mount(ANYMAIL={**settings.ANYMAIL, "WEBHOOK_SECRET": [" ", "", "no-colon", ":"]})
+    assert Client().post("/anymail/mailjet/inbound/").status_code == 404
+
     mount(ANYMAIL={**settings.ANYMAIL, "WEBHOOK_SECRET": ["user:password"]})
     assert Client().post("/anymail/mailjet/inbound/").status_code == 400
+
+
+def test_basic_auth_does_not_replace_postal_s_signature(postal_key, mount, received):
+    secret = "user:password"
+    mount(ANYMAIL={**django_settings.ANYMAIL, "WEBHOOK_SECRET": [secret]})
+    credentials = base64.b64encode(secret.encode()).decode()
+
+    response = Client().post(
+        POSTAL_URL,
+        data=_payload(_mail()),
+        content_type="application/json",
+        headers={"Authorization": f"Basic {credentials}"},
+    )
+
+    assert response.status_code == 400
+    assert received == []
 
 
 def test_a_latin1_mail_is_accepted(postal_key, received):

@@ -347,7 +347,11 @@ ANYMAIL = {
     "POSTAL_WEBHOOK_KEY": config("ANYMAIL_POSTAL_WEBHOOK_KEY", default=""),
     # "user:password" (several, comma-separated, while rotating). The other
     # providers' webhooks only exist with it, since basic auth is their only check.
-    "WEBHOOK_SECRET": config("ANYMAIL_WEBHOOK_SECRET", default="", cast=Csv()),
+    "WEBHOOK_SECRET": [
+        entry
+        for entry in config("ANYMAIL_WEBHOOK_SECRET", default="", cast=Csv())
+        if entry.partition(":")[0] and entry.partition(":")[2]
+    ],
 }
 
 # =============================================================================

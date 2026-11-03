@@ -6,7 +6,7 @@ from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 from django.urls import include, path
 
 from apps.core.admin_auth import admin_otp_login
-from apps.email_channel.webhooks import PostalInboundView
+from apps.email_channel.webhooks import PostalInboundView, webhook_secrets
 
 admin.site.login = admin_otp_login
 
@@ -28,7 +28,7 @@ if settings.INBOUND_EMAIL_DOMAIN:
         )
     # Without a shared secret, Anymail's views for basic-auth providers accept
     # anything. Mounted after Postal's view above, which takes precedence.
-    if settings.ANYMAIL.get("WEBHOOK_SECRET"):
+    if webhook_secrets(settings.ANYMAIL.get("WEBHOOK_SECRET")):
         urlpatterns.append(path("anymail/", include("anymail.urls")))
 
 # In DEBUG, serve files from STATICFILES_DIRS (e.g. backend/static/brand/logo.png

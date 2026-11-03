@@ -17,6 +17,22 @@ from django.views.decorators.csrf import csrf_exempt
 logger = logging.getLogger(__name__)
 
 
+def webhook_secrets(value: str | list[str] | None) -> list[str]:
+    """The usable ``user:password`` entries of ``ANYMAIL["WEBHOOK_SECRET"]``.
+
+    A blank entry, or one without both a user and a password, would let Anymail's
+    basic-auth views take requests that carry no credentials.
+    """
+    if isinstance(value, str):
+        value = value.split(",")
+    secrets = []
+    for entry in value or []:
+        user, _, password = entry.strip().partition(":")
+        if user and password:
+            secrets.append(entry.strip())
+    return secrets
+
+
 def max_raw_mail_bytes() -> int:
     """The largest raw mail taken in.
 
