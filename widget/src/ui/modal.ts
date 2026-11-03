@@ -179,6 +179,16 @@ export function switchSession(config: ShowdeskConfig): Promise<void> {
 }
 
 /**
+ * Init again at once for an anonymous session that proved its email, now given another
+ * one: someone else on that browser. What the previous person sees leaves the view now,
+ * and the backend decides whether the stored session goes on.
+ */
+export function restartForNewEmail(config: ShowdeskConfig): Promise<void> {
+  clearUserFromView(config);
+  return startSessionRun(config);
+}
+
+/**
  * Start over with a new anonymous session, for the identity now in `config`: a logout
  * that keeps the widget. Nothing of the session it replaces is resumed, shown or stored,
  * even if the request then fails. Opening the panel tries again in that case.

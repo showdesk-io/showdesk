@@ -284,3 +284,30 @@ describe("a conversation seen through the history only", () => {
     expect(inputBar()?.style.display).toBe("none");
   });
 });
+
+describe("a proven session given another email", () => {
+  it("starts again at once, so the previous person's history goes", async () => {
+    const b = await bootOffered();
+    await askAndEnter("123456");
+    expect(banner()).toBeNull();
+    const before = b.posts().length;
+
+    b.widget.setUser({ email: "b@x.io" });
+    await tick();
+
+    expect(b.posts()).toHaveLength(before + 1);
+    expect(b.posts().at(-1)?.body.email).toBe("b@x.io");
+    expect(b.posts().at(-1)?.body.session_id).toBe("anon-1");
+  });
+
+  it("isn't started again for the same email", async () => {
+    const b = await bootOffered();
+    await askAndEnter("123456");
+    const before = b.posts().length;
+
+    b.widget.setUser({ email: "A@x.io" });
+    await tick();
+
+    expect(b.posts()).toHaveLength(before);
+  });
+});
