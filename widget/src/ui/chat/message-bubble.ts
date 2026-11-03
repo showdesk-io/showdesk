@@ -92,10 +92,18 @@ function getMediaUrl(msg: ChatMessage): string | null {
   return msg.attachments[0]?.url || msg._localUrl || null;
 }
 
+/** The text, then a link to each file: a mail's, or one from the conversation page. */
 function renderText(msg: ChatMessage): HTMLElement {
+  const text = document.createElement("div");
+  text.className = "sd-msg-text";
+  text.textContent = msg.body;
+  if (msg.attachments.length === 0) return text;
+
   const el = document.createElement("div");
-  el.className = "sd-msg-text";
-  el.textContent = msg.body;
+  if (msg.body) el.appendChild(text);
+  for (const attachment of msg.attachments) {
+    el.appendChild(fileElement(attachment.url, attachment.filename || "File"));
+  }
   return el;
 }
 
@@ -171,10 +179,12 @@ function renderVideo(msg: ChatMessage): HTMLElement {
 }
 
 function renderFile(msg: ChatMessage): HTMLElement {
+  return fileElement(getMediaUrl(msg), msg.attachments[0]?.filename || msg.body || "File");
+}
+
+function fileElement(url: string | null, filename: string): HTMLElement {
   const el = document.createElement("div");
   el.className = "sd-msg-file";
-  const url = getMediaUrl(msg);
-  const filename = msg.attachments[0]?.filename || msg.body || "File";
 
   const icon = document.createElement("span");
   icon.className = "sd-msg-file-icon";
