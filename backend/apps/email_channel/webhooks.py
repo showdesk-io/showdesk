@@ -1,6 +1,7 @@
 """The webhook receiving Postal's inbound mail."""
 
 import json
+import logging
 from base64 import b64decode
 
 from anymail.exceptions import AnymailConfigurationError
@@ -12,6 +13,8 @@ from django.contrib.auth.decorators import login_not_required
 from django.http import HttpRequest, HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+
+logger = logging.getLogger(__name__)
 
 
 def max_raw_mail_bytes() -> int:
@@ -47,13 +50,22 @@ class PostalInboundView(PostalInboundWebhookView):
         except ValueError:
             declared = 0
         if declared > limit:
-            return HttpResponse(status=413)
+            return self._too_large(limit)
         # ``request.body`` enforces DATA_UPLOAD_MAX_MEMORY_SIZE, unless already read.
         body = request.read(limit + 1)
         if len(body) > limit:
-            return HttpResponse(status=413)
+            return self._too_large(limit)
         request._body = body
         return super().dispatch(request, *args, **kwargs)
+
+    def _too_large(self, limit: int) -> HttpResponse:
+        # The mail is lost unless the operator raises the cap: say so.
+        logger.warning(
+            "Refused an inbound mail webhook over %d bytes; raise "
+            "INBOUND_EMAIL_MAX_SIZE_MB to accept larger mail.",
+            limit,
+        )
+        return HttpResponse(status=413)
 
     def parse_events(self, request: HttpRequest) -> list[AnymailInboundEvent]:
         esp_event = json.loads(request.body)

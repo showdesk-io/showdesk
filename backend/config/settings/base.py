@@ -358,7 +358,8 @@ INBOUND_EMAIL_DOMAIN = config("INBOUND_EMAIL_DOMAIN", default="").strip().lower(
 # A resolved or closed ticket reopens on a reply within this many days of its last
 # activity. Later, the reply opens a new ticket.
 INBOUND_EMAIL_REOPEN_DAYS = config("INBOUND_EMAIL_REOPEN_DAYS", default=7, cast=int)
-# Total size of the attachments kept from one mail; larger mail is refused.
+# Total size of the attachments kept from one mail; larger ones are dropped. Only
+# mail beyond about twice this size is refused (see email_channel.webhooks).
 INBOUND_EMAIL_MAX_SIZE_MB = config("INBOUND_EMAIL_MAX_SIZE_MB", default=25, cast=int)
 # Mails from one sender to one mailbox, per hour, beyond which they are ignored.
 INBOUND_EMAIL_RATE_LIMIT_PER_HOUR = config(

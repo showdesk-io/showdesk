@@ -2,17 +2,21 @@
 
 import base64
 import importlib
+import io
 import json
 from email.message import EmailMessage
+from unittest import mock
 
 import pytest
 from anymail.signals import inbound
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from django.core.handlers.asgi import ASGIRequest
 from django.test import Client, override_settings
 from django.urls import clear_url_caches
 
 from apps.email_channel.models import InboundEmail
+from apps.email_channel.webhooks import PostalInboundView
 
 POSTAL_URL = "/anymail/postal/inbound/"
 # The inbound signal stores what it receives.
@@ -167,6 +171,29 @@ def test_a_mail_over_the_cap_is_refused_before_reading(postal_key, received, set
     body = "x" * 76 + "\n"
     response = _post(_payload(_mail(body * (3 * 1024 * 1024 // 77))), postal_key)
     assert response.status_code == 413
+    assert received == []
+
+
+def test_a_body_over_the_cap_without_content_length_is_refused(
+    postal_key, received, settings
+):
+    # Over ASGI, a chunked request has no Content-Length: only reading tells.
+    settings.INBOUND_EMAIL_MAX_SIZE_MB = 1
+    body = _payload(_mail(("x" * 76 + "\n") * 40_000))
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": POSTAL_URL,
+        "headers": [(b"content-type", b"application/json")],
+    }
+    request = ASGIRequest(scope, io.BytesIO(body))
+    assert "CONTENT_LENGTH" not in request.META
+
+    with mock.patch("apps.email_channel.webhooks.logger") as logger:
+        response = PostalInboundView.as_view()(request)
+
+    assert response.status_code == 413
+    logger.warning.assert_called_once()
     assert received == []
 
 
