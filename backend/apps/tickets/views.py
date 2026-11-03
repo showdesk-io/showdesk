@@ -9,6 +9,7 @@ from django_filters import rest_framework as django_filters
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -1709,12 +1710,29 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         return TicketMessage.objects.none()
 
     def perform_create(self, serializer) -> None:
-        """Set author on creation and send notifications."""
-        message = serializer.save(
-            author=self.request.user,
-            channel=TicketMessage.Channel.AGENT,
-            sender_type=TicketMessage.SenderType.AGENT,
-        )
+        """Set author on creation, take the files named, and send notifications.
+
+        The files are linked before anything announces or mails the message, so the
+        widget, the conversation page and the reply mail all have them.
+        """
+        files = serializer.validated_data.pop("attachment_ids", [])
+        with transaction.atomic():
+            message = serializer.save(
+                author=self.request.user,
+                channel=TicketMessage.Channel.AGENT,
+                sender_type=TicketMessage.SenderType.AGENT,
+            )
+            if files:
+                linked = TicketAttachment.objects.filter(
+                    pk__in=[file.pk for file in files],
+                    ticket_id=message.ticket_id,
+                    message__isnull=True,
+                ).update(message=message)
+                if linked != len({file.pk for file in files}):
+                    # Taken by another message meanwhile.
+                    raise ValidationError(
+                        {"attachment_ids": "These files are no longer free."}
+                    )
 
         # WebSocket notification
         try:

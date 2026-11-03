@@ -6,6 +6,8 @@ every unread reply.
 """
 
 import enum
+import logging
+import re
 from email.utils import formataddr, parseaddr
 
 from django.conf import settings
@@ -23,6 +25,8 @@ from apps.tickets.models import (
     TicketMessage,
 )
 
+logger = logging.getLogger(__name__)
+
 # Enough for a mail client to thread on, and a bound on the headers of a long one.
 MAX_REFERENCES = 20
 # What a reply mail recalls of the conversation before its new replies.
@@ -32,6 +36,9 @@ CONTEXT_MESSAGES = 3
 MAX_DELAY_MINUTES = 55
 # How long a ticket's reply mail may take to build and send, at most.
 REPLY_LOCK_SECONDS = 300
+# What a reply mail attaches of its replies' files, in all. The rest is only named.
+MAIL_ATTACHMENTS_MAX_BYTES = 10 * 1024 * 1024
+_MIMETYPE = re.compile(r"[\w.+-]+/[\w.+-]+")
 
 
 class Delivery(enum.StrEnum):
@@ -145,6 +152,38 @@ def unread_replies(message) -> list[TicketMessage]:
         .order_by("created_at"),
         message,
     ]  # fmt: skip
+
+
+def mail_attachments(replies) -> tuple[list[tuple[str, bytes, str]], set]:
+    """The files of ``replies`` their mail attaches, and the ids of those attached.
+
+    In the order they were sent, as long as they fit in
+    ``MAIL_ATTACHMENTS_MAX_BYTES`` together; one that doesn't is left for the next,
+    smaller ones. A file storage can't read is left out too: the mail names it.
+    """
+    budget = MAIL_ATTACHMENTS_MAX_BYTES
+    files, attached = [], set()
+    for reply in replies:
+        for attachment in sorted(reply.attachments.all(), key=lambda a: a.created_at):
+            if not attachment.file or attachment.file_size > budget:
+                continue
+            try:
+                with attachment.file.open("rb") as stored:
+                    content = stored.read(budget + 1)
+            except Exception:
+                logger.exception(
+                    "Couldn't read attachment %s to mail it", attachment.pk
+                )
+                continue
+            if len(content) > budget:
+                continue
+            budget -= len(content)
+            mimetype = attachment.content_type
+            if not _MIMETYPE.fullmatch(mimetype or ""):
+                mimetype = "application/octet-stream"
+            files.append((one_line(attachment.filename) or "file", content, mimetype))
+            attached.add(attachment.pk)
+    return files, attached
 
 
 def context_messages(first) -> list[TicketMessage]:

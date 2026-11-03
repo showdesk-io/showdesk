@@ -125,23 +125,27 @@ def send_ticket_created_email(self, ticket_id: str) -> None:
         raise self.retry(exc=exc)
 
 
-def _attachments(message) -> list[dict]:
+def _attachments(message, attached=()) -> list[dict]:
+    """The message's files as a mail names them: never by a storage URL.
+
+    ``attached`` are those the mail carries.
+    """
     return [
         {
             "filename": att.filename,
-            "url": att.file.url if att.file else "",
             "size": att.file_size,
+            "attached": att.pk in attached,
         }
         for att in message.attachments.all()
     ]
 
 
-def _reply_entry(message, author_label: str) -> dict:
+def _reply_entry(message, author_label: str, attached=()) -> dict:
     return {
         "author_label": author_label,
         "author_initial": (author_label[:1] or "?").upper(),
         "body": message.body,
-        "attachments": _attachments(message),
+        "attachments": _attachments(message, attached),
     }
 
 
@@ -212,8 +216,10 @@ def _send_requester_mail(task, message, address: str) -> None:
         return
     ticket = message.ticket
     replies = outbound.unread_replies(message)
+    files, attached = outbound.mail_attachments(replies)
     entries = [
-        _reply_entry(reply, outbound.sender_label(reply, address)) for reply in replies
+        _reply_entry(reply, outbound.sender_label(reply, address), attached)
+        for reply in replies
     ]
     conversation_url = outbound.conversation_url(ticket, address)
     # The history recalls what the contact said: only for the contact's address.
@@ -260,7 +266,14 @@ def _send_requester_mail(task, message, address: str) -> None:
                 "author_label": author_label,
                 "intro": intro,
                 "cta_label": "View conversation",
+                "files_not_attached": any(
+                    not file["attached"]
+                    for entry in entries
+                    for file in entry["attachments"]
+                ),
+                "files_url": conversation_url,
             },
+            attachments=files,
         )
     except Exception as exc:
         logger.exception("Failed to send reply email for %s", ticket.reference)

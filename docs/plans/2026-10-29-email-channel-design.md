@@ -252,6 +252,11 @@ template:
 - Subject `Re: [SD-123] {title}`.
 - Body: reply marker, the new (unread) replies, the last three messages as
   context, a "View conversation" button (signed link, §6).
+- The replies' files go as real attachments, up to 10 MB in all; the others are
+  only named, with a pointer to the conversation link when there is one. A mail
+  never carries a storage URL. The agent's app uploads the files to the ticket
+  first, then posts the reply naming them (`attachment_ids`): they're linked
+  before the reply is announced or mailed.
 - Tickets without a mailbox fall back to the organization's first active
   mailbox, else to `DEFAULT_FROM_EMAIL` (current behaviour) with the
   `Reply-To` as soon as `INBOUND_EMAIL_DOMAIN` is set.

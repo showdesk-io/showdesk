@@ -10,8 +10,10 @@ Ticket: {{ ticket.title }} ({{ ticket.reference }})
 {{ reply.body }}
 ---
 {% if reply.attachments %}Attachments:
-{% for a in reply.attachments %}- {{ a.filename }} ({{ a.size|filesizeformat }}){% if a.url %} {{ a.url }}{% endif %}
-{% endfor %}{% endif %}{% endfor %}
+{% for a in reply.attachments %}- {{ a.filename }} ({{ a.size|filesizeformat }}{% if a.attached %}, attached{% endif %})
+{% endfor %}{% endif %}{% endfor %}{% if files_not_attached %}
+Some files were too large to attach to this email.{% if files_url %} Open the conversation to get them: {{ files_url }}{% endif %}
+{% endif %}
 {{ cta_label }}: {{ ticket_url }}{% if history %}
 
 Earlier in this conversation:

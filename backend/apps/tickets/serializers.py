@@ -119,6 +119,18 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
     # Max 20 MB per file
     MAX_FILE_SIZE = 20 * 1024 * 1024
 
+    def validate(self, attrs):
+        message, ticket = attrs.get("message"), attrs.get("ticket")
+        if (
+            message is not None
+            and ticket is not None
+            and message.ticket_id != ticket.pk
+        ):
+            raise serializers.ValidationError(
+                {"message": "This message belongs to another ticket."}
+            )
+        return attrs
+
     class Meta:
         model = TicketAttachment
         fields = [
@@ -157,6 +169,15 @@ class TicketMessageSerializer(serializers.ModelSerializer):
     ticket = OrgScopedPrimaryKeyRelatedField(queryset=Ticket.objects.all())
     author_detail = UserSerializer(source="author", read_only=True)
     attachments = TicketAttachmentSerializer(many=True, read_only=True)
+    # Files uploaded to the ticket for this message, linked to it on creation: before
+    # it is announced or mailed.
+    attachment_ids = OrgScopedPrimaryKeyRelatedField(
+        queryset=TicketAttachment.objects.filter(message__isnull=True),
+        org_field="ticket__organization",
+        many=True,
+        write_only=True,
+        required=False,
+    )
     sender_name = serializers.CharField(read_only=True)
 
     class Meta:
@@ -175,6 +196,7 @@ class TicketMessageSerializer(serializers.ModelSerializer):
             "external_sender",
             "email_delivery_status",
             "attachments",
+            "attachment_ids",
             "created_at",
             "updated_at",
         ]
@@ -190,6 +212,19 @@ class TicketMessageSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def validate(self, attrs):
+        ticket = attrs.get("ticket") or getattr(self.instance, "ticket", None)
+        files = attrs.get("attachment_ids") or []
+        if self.instance is not None and files:
+            raise serializers.ValidationError(
+                {"attachment_ids": "Files are only added to a new message."}
+            )
+        if ticket is not None and any(file.ticket_id != ticket.pk for file in files):
+            raise serializers.ValidationError(
+                {"attachment_ids": "These files belong to another ticket."}
+            )
+        return attrs
 
 
 # Who a ticket can be assigned to, as in the bulk_update action.

@@ -94,11 +94,26 @@ def notify_new_message(message) -> None:
             "body_type": getattr(message, "body_type", "text"),
             "sender_type": getattr(message, "sender_type", "agent"),
             "sender_name": message.sender_name,
+            "attachments": _attachments(message),
             "created_at": message.created_at.isoformat(),
         },
     }
     for session_id in ticket_session_ids(message.ticket):
         async_to_sync(channel_layer.group_send)(f"widget_session_{session_id}", event)
+
+
+def _attachments(message) -> list[dict]:
+    """The message's files, as the widget's conversation lists them."""
+    return [
+        {
+            "id": str(attachment.id),
+            "file": attachment.file.url if attachment.file else "",
+            "filename": attachment.filename,
+            "content_type": attachment.content_type,
+            "file_size": attachment.file_size,
+        }
+        for attachment in message.attachments.all()
+    ]
 
 
 def notify_message_deleted(ticket, message_id: str, message_type: str) -> None:
