@@ -2,7 +2,8 @@
  * History View — List of past conversations.
  *
  * Clicking a conversation loads its messages in the chat view.
- * "New conversation" button starts a fresh thread.
+ * "New conversation" button starts a fresh thread. Above the list, a session with an
+ * unproven email is offered a code to see its conversations by email.
  */
 
 import {
@@ -12,6 +13,7 @@ import {
 } from "../../api/chat-api";
 import type { WidgetStore } from "../../state/widget-state";
 import type { ShowdeskConfig, ConversationSummary } from "../../types";
+import { renderEmailProofBanner } from "./email-proof-banner";
 
 export function renderHistoryView(
   container: HTMLElement,
@@ -40,6 +42,15 @@ export function renderHistoryView(
   // Loading state
   const list = document.createElement("div");
   list.className = "sd-history-list";
+
+  // An unproven email: a code opens its conversations by email.
+  if (store.state.session?.emailProofOffered) {
+    wrapper.appendChild(
+      renderEmailProofBanner(store, config, () => {
+        void loadHistory(list, store, config);
+      }),
+    );
+  }
   wrapper.appendChild(list);
 
   container.appendChild(wrapper);

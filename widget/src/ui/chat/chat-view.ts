@@ -63,8 +63,11 @@ export function renderChatView(
         updateSessionContact(config, session.sessionId, name, email).catch(
           console.error,
         );
+        // A new address has no proof yet; the same one keeps what it had.
+        const emailProofOffered =
+          email === session.email ? session.emailProofOffered : Boolean(email.trim());
         store.update({
-          session: { ...session, name, email },
+          session: { ...session, name, email, emailProofOffered },
         });
       }
     });

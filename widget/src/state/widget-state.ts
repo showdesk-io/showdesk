@@ -32,6 +32,9 @@ export interface WidgetState {
 
   /** Unread badge count (agent replies while modal closed). */
   unreadCount: number;
+
+  /** When this session last asked for an email code (ms), null if it hasn't. */
+  emailCodeSentAt: number | null;
 }
 
 type Listener = () => void;
@@ -57,6 +60,7 @@ export function createWidgetStore(): WidgetStore {
     contactNudgeDismissed: false,
     contactNudgeShown: false,
     unreadCount: 0,
+    emailCodeSentAt: null,
   };
 
   function subscribe(fn: Listener): () => void {

@@ -65,6 +65,7 @@ export async function createOrResumeSession(
     name: data.name || "",
     email: data.email || "",
     externalUserId: data.external_user_id || "",
+    emailProofOffered: data.email_proof_offered === true,
   };
 }
 
@@ -81,6 +82,38 @@ export async function updateSessionContact(
     body: JSON.stringify({ name, email }),
   });
   if (!res.ok) throw new Error(`Update contact error: ${res.status}`);
+}
+
+/**
+ * Ask for a code proving the session's email. The answer is the same whether a code
+ * went or not: it only goes when there are conversations to see.
+ */
+export async function requestEmailCode(
+  config: ShowdeskConfig,
+  sessionId: string,
+): Promise<void> {
+  const res = await fetch(`${config.apiUrl}/tickets/widget_email_code/`, {
+    method: "POST",
+    headers: { ...headers(config, sessionId), "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new ApiError(`Email code error: ${res.status}`, res.status);
+}
+
+/** Prove the session's email with a code. True if the email is now proven. */
+export async function verifyEmailCode(
+  config: ShowdeskConfig,
+  sessionId: string,
+  code: string,
+): Promise<boolean> {
+  const res = await fetch(`${config.apiUrl}/tickets/widget_email_verify/`, {
+    method: "POST",
+    headers: { ...headers(config, sessionId), "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw new ApiError(`Email verify error: ${res.status}`, res.status);
+  const data = await res.json();
+  return data?.verified === true;
 }
 
 /** Send a text message. Returns ticket_id, message_id, reference. */

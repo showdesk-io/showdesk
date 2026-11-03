@@ -111,6 +111,11 @@ export interface WidgetSession {
   name: string;
   email: string;
   externalUserId: string;
+  /**
+   * The session has an email it hasn't proven: the widget offers a code to see its
+   * conversations by email. Whatever exists behind the address.
+   */
+  emailProofOffered: boolean;
 }
 
 export interface ChatAttachment {

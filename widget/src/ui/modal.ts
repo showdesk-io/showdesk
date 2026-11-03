@@ -75,6 +75,7 @@ const EMPTY_VIEW: Partial<WidgetState> = {
   isLoading: false,
   contactNudgeDismissed: false,
   contactNudgeShown: false,
+  emailCodeSentAt: null,
 };
 
 let currentPanel: HTMLElement | null = null;
@@ -220,7 +221,8 @@ async function runSession(config: ShowdeskConfig, run: number): Promise<void> {
 
     const previous = s.state.session;
     const changed = previous?.sessionId !== session.sessionId;
-    s.update({ session });
+    // A code asked for by another session isn't this one's to enter.
+    s.update(changed ? { session, emailCodeSentAt: null } : { session });
 
     if (changed) {
       connectWebSocket(config, s, session.sessionId);
