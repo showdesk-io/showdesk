@@ -119,6 +119,14 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
     # Max 20 MB per file
     MAX_FILE_SIZE = 20 * 1024 * 1024
 
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.instance is not None:
+            # Where a file is was decided on upload: an edit can't move it.
+            fields["ticket"].read_only = True
+            fields["message"].read_only = True
+        return fields
+
     def validate(self, attrs):
         message, ticket = attrs.get("message"), attrs.get("ticket")
         if (
@@ -223,6 +231,13 @@ class TicketMessageSerializer(serializers.ModelSerializer):
         if ticket is not None and any(file.ticket_id != ticket.pk for file in files):
             raise serializers.ValidationError(
                 {"attachment_ids": "These files belong to another ticket."}
+            )
+        request = self.context.get("request")
+        user_id = getattr(getattr(request, "user", None), "pk", None)
+        if any(user_id is None or file.uploaded_by_id != user_id for file in files):
+            # Not a customer's upload, nor a colleague's pending one.
+            raise serializers.ValidationError(
+                {"attachment_ids": "Only files you uploaded can be attached."}
             )
         return attrs
 

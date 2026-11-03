@@ -1726,6 +1726,7 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
                 linked = TicketAttachment.objects.filter(
                     pk__in=[file.pk for file in files],
                     ticket_id=message.ticket_id,
+                    uploaded_by=self.request.user,
                     message__isnull=True,
                 ).update(message=message)
                 if linked != len({file.pk for file in files}):

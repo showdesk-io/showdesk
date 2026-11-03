@@ -169,3 +169,43 @@ def test_the_requester_sees_the_files_in_the_widget_and_on_the_page(client, tick
     )
     (reply,) = res.data["messages"]
     assert [a["filename"] for a in reply["attachments"]] == ["report.pdf"]
+
+
+def test_an_upload_cannot_be_moved_to_another_ticket_or_message(client, ticket, agent):
+    attachment_id = _upload(client, ticket).data["id"]
+    other_ticket = TicketFactory(organization=agent.organization)
+    other_message = TicketMessageFactory(ticket=other_ticket)
+
+    res = client.patch(
+        f"/api/v1/attachments/{attachment_id}/",
+        {"message": str(other_message.pk), "ticket": str(other_ticket.pk)},
+        format="json",
+    )
+
+    assert res.status_code == 200
+    attachment = TicketAttachment.objects.get(pk=attachment_id)
+    assert (attachment.ticket_id, attachment.message_id) == (ticket.pk, None)
+
+
+def test_a_reply_only_takes_the_files_its_agent_uploaded(client, ticket, agent):
+    colleague = APIClient()
+    colleague.force_authenticate(
+        user=UserFactory(organization=agent.organization, role="agent")
+    )
+    theirs = _upload(colleague, ticket).data["id"]
+    widget = APIClient()
+    widget.credentials(HTTP_X_WIDGET_TOKEN=ticket.organization.api_token)
+    customers = widget.post(
+        "/api/v1/tickets/widget_upload_attachment/",
+        {
+            "ticket": str(ticket.pk),
+            "file": SimpleUploadedFile("c.pdf", b"%PDF", "application/pdf"),
+        },
+        format="multipart",
+    ).data["id"]
+
+    for attachment_id in (theirs, customers):
+        res = _reply(client, ticket, [attachment_id])
+        assert res.status_code == 400, attachment_id
+        assert "attachment_ids" in res.data
+    assert not TicketMessage.objects.filter(ticket=ticket).exists()
