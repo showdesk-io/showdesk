@@ -2,6 +2,7 @@
 
 import re
 
+from django.conf import settings
 from rest_framework import serializers
 
 from apps.core.permissions import is_org_admin
@@ -24,6 +25,9 @@ class OrganizationSerializer(serializers.ModelSerializer):
 
     agent_count = serializers.SerializerMethodField()
     enabled_features = serializers.SerializerMethodField()
+    # Instance settings, not the organization's: whether mail can reach a mailbox.
+    inbound_email_enabled = serializers.SerializerMethodField()
+    inbound_email_domain = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
@@ -48,6 +52,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "widget_first_seen_at",
             "plan",
             "enabled_features",
+            "inbound_email_enabled",
+            "inbound_email_domain",
             "created_at",
             "updated_at",
         ]
@@ -73,6 +79,12 @@ class OrganizationSerializer(serializers.ModelSerializer):
 
     def get_enabled_features(self, obj: Organization) -> list[str]:
         return sorted(obj.enabled_features())
+
+    def get_inbound_email_enabled(self, obj: Organization) -> bool:
+        return bool(settings.INBOUND_EMAIL_DOMAIN)
+
+    def get_inbound_email_domain(self, obj: Organization) -> str:
+        return settings.INBOUND_EMAIL_DOMAIN
 
     def to_representation(self, instance: Organization) -> dict:
         """Keep the widget secret to admins: it signs end-user identities."""

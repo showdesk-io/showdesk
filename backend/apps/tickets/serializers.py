@@ -170,13 +170,25 @@ class TicketMessageSerializer(serializers.ModelSerializer):
             "sender_type",
             "body_type",
             "sender_name",
+            "channel",
+            "external_sender",
+            "email_delivery_status",
             "attachments",
             "created_at",
             "updated_at",
         ]
         # Staff write as agents: what the requester says comes from the widget,
         # mail or the conversation page.
-        read_only_fields = ["id", "author", "sender_type", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "author",
+            "sender_type",
+            "channel",
+            "external_sender",
+            "email_delivery_status",
+            "created_at",
+            "updated_at",
+        ]
 
 
 # Who a ticket can be assigned to, as in the bulk_update action.
@@ -266,6 +278,7 @@ class TicketSerializer(serializers.ModelSerializer):
             "context_screen_resolution",
             "context_metadata",
             "sla_policy",
+            "mailbox",
             "first_response_at",
             "resolved_at",
             "closed_at",
@@ -278,6 +291,7 @@ class TicketSerializer(serializers.ModelSerializer):
             "id",
             "organization",
             "reference",
+            "mailbox",
             "first_response_at",
             "resolved_at",
             "closed_at",

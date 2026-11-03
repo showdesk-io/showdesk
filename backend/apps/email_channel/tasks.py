@@ -49,6 +49,27 @@ def _mark_failed(inbound_id: str) -> None:
         )
 
 
+def replay(inbound_id) -> bool:
+    """Queue a failed mail again. Returns whether it was.
+
+    It goes back to pending first, so that asking twice queues it once: the second
+    finds nothing failed to replay.
+    """
+    from apps.email_channel.models import InboundEmail
+
+    with transaction.atomic():
+        replayed = InboundEmail.objects.filter(
+            pk=inbound_id, status=InboundEmail.Status.FAILED
+        ).update(
+            status=InboundEmail.Status.PENDING,
+            reason="",
+            updated_at=timezone.now(),
+        )
+        if replayed:
+            transaction.on_commit(lambda: process_inbound_email.delay(str(inbound_id)))
+    return bool(replayed)
+
+
 @shared_task
 def requeue_stale_inbound() -> int:
     """Queue again the mails still pending long after they arrived.
