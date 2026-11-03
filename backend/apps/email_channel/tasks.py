@@ -13,7 +13,14 @@ logger = logging.getLogger(__name__)
 STALE_PENDING_AFTER = timedelta(minutes=10)
 
 
-@shared_task(bind=True, max_retries=5, default_retry_delay=60)
+@shared_task(
+    bind=True,
+    max_retries=5,
+    default_retry_delay=60,
+    # Under a row lock: a mail that takes longer is a mail to look at by hand.
+    soft_time_limit=120,
+    time_limit=150,
+)
 def process_inbound_email(self, inbound_id: str) -> None:
     """Run one stored mail through the pipeline. Safe to run again.
 

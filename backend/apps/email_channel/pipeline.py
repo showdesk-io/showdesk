@@ -122,7 +122,8 @@ def process(inbound_id: str) -> None:
     """
     with transaction.atomic():
         inbound = (
-            InboundEmail.objects.select_for_update(of=("self",))
+            # A row locked by another run is being processed already.
+            InboundEmail.objects.select_for_update(of=("self",), skip_locked=True)
             .select_related("mailbox__organization", "ticket__organization")
             .filter(pk=inbound_id, status__in=PROCESSABLE)
             .first()

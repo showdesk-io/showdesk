@@ -4,6 +4,7 @@ A message body is plain text, and is shown as text: HTML is reduced to its text,
 and no markup of a mail reaches a message.
 """
 
+import codecs
 import mimetypes
 import os
 import re
@@ -11,8 +12,6 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import PureWindowsPath
 from urllib.parse import urlsplit
-
-from email_reply_parser import EmailReplyParser
 
 from apps.email_channel.recipients import one_line
 from apps.tickets.models import BLOCKED_EXTENSIONS, TicketAttachment
@@ -36,11 +35,41 @@ def _clean_text(text: str) -> str:
 # Body
 
 
+def decoded_text(part) -> str:
+    """A text part's content as text, whatever charset it declares.
+
+    An unknown charset, such as ``x-bogus`` or ``unknown-8bit``, is read as UTF-8,
+    and what doesn't decode is replaced rather than failing the mail.
+    """
+    payload = part.get_payload(decode=True)
+    if not isinstance(payload, bytes):
+        return ""
+    charset = part.get_content_charset() or "utf-8"
+    try:
+        codecs.lookup(charset)
+    except LookupError:
+        charset = "utf-8"
+    try:
+        return payload.decode(charset, errors="replace")
+    except (LookupError, UnicodeError):  # A codec that refuses "replace".
+        return payload.decode("utf-8", errors="replace")
+
+
+def _body_parts(message, subtype: str) -> list[str]:
+    return [
+        decoded_text(part)
+        for part in _leaf_parts(message)
+        if part.get_content_type() == f"text/{subtype}" and not _is_file(part)
+    ]
+
+
 def extract_body(message) -> str:
-    """The mail's text: its text part, or else the text of its HTML part."""
-    text = message.text or ""
-    if not text.strip() and message.html:
-        text = html_to_text(message.html)
+    """The mail's text: its inline text parts in order, or else its HTML's text."""
+    texts = [_clean_text(text) for text in _body_parts(message, "plain")]
+    text = "\n\n".join(text for text in texts if text)
+    if not text:
+        texts = [html_to_text(html) for html in _body_parts(message, "html")]
+        text = "\n\n".join(text for text in texts if text)
     return _clean_text(text)
 
 
@@ -129,71 +158,114 @@ def html_to_text(html: str) -> str:
 
 
 # Quoted history
+#
+# Line by line, on lines cut to a bounded length, with patterns that can't
+# backtrack far: a mail's text is whatever its sender wants, of any size.
 
+_MAX_MATCHED_LINE = 300
 # "On Mon, 2 Nov 2026, Ann <ann@example.org> wrote:", "Le 2 nov. 2026, Ann a écrit :",
 # possibly quoted (Apple Mail on iOS).
-_QUOTE_HEADER = re.compile(r"^(?:>\s*)?(?:On\s.*\swrote|Le\s.*\sa\s+écrit)\s*:$")
-_ORIGINAL_MESSAGE = re.compile(
-    r"^-{2,}\s*(?:original message|message d'origine)\s*-{2,}$", re.IGNORECASE
+_ATTRIBUTION = re.compile(r"(?:>\s?)?(?:On\s[^\n]*\swrote|Le\s[^\n]*\sa\s+écrit)\s?:")
+_ATTRIBUTION_START = re.compile(r"(?:>\s?)?(?:On|Le)\s")
+# Outlook's header block, in English or French.
+_HEADER_LINE = re.compile(
+    r"\*?(from|de|sent|envoyé|date|to|à|cc|subject|objet)\*?\s?:\*?(?:\s|$)",
+    re.IGNORECASE,
 )
-# Outlook's header block: "From: …" then "Sent: …", in English or French.
-_OUTLOOK_FROM = re.compile(r"^\*?(?:From|De)\s?:", re.IGNORECASE)
-_OUTLOOK_SENT = re.compile(r"^\*?(?:Sent|Envoyé|Date)\s?:", re.IGNORECASE)
-_SEPARATOR = re.compile(r"^_{10,}$")
+_HEADER_GROUPS = (
+    frozenset({"from", "de"}),
+    frozenset({"sent", "envoyé", "date"}),
+    frozenset({"to", "à", "subject", "objet"}),
+)
+_ABOVE_HEADERS = re.compile(
+    r"_{10,}|-{2,}\s*(?:original message|message d'origine)\s*-{2,}", re.IGNORECASE
+)
 # Gmail, Thunderbird and Apple Mail mark a forward. Outlook writes a forward as it
 # writes a reply: only the subject tells them apart.
 _FORWARDED = re.compile(
-    r"^(?:-{2,}\s*(?:forwarded message|message transféré)\s*-{2,}"
-    r"|begin forwarded message:|début du message réexpédié\s*:)$",
+    r"(?:-{2,}\s*(?:forwarded message|message transféré)\s*-{2,}"
+    r"|begin forwarded message:|début du message réexpédié\s*:)",
     re.IGNORECASE,
 )
+
+
+def _matched(line: str) -> str:
+    return line.strip().replace("\xa0", " ")[:_MAX_MATCHED_LINE]
+
+
+def _is_attribution(line: str, following: str) -> bool:
+    if not _ATTRIBUTION_START.match(line):
+        return False
+    # Gmail wraps a long attribution over two lines.
+    return bool(
+        _ATTRIBUTION.fullmatch(line) or _ATTRIBUTION.fullmatch(f"{line} {following}")
+    )
+
+
+def _header_name(line: str) -> str | None:
+    match = _HEADER_LINE.match(line)
+    return match.group(1).lower() if match else None
+
+
+def _is_header_block(lines: list[str], index: int) -> bool:
+    """Outlook's block: three header lines or more, From first, then Sent, To."""
+    if _header_name(lines[index]) not in _HEADER_GROUPS[0]:
+        return False
+    names = set()
+    for line in lines[index : index + 8]:
+        name = _header_name(line)
+        if name is None:
+            break
+        names.add(name)
+    return len(names) >= 3 and all(names & group for group in _HEADER_GROUPS)
 
 
 def _history_start(lines: list[str]) -> int | None:
     """The index of the line where the quoted history starts, if any."""
     for index, line in enumerate(lines):
-        line = line.strip().replace("\xa0", " ")
-        if REPLY_MARKER in line or _ORIGINAL_MESSAGE.match(line):
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        if REPLY_MARKER in line or _is_attribution(line, following):
             return index
-        following = lines[index + 1].strip() if index + 1 < len(lines) else ""
-        # Gmail wraps a long header over two lines.
-        if _QUOTE_HEADER.match(line) or _QUOTE_HEADER.match(f"{line} {following}"):
-            return index
-        if _OUTLOOK_FROM.match(line) and any(
-            _OUTLOOK_SENT.match(next_line.strip().replace("\xa0", " "))
-            for next_line in lines[index + 1 : index + 4]
-        ):
+        if _is_header_block(lines, index):
+            # With the separator or "Original Message" line just above it.
             while index > 0 and (
-                not lines[index - 1].strip() or _SEPARATOR.match(lines[index - 1])
+                not lines[index - 1] or _ABOVE_HEADERS.fullmatch(lines[index - 1])
             ):
                 index -= 1
             return index
     return None
 
 
+def _without_trailing_quote(lines: list[str]) -> list[str]:
+    end = len(lines)
+    while end and (not lines[end - 1] or lines[end - 1].startswith(">")):
+        end -= 1
+    return lines[:end]
+
+
 def strip_history(text: str) -> str:
     """What a reply wrote, without the history it quotes.
 
-    Cut at our own marker, at a client's quote header or Outlook's header block,
-    then what ``email-reply-parser`` takes for quotes or a signature. Agents can
-    always open the original mail. A mail that is all history keeps its text.
+    Cut at our own marker, at a client's attribution line ("On … wrote:") or at
+    Outlook's header block, then drop a block of ``>`` lines at the end. Nothing
+    is taken for a signature. Agents can always open the original mail, and a mail
+    that is all history keeps its text.
 
     A forward is not history: what it forwards is the request.
     """
     text = _clean_text(text)
     lines = text.split("\n")
+    matched = [_matched(line) for line in lines]
     forwarded = next(
-        (index for index, line in enumerate(lines) if _FORWARDED.match(line.strip())),
+        (index for index, line in enumerate(matched) if _FORWARDED.fullmatch(line)),
         len(lines),
     )
-    start = _history_start(lines[:forwarded])
-    written = "\n".join(lines[: forwarded if start is None else start])
-    written = _clean_text(EmailReplyParser.parse_reply(written))
+    start = _history_start(matched[:forwarded])
+    end = forwarded if start is None else start
+    kept = _without_trailing_quote(lines[:end])
     if start is None and forwarded < len(lines):
-        written = "\n\n".join(
-            part for part in (written, "\n".join(lines[forwarded:])) if part
-        )
-    return written or text
+        kept += ["", *lines[forwarded:]]
+    return _clean_text("\n".join(kept)) or text
 
 
 # Attachments
@@ -224,13 +296,17 @@ def _leaf_parts(part):
 
 
 def _is_file(part) -> bool:
-    # Body text is no file; anything else is, with or without a disposition
-    # (images of multipart/related, for instance).
+    # Inline text without a name is body; anything else is a file, with or without
+    # a disposition (images of multipart/related, for instance).
     return (
         part.is_attachment()
         or part.get_content_maintype() != "text"
         or bool(part.get_filename())
     )
+
+
+def _is_body(part) -> bool:
+    return not _is_file(part) and part.get_content_subtype() in ("plain", "html")
 
 
 def safe_filename(name: str | None, content_type: str) -> str:
@@ -263,7 +339,11 @@ def extract_attachments(message, max_bytes: int) -> tuple[list[Attachment], list
     dropped: list[str] = []
     total = 0
     for part in _leaf_parts(message):
+        if _is_body(part):
+            continue
         if not _is_file(part):
+            # Inline text that is neither text nor HTML, such as an invitation.
+            dropped.append(f"an unnamed {part.get_content_type()} part")
             continue
         content_type = part.get_content_type()[:_CONTENT_TYPE_MAX_LENGTH]
         filename = safe_filename(part.get_filename(), content_type)

@@ -16,6 +16,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.core.email import send_branded_email
+from apps.email_channel.content import decoded_text, extract_body
 from apps.email_channel.models import InboundEmail, Mailbox
 from apps.email_channel.recipients import Recipient, one_line
 from apps.organizations.models import User
@@ -111,7 +112,7 @@ def _confirmation_url(text: str) -> str:
 
 
 def _record_forwarding_confirmation(message, mailbox: Mailbox) -> None:
-    text = message.text or ""
+    text = extract_body(message)
     match = _CODE_IN_SUBJECT.search(_header(message, "Subject")) or (
         _CODE_IN_BODY.search(text)
     )
@@ -185,7 +186,7 @@ def _bounced_message_ids(message) -> list[str]:
             payload = part.get_payload()
             headers = payload[0] if payload else None
         elif content_type == "text/rfc822-headers":
-            headers = HeaderParser().parsestr(part.get_content_text() or "")
+            headers = HeaderParser().parsestr(decoded_text(part))
         else:
             continue
         message_id = one_line(headers.get("Message-ID")) if headers else ""

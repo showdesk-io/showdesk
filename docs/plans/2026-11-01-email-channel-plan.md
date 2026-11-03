@@ -6,7 +6,7 @@
 
 **Architecture:** A new `apps.email_channel` app holds mailboxes, the stored inbound emails and a pipeline run by Celery: recipient, filters, threading, content, write. Outbound stays on the existing SMTP through `send_branded_email`, with stored Message-IDs and a tokenised `Reply-To`. Identity goes through `apps.contacts.services`, the only place that writes a contact's email.
 
-**Tech Stack:** Django 6.1, DRF, Celery, Channels, django-anymail (Postal), `email-reply-parser`, React 19, the vanilla TS widget.
+**Tech Stack:** Django 6.1, DRF, Celery, Channels, django-anymail (Postal), React 19, the vanilla TS widget.
 
 **Authoritative documents:** `docs/plans/2026-10-29-email-channel-design.md` (§ numbers below refer to it unless stated), `docs/plans/2026-10-29-contacts-design.md` §3 and §8.
 
@@ -225,7 +225,7 @@ email_delivery_status = models.CharField(max_length=10, choices=DeliveryStatus.c
 ### Task 2: Settings, dependencies and the webhook route
 
 **Files:**
-- Modify: `backend/requirements.txt` (`django-anymail[mailjet,postal]`, `email-reply-parser`), `backend/config/settings/base.py`, `backend/config/urls.py`, `.env.example`, `docker-compose.prod.yml` (variables and `handle /anymail/*`), `docker/Caddyfile`
+- Modify: `backend/requirements.txt` (`django-anymail[mailjet,postal]`), `backend/config/settings/base.py`, `backend/config/urls.py`, `.env.example`, `docker-compose.prod.yml` (variables and `handle /anymail/*`), `docker/Caddyfile`
 - Create: `backend/apps/email_channel/webhooks.py`
 - Test: `backend/tests/email_channel/test_webhook_route.py`
 
@@ -343,7 +343,7 @@ Commit: `feat(backend): filter automatic and unwanted inbound mail`
 
 ```python
 def extract_body(message) -> str: ...  # text part, else sanitized HTML as text
-def strip_history(text: str) -> str: ...  # our marker first, then email-reply-parser and FR/Outlook patterns
+def strip_history(text: str) -> str: ...  # our marker, attribution lines, Outlook blocks, trailing > lines: linear, no library
 def extract_attachments(message, max_bytes: int) -> tuple[list[Attachment], list[str]]: ...
 ```
 

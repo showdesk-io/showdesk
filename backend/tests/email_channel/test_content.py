@@ -1,5 +1,6 @@
 """What of an inbound mail becomes a message: its text and its files (design §4.4)."""
 
+import time
 from email.message import EmailMessage
 
 import pytest
@@ -10,6 +11,9 @@ from apps.email_channel.content import (
     extract_attachments,
     extract_body,
     strip_history,
+)
+from apps.email_channel.content import (
+    _clean_text as _clean,
 )
 from tests.email_channel.mails import build, fixture_bytes, parse
 
@@ -115,3 +119,71 @@ def test_files_past_the_fiftieth_are_dropped_and_named():
         "50.txt (over the limit of 50 files)",
         "51.txt (over the limit of 50 files)",
     ]
+
+
+def test_stripping_takes_linear_time_on_hostile_text():
+    lines = ["On", "Online", "One wrote", "On Monday", "Le", "> On"] * 6000
+    text = "Hello\n" + "\n".join(lines)
+    assert len(text) > 200_000
+
+    started = time.monotonic()
+    strip_history(text)
+
+    assert time.monotonic() - started < 2
+
+
+def test_dashes_separators_and_lone_header_words_are_no_history():
+    text = (
+        "Steps:\n\n"
+        "-open the app\n"
+        "-click Print\n\n"
+        "Run it with:\n"
+        "--verbose\n\n"
+        "------------\n\n"
+        "From: Paris\n"
+        "Date: 12 Nov\n\n"
+        "-- \n"
+        "Ann"
+    )
+
+    assert strip_history(text) == _clean(text)
+
+
+def test_a_trailing_quote_block_is_dropped_but_an_inline_one_kept():
+    text = "> Which printer?\nThe P-100.\n\n> Since when?\n> And where?"
+
+    assert strip_history(text) == "> Which printer?\nThe P-100."
+
+
+def test_every_inline_text_part_is_body_and_files_are_not():
+    raw = (
+        b"From: ann@example.org\r\n"
+        b"Subject: Parts\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b'Content-Type: multipart/mixed; boundary="b"\r\n\r\n'
+        b"--b\r\nContent-Type: text/plain\r\n\r\nFirst part.\r\n"
+        b"--b\r\nContent-Type: text/calendar; method=REQUEST\r\n\r\nBEGIN:VCALENDAR\r\n"
+        b"--b\r\nContent-Type: text/plain\r\n"
+        b'Content-Disposition: attachment; filename="log.txt"\r\n\r\nA log.\r\n'
+        b"--b\r\nContent-Type: text/plain\r\n\r\nSecond part.\r\n"
+        b"--b--\r\n"
+    )
+    message = parse(raw)
+
+    assert extract_body(message) == "First part.\n\nSecond part."
+    attachments, dropped = extract_attachments(message, 1024)
+    assert [a.filename for a in attachments] == ["log.txt"]
+    assert dropped == ["an unnamed text/calendar part"]
+
+
+def test_an_unknown_charset_is_read_as_utf8():
+    raw = (
+        b"From: ann@example.org\r\n"
+        b"Subject: Charset\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: text/plain; charset=x-bogus\r\n"
+        b"Content-Transfer-Encoding: 8bit\r\n\r\n"
+        b"Caf\xc3\xa9 and \xff.\r\n"
+    )
+
+    assert extract_body(parse(raw)) == "Café and �."

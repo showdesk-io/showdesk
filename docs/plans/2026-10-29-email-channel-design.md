@@ -170,11 +170,15 @@ whose `context_metadata` references the previous one.
 
 ### 4.4 Content
 
-- Prefer `text/plain`; otherwise convert sanitized HTML to text.
-- Strip quoted history: first at our own marker
-  (`-- Reply above this line --`), then heuristically (`On … wrote:`,
-  `Le … a écrit :`, `>` blocks, Outlook separators) using
-  `email-reply-parser`. Agents can always open the original email.
+- Every inline `text/plain` part, in order; otherwise convert the HTML to text.
+  A part declaring an unknown charset is read as UTF-8, with replacement.
+- Strip quoted history, line by line on bounded lines, in linear time (a
+  regex library such as `email-reply-parser` is cubic on hostile text): at our
+  own marker (`-- Reply above this line --`), at an `On … wrote:` /
+  `Le … a écrit :` attribution (also wrapped over two lines), at an Outlook
+  header block (three header lines or more, with From/De, Sent/Envoyé/Date and
+  To/À or Subject/Objet), then a trailing block of `>` lines. Nothing is taken
+  for a signature. Agents can always open the original email.
 - Attachments → `TicketAttachment` with the same extension blocklist as widget
   uploads; total size capped by `INBOUND_EMAIL_MAX_SIZE_MB` (default 25), and at
   most 50 files; blocked, oversize and extra parts are dropped and named in a note
