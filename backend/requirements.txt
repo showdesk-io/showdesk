@@ -38,7 +38,8 @@ uvicorn-worker>=0.4,<1.0
 livekit-api>=1.2,<2.0
 
 # Email
-django-anymail[mailjet]>=15.2,<16.0
+django-anymail[mailjet,postal]>=15.2,<16.0
+email-reply-parser>=0.5,<1.0
 
 # DNS (TXT-record domain verification)
 dnspython>=2.9,<3.0

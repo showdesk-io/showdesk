@@ -25,6 +25,11 @@
 		reverse_proxy backend:8000
 	}
 
+	# Inbound mail webhooks (email channel)
+	handle /anymail/* {
+		reverse_proxy backend:8000
+	}
+
 	# -----------------------------------------------------------------------
 	# WebSocket → Django Channels (Daphne)
 	# -----------------------------------------------------------------------

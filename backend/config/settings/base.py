@@ -335,10 +335,15 @@ del email_backend, email_options
 
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@showdesk.io")
 
-# Anymail settings (when using anymail.backends.mailjet.EmailBackend)
+# Anymail settings: the Mailjet sending backend, and inbound mail webhooks.
 ANYMAIL = {
     "MAILJET_API_KEY": config("MAILJET_API_KEY", default=""),
     "MAILJET_SECRET_KEY": config("MAILJET_SECRET_KEY", default=""),
+    # Postal's public key: /anymail/postal/inbound/ only exists with it.
+    "POSTAL_WEBHOOK_KEY": config("ANYMAIL_POSTAL_WEBHOOK_KEY", default=""),
+    # "user:password" (several, comma-separated, while rotating). The other
+    # providers' webhooks only exist with it, since basic auth is their only check.
+    "WEBHOOK_SECRET": config("ANYMAIL_WEBHOOK_SECRET", default="", cast=Csv()),
 }
 
 # =============================================================================
@@ -346,6 +351,27 @@ ANYMAIL = {
 # =============================================================================
 # Domain receiving the mail forwarded to mailboxes and the replies to tickets.
 INBOUND_EMAIL_DOMAIN = config("INBOUND_EMAIL_DOMAIN", default="").strip().lower()
+# A resolved or closed ticket reopens on a reply within this many days of its last
+# activity. Later, the reply opens a new ticket.
+INBOUND_EMAIL_REOPEN_DAYS = config("INBOUND_EMAIL_REOPEN_DAYS", default=7, cast=int)
+# Total size of the attachments kept from one mail; larger mail is refused.
+INBOUND_EMAIL_MAX_SIZE_MB = config("INBOUND_EMAIL_MAX_SIZE_MB", default=25, cast=int)
+# Mails from one sender to one mailbox, per hour, beyond which they are ignored.
+INBOUND_EMAIL_RATE_LIMIT_PER_HOUR = config(
+    "INBOUND_EMAIL_RATE_LIMIT_PER_HOUR", default=20, cast=int
+)
+# How long received raw mails (.eml) are kept.
+INBOUND_EMAIL_RAW_RETENTION_DAYS = config(
+    "INBOUND_EMAIL_RAW_RETENTION_DAYS", default=30, cast=int
+)
+# A reply left unread in the widget this long is also sent by email.
+WIDGET_UNREAD_EMAIL_DELAY_MINUTES = config(
+    "WIDGET_UNREAD_EMAIL_DELAY_MINUTES", default=5, cast=int
+)
+# Lifetime of the conversation links sent by email.
+CONVERSATION_LINK_MAX_AGE_DAYS = config(
+    "CONVERSATION_LINK_MAX_AGE_DAYS", default=30, cast=int
+)
 
 # Frontend URL for links in emails
 SITE_URL = config("SITE_URL", default="http://localhost")
