@@ -38,12 +38,29 @@ export interface Conversation {
 /** A refused request: 404 (no such conversation), 410 (expired link), 400, 429… */
 export class ConversationError extends Error {
   readonly status: number;
+  /** On a 410: whether a new link can still be asked for. */
+  readonly renewable: boolean;
 
-  constructor(status: number) {
+  constructor(status: number, renewable = false) {
     super(`Conversation request failed with status ${status}`);
     this.name = "ConversationError";
     this.status = status;
+    this.renewable = renewable;
   }
+}
+
+async function refusal(response: Response): Promise<ConversationError> {
+  let renewable = false;
+  try {
+    const data: unknown = await response.json();
+    renewable =
+      typeof data === "object" &&
+      data !== null &&
+      (data as { renewable?: unknown }).renewable === true;
+  } catch {
+    // No JSON body: nothing more to tell.
+  }
+  return new ConversationError(response.status, renewable);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -53,7 +70,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers: { Accept: "application/json", ...init.headers },
   });
   if (!response.ok) {
-    throw new ConversationError(response.status);
+    throw await refusal(response);
   }
   const text = await response.text();
   return (text ? JSON.parse(text) : undefined) as T;

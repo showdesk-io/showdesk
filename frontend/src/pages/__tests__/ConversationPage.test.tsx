@@ -161,11 +161,55 @@ describe("ConversationPage", () => {
     expect(await screen.findByText("This link has expired")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Send me a new link" }));
 
-    expect(await screen.findByText(/on its way/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "If this address can receive our emails, a new link is on its way.",
+      ),
+    ).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/conversations/renew/",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ token: TOKEN }) }),
     );
+  });
+
+  it("sends to support a link too old for a new one", async () => {
+    serve(() => ({ status: 410, body: { renewable: false } }));
+    renderPage();
+
+    expect(await screen.findByText("This link has expired")).toBeInTheDocument();
+    expect(screen.getByText(/contact support/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /new link/i })).toBeNull();
+  });
+
+  it("stops polling on a link that opens nothing or expired, not on a rate limit", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    for (const [status, body] of [
+      [404, { error: "Conversation not found." }],
+      [410, { renewable: true }],
+    ] as const) {
+      serve(() => ({ status, body }));
+      const { unmount } = renderPage();
+      await waitFor(() => expect(pageReads()).toBe(1));
+      await act(() => vi.advanceTimersByTimeAsync(60_000));
+      expect(pageReads()).toBe(1);
+      unmount();
+    }
+
+    serve(() => ({ status: 429, body: {} }));
+    renderPage();
+    await waitFor(() => expect(pageReads()).toBe(1));
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    await waitFor(() => expect(pageReads()).toBe(2));
+  });
+
+  it("says to write by email once the conversation can't take replies", async () => {
+    serve(() => ({ status: 200, body: { ...CONVERSATION, can_reply: false } }));
+    renderPage();
+
+    expect(
+      await screen.findByText(/reply by email to open a new request/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(/your reply/i)).toBeNull();
   });
 
   it("says no more than not found for a link that opens nothing", async () => {

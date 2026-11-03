@@ -21,8 +21,13 @@ function conversationKey(token: string) {
 /** An answer about the link itself, which asking again won't change. */
 function isFinal(error: unknown): boolean {
   return (
-    error instanceof ConversationError && error.status >= 400 && error.status < 500
+    error instanceof ConversationError && (error.status === 404 || error.status === 410)
   );
+}
+
+/** Worth asking again at once: a network or server error, not a refusal. */
+function isTransient(error: unknown): boolean {
+  return !(error instanceof ConversationError) || error.status >= 500;
 }
 
 export function useConversation(token: string) {
@@ -30,7 +35,8 @@ export function useConversation(token: string) {
     queryKey: conversationKey(token),
     queryFn: () => fetchConversation(token),
     enabled: !!token,
-    retry: (failures, error) => !isFinal(error) && failures < 2,
+    // A rate limit waits for the next poll.
+    retry: (failures, error) => isTransient(error) && failures < 2,
     refetchInterval: (query) =>
       isFinal(query.state.error) ? false : CONVERSATION_POLL_MS,
     // React Query pauses the interval while `document.visibilityState` is hidden.

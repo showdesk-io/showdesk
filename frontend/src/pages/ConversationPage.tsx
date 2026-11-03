@@ -45,7 +45,7 @@ function sendErrorMessage(error: unknown): string {
     case 400:
       return "This can't be sent. Files are limited to 20 MB, and some types aren't accepted.";
     case 409:
-      return "This conversation is closed.";
+      return "This conversation is closed. Reply by email to open a new request.";
     case 410:
       return "This link has expired. Reload the page to ask for a new one.";
     case 429:
@@ -76,13 +76,23 @@ function Notice({ title, children }: { title: string; children?: ReactNode }) {
   );
 }
 
-function ExpiredLink({ token }: { token: string }) {
+function ExpiredLink({ token, renewable }: { token: string; renewable: boolean }) {
   const renew = useRenewConversationLink(token);
+  if (!renewable) {
+    return (
+      <Notice title="This link has expired">
+        <p className="mt-3 text-sm text-gray-600">
+          It's too old for a new one. To follow up on this conversation, please contact
+          support.
+        </p>
+      </Notice>
+    );
+  }
   return (
     <Notice title="This link has expired">
       {renew.isSuccess ? (
         <p className="mt-3 text-sm text-gray-600">
-          If this conversation is yours, a new link is on its way to your inbox.
+          If this address can receive our emails, a new link is on its way.
         </p>
       ) : (
         <>
@@ -232,7 +242,7 @@ function Thread({ token, conversation }: { token: string; conversation: Conversa
         <ReplyBox token={token} color={color} />
       ) : (
         <p className="mt-6 text-center text-sm text-gray-500">
-          This conversation is closed.
+          This conversation is closed. Reply by email to open a new request.
         </p>
       )}
     </>
@@ -246,7 +256,9 @@ export function ConversationPage() {
 
   let content;
   if (status === 410) {
-    content = <ExpiredLink token={token} />;
+    const renewable =
+      conversation.error instanceof ConversationError && conversation.error.renewable;
+    content = <ExpiredLink token={token} renewable={renewable} />;
   } else if (status === 404) {
     content = (
       <Notice title="Conversation not found">
