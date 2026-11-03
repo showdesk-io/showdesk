@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 REMOVED_TITLE = "[Removed at the contact's request]"
 REMOVED_BODY = "[Content removed at the contact's request]"
 KEPT_CONTEXT_KEYS = {"browser", "os", "language", "timezone", "screen_resolution"}
+# The ticket an inbound mail would have continued: kept, as long as it's an id.
+PREVIOUS_TICKET_KEY = "previous_ticket"
 MAX_KEPT_CONTEXT_LENGTH = 100
 # What mail servers commonly accept, counted as sent: base64 adds a third.
 MAX_EXPORT_ENCODED_BYTES = 20 * 1024 * 1024
@@ -102,6 +104,16 @@ def _delete_uploads(ticket_ids) -> None:
     VideoRecording.objects.filter(pk__in=[row.pk for row in videos]).delete()
 
 
+def _is_uuid(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _kept_metadata(metadata) -> dict:
     """Keep the whitelist, which also takes the ``pre_login_*`` trace of a login.
 
@@ -111,10 +123,13 @@ def _kept_metadata(metadata) -> dict:
     return {
         key: value
         for key, value in (metadata if isinstance(metadata, dict) else {}).items()
-        if key in KEPT_CONTEXT_KEYS
-        and isinstance(value, str)
-        and len(value) <= MAX_KEPT_CONTEXT_LENGTH
-        and "@" not in value
+        if (key == PREVIOUS_TICKET_KEY and _is_uuid(value))
+        or (
+            key in KEPT_CONTEXT_KEYS
+            and isinstance(value, str)
+            and len(value) <= MAX_KEPT_CONTEXT_LENGTH
+            and "@" not in value
+        )
     }
 
 
