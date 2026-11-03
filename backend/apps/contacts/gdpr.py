@@ -493,8 +493,10 @@ def build_contact_export(contact: Contact) -> bytes:
             ),
             Prefetch(
                 "attachments",
-                # An agent's upload has no message, even for an internal note: only
-                # the contact's own say nothing internal.
+                # A file on a reply is the contact's to read, one on an internal
+                # note isn't. A file on no message is in only if the contact
+                # uploaded it: an agent's is waiting for its reply, or older than
+                # replies taking their files, and may be meant for a note.
                 TicketAttachment.objects.filter(
                     Q(message__isnull=True) & _by_the_contact("uploaded_by")
                     | Q(message__message_type=public)

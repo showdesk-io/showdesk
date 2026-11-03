@@ -177,6 +177,12 @@ If the matched ticket is resolved/closed: reopen it when the last activity is
 within `INBOUND_EMAIL_REOPEN_DAYS` (default 7); otherwise create a new ticket
 whose `context_metadata` references the previous one.
 
+The same window applies to the requester's other writes, on every ticket and also
+on an instance that receives no mail: a message or file from the widget or the
+conversation page reopens a ticket within it, and past it is refused (409, the
+widget and the page then offer a new conversation, and show it closed up front
+from `can_reply`).
+
 ### 4.4 Content
 
 - Every inline `text/plain` part, in order; otherwise convert the HTML to text.
@@ -252,7 +258,8 @@ template:
 - Subject `Re: [SD-123] {title}`.
 - Body: reply marker, the new (unread) replies, the last three messages as
   context, a "View conversation" button (signed link, §6).
-- The replies' files go as real attachments, up to 10 MB in all; the others are
+- The replies' files go as real attachments, up to `REPLY_EMAIL_ATTACHMENTS_MAX_MB`
+  (10) in all as sent; the others are
   only named, with a pointer to the conversation link when there is one. A mail
   never carries a storage URL. The agent's app uploads the files to the ticket
   first, then posts the reply naming them (`attachment_ids`): they're linked
@@ -429,7 +436,8 @@ All new variables are documented in `.env.example` with safe defaults.
 |---|---|---|---|
 | `INBOUND_EMAIL_DOMAIN` | empty (channel disabled) | 2 | Domain receiving inbound mail and reply tokens. |
 | `ANYMAIL_POSTAL_WEBHOOK_KEY` | empty | 2 | Postal public key (signature check). Other providers use their Anymail setting. |
-| `INBOUND_EMAIL_REOPEN_DAYS` | 7 | 2 | Reopen window for resolved/closed tickets. |
+| `INBOUND_EMAIL_REOPEN_DAYS` | 7 | 2 | Reopen window for resolved/closed tickets, for mail and for widget and conversation page writes alike (§4.3). |
+| `REPLY_EMAIL_ATTACHMENTS_MAX_MB` | 10 | 2 | Files a reply mail attaches in all, counted as sent (base64); the others are named (§5.1). |
 | `INBOUND_EMAIL_MAX_SIZE_MB` | 25 | 2 | Attachment size cap. |
 | `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` | 20 | 2 | Per sender and mailbox; also bounds the rejected rows kept per sender (§4.1). |
 | `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` | 200 | 2 | Per mailbox, all senders; also bounds the rejected rows kept overall (§4.1). |
@@ -553,6 +561,10 @@ What agents and admins have:
 - `manage.py seed` adds a "Support" mailbox to the demo organization when
   `INBOUND_EMAIL_DOMAIN` is set.
 
+Writes from the widget follow the reopen window of §4.3, on every ticket, as the
+conversation page's do: `widget_conversation` returns `can_reply`, and a write past
+the window is a 409.
+
 Without `INBOUND_EMAIL_DOMAIN` (an instance that receives no mail):
 
 - The widget never offers the email code (`email_proof_offered` is false), and the
@@ -560,3 +572,4 @@ Without `INBOUND_EMAIL_DOMAIN` (an instance that receives no mail):
   email.
 - The conversation link, its page and its API stay available: reply mails still
   carry the link, a useful way back to the conversation on its own.
+- The reopen window still applies to widget and conversation page writes.
