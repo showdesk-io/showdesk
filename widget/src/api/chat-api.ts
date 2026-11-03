@@ -140,7 +140,7 @@ export async function sendMessage(
     body: JSON.stringify(payload),
   });
 
-  if (!res.ok) throw new Error(`Send message error: ${res.status}`);
+  if (!res.ok) throw new ApiError(`Send message error: ${res.status}`, res.status);
   const data = await res.json();
   return {
     ticketId: data.ticket_id,
@@ -184,7 +184,7 @@ export async function sendAttachmentMessage(
     },
   );
 
-  if (!res.ok) throw new Error(`Upload error: ${res.status}`);
+  if (!res.ok) throw new ApiError(`Upload error: ${res.status}`, res.status);
   const data = await res.json();
   return {
     ticketId: data.ticket_id,
@@ -203,6 +203,8 @@ export async function fetchConversation(
   ticketId: string;
   reference: string;
   status: string;
+  /** Seen through the contact's history, but not this session's to write on. */
+  readOnly: boolean;
   messages: ChatMessage[];
 }> {
   const res = await fetch(
@@ -216,6 +218,7 @@ export async function fetchConversation(
     ticketId: data.ticket_id,
     reference: data.reference,
     status: data.status,
+    readOnly: data.read_only === true,
     messages: (data.messages || []).map(mapMessage),
   };
 }

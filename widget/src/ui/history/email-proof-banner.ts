@@ -36,6 +36,25 @@ export function renderEmailProofBanner(
   const banner = element("div", "sd-email-proof");
   const sessionId = store.state.session?.sessionId;
   let timer: ReturnType<typeof setInterval> | null = null;
+  // What the banner shows: a code asked for, and for which email.
+  let shownSentAt = store.state.emailCodeSentAt;
+  let shownEmail = store.state.session?.email;
+
+  // A new email, or a code dropped elsewhere (another session, the contact form):
+  // what's on screen is about something else now.
+  const unsubscribe = store.subscribe(() => {
+    const session = store.state.session;
+    const gone = !banner.isConnected;
+    if (gone || !session || session.sessionId !== sessionId || !session.emailProofOffered) {
+      // Taken off with its view, or nothing to offer this session any more.
+      unsubscribe();
+      if (timer) clearInterval(timer);
+      timer = null;
+      banner.remove();
+      return;
+    }
+    if (store.state.emailCodeSentAt !== shownSentAt || session.email !== shownEmail) render();
+  });
 
   const stillHere = () => banner.isConnected && store.state.session?.sessionId === sessionId;
 
@@ -47,6 +66,8 @@ export function renderEmailProofBanner(
   function render(): void {
     if (timer) clearInterval(timer);
     timer = null;
+    shownSentAt = store.state.emailCodeSentAt;
+    shownEmail = store.state.session?.email;
     banner.replaceChildren();
     if (store.state.emailCodeSentAt === null) renderOffer();
     else renderCodeForm();
@@ -84,7 +105,7 @@ export function renderEmailProofBanner(
     const verify = element("button", "sd-btn-small sd-btn-primary", "Verify");
     form.append(input, verify);
 
-    const resend = element("button", "sd-btn-small sd-btn-link");
+    const resend = element("button", "sd-btn-small sd-btn-link sd-email-proof-resend");
     const error = element("div", "sd-email-proof-error");
     error.hidden = true;
 
@@ -122,8 +143,8 @@ export function renderEmailProofBanner(
     try {
       await requestEmailCode(config, sessionId);
       if (!stillHere()) return;
+      // Shown by the subscription.
       store.update({ emailCodeSentAt: Date.now() });
-      render();
     } catch {
       if (!stillHere()) return;
       button.disabled = false;
@@ -150,9 +171,18 @@ export function renderEmailProofBanner(
     button.disabled = false;
     if (!proven) {
       showError(error, WRONG_CODE);
+      // A refused code may be spent: a new one can be asked for at once.
+      if (timer) clearInterval(timer);
+      timer = null;
+      const resend = banner.querySelector<HTMLButtonElement>(".sd-email-proof-resend");
+      if (resend) {
+        resend.disabled = false;
+        resend.textContent = "Get a new code";
+      }
       return;
     }
     if (timer) clearInterval(timer);
+    unsubscribe();
     store.update({
       session: { ...session, emailProofOffered: false },
       emailCodeSentAt: null,

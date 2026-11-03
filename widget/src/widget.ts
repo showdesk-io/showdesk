@@ -215,6 +215,10 @@ function setUser(
   const isEmpty = !id && !user?.name && !user?.email;
   const previous = config.user;
   const session = getStore().state.session;
+  // A code asked for the previous email isn't one to enter for the next.
+  if ((user?.email ?? "").trim().toLowerCase() !== (previous?.email ?? "").trim().toLowerCase()) {
+    getStore().update({ emailCodeSentAt: null });
+  }
   // Whom the session belongs to, or will: the hash covers one still being created.
   const owner = previous?.hash ? String(previous.id ?? "") : session?.externalUserId;
   if (user && !hasIdentity && id && id === owner) {

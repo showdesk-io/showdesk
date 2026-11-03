@@ -19,6 +19,8 @@ export interface WidgetState {
   /** Current active conversation ticket ID. */
   activeTicketId: string | null;
   activeTicketReference: string | null;
+  /** The active conversation is only seen through the history: no writing there. */
+  activeTicketReadOnly: boolean;
   messages: ChatMessage[];
 
   /** History tab data. */
@@ -53,6 +55,7 @@ export function createWidgetStore(): WidgetStore {
     session: null,
     activeTicketId: null,
     activeTicketReference: null,
+    activeTicketReadOnly: false,
     messages: [],
     conversations: [],
     isConnected: false,

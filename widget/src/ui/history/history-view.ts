@@ -34,6 +34,7 @@ export function renderHistoryView(
       activeTab: "chat",
       activeTicketId: null,
       activeTicketReference: null,
+      activeTicketReadOnly: false,
       messages: [],
     });
   };
@@ -161,6 +162,7 @@ async function openConversation(
       activeTab: "chat",
       activeTicketId: data.ticketId,
       activeTicketReference: data.reference,
+      activeTicketReadOnly: data.readOnly,
       messages: data.messages,
       isLoading: false,
       conversations: store.state.conversations.map((c) =>

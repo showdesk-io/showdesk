@@ -6,6 +6,7 @@
  */
 
 import {
+  ApiError,
   sendMessage,
   sendAttachmentMessage,
   deleteMessage,
@@ -68,6 +69,8 @@ export function renderChatView(
           email === session.email ? session.emailProofOffered : Boolean(email.trim());
         store.update({
           session: { ...session, name, email, emailProofOffered },
+          // A code asked for the previous email isn't one to enter now.
+          ...(email === session.email ? {} : { emailCodeSentAt: null }),
         });
       }
     });
@@ -89,11 +92,55 @@ export function renderChatView(
   });
   container.appendChild(input);
 
+  // A conversation seen through the history only: read, not written.
+  const readOnly = renderReadOnlyNotice(store);
+  container.appendChild(readOnly);
+  const showReadOnly = () => {
+    const isReadOnly = store.state.activeTicketReadOnly && Boolean(store.state.activeTicketId);
+    readOnly.style.display = isReadOnly ? "" : "none";
+    input.style.display = isReadOnly ? "none" : "";
+  };
+  showReadOnly();
+
   // Subscribe to state changes
   store.subscribe(() => {
     renderMessages(store, config);
+    showReadOnly();
     scrollToBottom();
   });
+}
+
+function renderReadOnlyNotice(store: WidgetStore): HTMLElement {
+  const notice = document.createElement("div");
+  notice.className = "sd-read-only";
+  const text = document.createElement("div");
+  text.className = "sd-read-only-text";
+  text.textContent = "This conversation can only be read here.";
+  const start = document.createElement("button");
+  start.className = "sd-btn-small sd-btn-primary";
+  start.textContent = "Start a new conversation";
+  start.onclick = () => {
+    store.update({
+      activeTicketId: null,
+      activeTicketReference: null,
+      activeTicketReadOnly: false,
+      messages: [],
+    });
+  };
+  notice.append(text, start);
+  return notice;
+}
+
+/** A refusal to write on the active conversation: show it read-only from now on. */
+function readOnlyIfRefused(err: unknown, store: WidgetStore, ticketId: string | null): void {
+  if (
+    err instanceof ApiError &&
+    err.status === 403 &&
+    ticketId &&
+    store.state.activeTicketId === ticketId
+  ) {
+    store.update({ activeTicketReadOnly: true });
+  }
 }
 
 function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
@@ -336,6 +383,8 @@ async function postText(
   store.update({
     messages: [...store.state.messages, optimisticMsg],
   });
+  // Where it's going, should writing there be refused.
+  const ticketId = store.state.activeTicketId;
 
   try {
     // Gather context on first message
@@ -379,12 +428,13 @@ async function postText(
       activeTicketId: result.ticketId,
       activeTicketReference: result.reference,
     });
-  } catch {
+  } catch (err) {
     // Mark as failed
     const updated = store.state.messages.map((m) =>
       m.id === tempId ? { ...m, _status: "failed" as const } : m,
     );
     store.update({ messages: updated });
+    readOnlyIfRefused(err, store, ticketId);
   }
 }
 
@@ -421,6 +471,8 @@ async function handleSendAttachment(
   store.update({
     messages: [...store.state.messages, optimisticMsg],
   });
+  // Where it's going, should writing there be refused.
+  const ticketId = store.state.activeTicketId;
 
   try {
     const result = await sendAttachmentMessage(
@@ -444,11 +496,12 @@ async function handleSendAttachment(
       activeTicketId: result.ticketId,
       activeTicketReference: result.reference,
     });
-  } catch {
+  } catch (err) {
     const updated = store.state.messages.map((m) =>
       m.id === tempId ? { ...m, _status: "failed" as const } : m,
     );
     store.update({ messages: updated });
+    readOnlyIfRefused(err, store, ticketId);
   }
 }
 
@@ -850,6 +903,7 @@ async function loadPopupUploadedMessage(
     store.update({
       activeTicketId: conv.ticketId,
       activeTicketReference: conv.reference,
+      activeTicketReadOnly: conv.readOnly,
       messages: conv.messages,
     });
   } catch (err) {

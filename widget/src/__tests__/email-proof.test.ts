@@ -189,3 +189,98 @@ describe("an email-born conversation", () => {
     expect(panelText()).toContain("We refunded it");
   });
 });
+
+describe("after a failed code", () => {
+  it("lets a new code be asked for at once", async () => {
+    const b = await bootOffered(() => ({ status: 200, data: { verified: false } }));
+    await askAndEnter("123456");
+
+    expect(banner()?.textContent).toContain(WRONG);
+    expect(button("Get a new code")?.disabled).toBe(false);
+    button("Get a new code")?.click();
+    await tick();
+    expect(codeCalls(b)).toHaveLength(2);
+  });
+});
+
+describe("a changed email", () => {
+  it("drops the code asked for the previous one", async () => {
+    const b = await bootOffered();
+    button("Get a code")?.click();
+    await tick();
+    expect(codeInput()).not.toBeNull();
+
+    b.widget.setUser({ email: "b@x.io" });
+    await tick();
+
+    expect(banner()?.textContent).toContain(BANNER);
+    expect(document.querySelector(".sd-email-proof input")).toBeNull();
+  });
+});
+
+describe("a conversation seen through the history only", () => {
+  const readOnlyConversation = (call: Call): Answer =>
+    call.url.includes("widget_conversation")
+      ? {
+          status: 200,
+          data: {
+            ticket_id: "o1",
+            reference: "T-o1",
+            status: "open",
+            read_only: true,
+            messages: [],
+          },
+        }
+      : { status: 0, data: null };
+
+  async function openOther(b: Booted, answer: (call: Call) => Answer): Promise<void> {
+    const base = b.server.handler;
+    b.server.handler = (call) => {
+      const special = answer(call);
+      return special.status ? special : base(call);
+    };
+    document.querySelector<HTMLElement>(".sd-history-item")?.click();
+    await tick();
+  }
+
+  const notice = () => document.querySelector<HTMLElement>(".sd-read-only");
+  const inputBar = () => document.querySelector<HTMLElement>(".sd-input-bar");
+
+  it("is shown read-only, with a way to start a new conversation", async () => {
+    const b = await bootOffered(undefined, {
+      history: { "anon-1": [historyItem("o1", "Someone else's", "open")] },
+    });
+    await openOther(b, readOnlyConversation);
+
+    expect(notice()?.textContent).toContain("can only be read here");
+    expect(inputBar()?.style.display).toBe("none");
+
+    Array.from(notice()?.querySelectorAll("button") ?? [])
+      .find((el) => el.textContent?.includes("Start a new conversation"))
+      ?.click();
+    await tick();
+    expect(notice()?.style.display).toBe("none");
+    expect(inputBar()?.style.display).not.toBe("none");
+    expect(bubbles()).toHaveLength(0);
+  });
+
+  it("becomes read-only when writing is refused", async () => {
+    const b = await bootOffered(undefined, {
+      history: { "anon-1": [historyItem("o1", "Someone else's", "open")] },
+    });
+    await openOther(b, (call) =>
+      call.url.includes("widget_message")
+        ? { status: 403, data: { error: "read-only" } }
+        : { status: 0, data: null },
+    );
+
+    const input = document.querySelector("textarea") as HTMLTextAreaElement;
+    input.value = "Hello";
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+
+    expect(notice()?.style.display).not.toBe("none");
+    expect(inputBar()?.style.display).toBe("none");
+  });
+});

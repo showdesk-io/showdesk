@@ -64,6 +64,7 @@ function pickConversationToResume(
 const EMPTY_CONVERSATION: Partial<WidgetState> = {
   activeTicketId: null,
   activeTicketReference: null,
+  activeTicketReadOnly: false,
   messages: [],
 };
 
@@ -221,8 +222,12 @@ async function runSession(config: ShowdeskConfig, run: number): Promise<void> {
 
     const previous = s.state.session;
     const changed = previous?.sessionId !== session.sessionId;
-    // A code asked for by another session isn't this one's to enter.
-    s.update(changed ? { session, emailCodeSentAt: null } : { session });
+    // A code asked for by another session, or for another email, isn't to enter here.
+    s.update(
+      changed || previous?.email !== session.email
+        ? { session, emailCodeSentAt: null }
+        : { session },
+    );
 
     if (changed) {
       connectWebSocket(config, s, session.sessionId);
@@ -327,6 +332,7 @@ async function refreshActiveConversation(
     const unsent = s.state.messages.filter((m) => m._status !== "sent");
     s.update({
       activeTicketReference: data.reference,
+      activeTicketReadOnly: data.readOnly,
       messages: [...data.messages, ...unsent],
     });
   } catch (err) {
@@ -358,6 +364,7 @@ function resumeActiveConversation(config: ShowdeskConfig): void {
       activeTab: "chat",
       activeTicketId: resume.id,
       activeTicketReference: resume.reference,
+      activeTicketReadOnly: switchingTicket ? false : s.state.activeTicketReadOnly,
       // Only wipe messages when we're jumping to a different ticket —
       // otherwise keep them visible while we refetch.
       messages: switchingTicket ? [] : s.state.messages,
@@ -375,6 +382,7 @@ function resumeActiveConversation(config: ShowdeskConfig): void {
           s.update({
             activeTicketId: data.ticketId,
             activeTicketReference: data.reference,
+            activeTicketReadOnly: data.readOnly,
             messages: data.messages,
             isLoading: false,
           });

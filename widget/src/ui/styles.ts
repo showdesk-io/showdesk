@@ -1058,6 +1058,21 @@ export function injectStyles(primaryColor: string): void {
       background: color-mix(in srgb, var(--sd-primary) 5%, transparent);
     }
 
+    /* A conversation only read from the history */
+    .sd-read-only {
+      padding: 12px 16px;
+      border-top: 1px solid var(--sd-border);
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    .sd-read-only-text {
+      font-size: 13px;
+      color: var(--sd-text-light);
+    }
+
     /* Email proof banner */
     .sd-email-proof {
       margin: 0 16px 12px;
