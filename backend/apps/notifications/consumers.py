@@ -7,10 +7,12 @@ WidgetConsumer — widget chat users (token + session-authenticated).
 import logging
 from urllib.parse import parse_qs
 
+from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 from apps.core.permissions import LOOKUP_ERRORS
+from apps.email_channel import presence
 
 logger = logging.getLogger(__name__)
 
@@ -130,18 +132,22 @@ class WidgetConsumer(AsyncJsonWebsocketConsumer):
         self.group_name = f"widget_session_{self.session_id}"
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
+        await sync_to_async(presence.mark_connected)(self.session_id)
 
     async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection."""
         if hasattr(self, "group_name"):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
+            await sync_to_async(presence.mark_disconnected)(self.session_id)
 
     async def receive_json(self, content: dict) -> None:
         """Handle incoming messages.
 
-        Supports app-level heartbeat: {"type": "ping"} → {"type": "pong"}.
+        Supports app-level heartbeat: {"type": "ping"} → {"type": "pong"}. A ping
+        also tells the session still has the widget open.
         """
         if content.get("type") == "ping":
+            await sync_to_async(presence.mark_connected)(self.session_id)
             await self.send_json({"type": "pong"})
 
     async def widget_message(self, event: dict) -> None:

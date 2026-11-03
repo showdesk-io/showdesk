@@ -64,8 +64,7 @@ def _reply_address(ticket) -> str:
 
     The ticket's address, or else what its contact holds: a resume doesn't fill in a
     ticket, and an agent can link one. Not the contact of a ticket a login moved there,
-    who isn't necessarily who wrote it. ``is_unsubscribed`` doesn't come into it: it's
-    about non-essential email, and a reply to their own ticket isn't.
+    who isn't necessarily who wrote it.
     """
     from apps.tickets.models import PRE_LOGIN_ANONYMOUS_KEY
 
@@ -154,68 +153,8 @@ def send_ticket_created_email(self, ticket_id: str) -> None:
         raise self.retry(exc=exc)
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_ticket_reply_email(self, message_id: str) -> None:
-    """Notify the relevant party when a reply is added.
-
-    - If an agent replies -> notify the requester
-    - If the requester replies -> notify the assigned agent (or all agents)
-    - Internal notes are never emailed externally
-    """
-    from apps.organizations.models import User
-    from apps.tickets.models import TicketMessage
-
-    try:
-        message = TicketMessage.objects.select_related(
-            "ticket",
-            "ticket__organization",
-            "ticket__assigned_agent",
-            "ticket__contact",
-            "author",
-        ).get(id=message_id)
-    except TicketMessage.DoesNotExist:
-        logger.warning("Message %s not found, skipping email.", message_id)
-        return
-
-    if message.message_type == TicketMessage.MessageType.INTERNAL_NOTE:
-        logger.debug("Skipping email for internal note %s.", message_id)
-        return
-
-    ticket = message.ticket
-    author = message.author
-    is_agent_reply = author and author.role in (User.Role.AGENT, User.Role.ADMIN)
-
-    if is_agent_reply:
-        address = _reply_address(ticket)
-        if not address:
-            logger.info("No requester to email for ticket %s.", ticket.reference)
-            return
-        recipients = [address]
-        author_label = (author.first_name or "").strip() or (
-            author.email.split("@")[0] if author.email else "Support"
-        )
-        intro = f"{author_label} replied to your support ticket."
-        cta_label = "View conversation"
-    else:
-        if ticket.assigned_agent and ticket.assigned_agent.email:
-            recipients = [ticket.assigned_agent.email]
-        else:
-            recipients = list(
-                User.objects.filter(
-                    organization=ticket.organization,
-                    role__in=[User.Role.AGENT, User.Role.ADMIN],
-                    is_active=True,
-                ).values_list("email", flat=True)
-            )
-        if not recipients:
-            return
-        author_label = ticket.requester_name or ticket.requester_email or "Requester"
-        intro = f"{author_label} replied on ticket {ticket.reference}."
-        cta_label = "Open ticket"
-
-    initial = (author_label[:1] or "?").upper()
-
-    attachments = [
+def _attachments(message) -> list[dict]:
+    return [
         {
             "filename": att.filename,
             "url": att.file.url if att.file else "",
@@ -223,6 +162,165 @@ def send_ticket_reply_email(self, message_id: str) -> None:
         }
         for att in message.attachments.all()
     ]
+
+
+def _reply_entry(message, author_label: str) -> dict:
+    return {
+        "author_label": author_label,
+        "author_initial": (author_label[:1] or "?").upper(),
+        "body": message.body,
+        "attachments": _attachments(message),
+    }
+
+
+def _load_message(message_id: str):
+    from apps.tickets.models import TicketMessage
+
+    try:
+        return TicketMessage.objects.select_related(
+            "ticket",
+            "ticket__organization",
+            "ticket__assigned_agent",
+            "ticket__contact",
+            "ticket__mailbox",
+            "author",
+        ).get(id=message_id)
+    except TicketMessage.DoesNotExist:
+        logger.warning("Message %s not found, skipping email.", message_id)
+        return None
+
+
+def _requester_address(ticket) -> str:
+    """Where an agent's reply on ``ticket`` is emailed, or "" if it isn't.
+
+    An unsubscribed contact only gets the replies of a ticket they opened by email.
+    """
+    from apps.email_channel.outbound import suppressed_by_unsubscribe
+
+    if suppressed_by_unsubscribe(ticket):
+        return ""
+    return _reply_address(ticket)
+
+
+def _email_requester(task, message, address: str) -> None:
+    """Email ``address`` the unread replies up to ``message``, ``message``'s mail.
+
+    Its Message-ID is stored before sending, and is the same on a retry.
+    """
+    from apps.email_channel import outbound
+    from apps.email_channel.tokens import outbound_message_id
+    from apps.tickets.models import TicketMessage
+
+    if message.email_delivery_status == TicketMessage.DeliveryStatus.SENT:
+        return
+    ticket = message.ticket
+    replies = outbound.unread_replies(message)
+    entries = [_reply_entry(reply, outbound.sender_label(reply)) for reply in replies]
+    history = [
+        {
+            "author_label": outbound.sender_label(earlier),
+            "body": earlier.body,
+            "created_at": earlier.created_at,
+        }
+        for earlier in outbound.context_messages(replies[0])
+    ]
+    author_label = entries[-1]["author_label"]
+    intro = (
+        f"{author_label} replied to your support ticket."
+        if len(entries) == 1
+        else f"You have {len(entries)} new replies on your support ticket."
+    )
+
+    message_id = outbound_message_id(message)
+    if message.external_id != message_id:
+        TicketMessage.objects.filter(pk=message.pk).update(external_id=message_id)
+    headers = {"Message-ID": message_id, **outbound.threading_headers(message)}
+
+    try:
+        send_branded_email(
+            template="ticket_reply",
+            subject=f"Re: [{ticket.reference}] {ticket.title}",
+            to=[address],
+            organization=ticket.organization,
+            from_email=outbound.from_address(ticket),
+            reply_to=outbound.reply_to(ticket),
+            headers=headers,
+            context={
+                "ticket": ticket,
+                "ticket_url": outbound.conversation_url(ticket, address)
+                or _ticket_url(ticket),
+                "replies": entries,
+                "history": history,
+                "reply_marker": outbound.reply_marker(),
+                "author_label": author_label,
+                "intro": intro,
+                "cta_label": "View conversation",
+            },
+        )
+    except Exception as exc:
+        logger.exception("Failed to send reply email for %s", ticket.reference)
+        if task.request.retries >= task.max_retries:
+            TicketMessage.objects.filter(pk=message.pk).update(
+                email_delivery_status=TicketMessage.DeliveryStatus.FAILED
+            )
+        raise task.retry(exc=exc)
+    TicketMessage.objects.filter(pk__in=[reply.pk for reply in replies]).update(
+        email_delivery_status=TicketMessage.DeliveryStatus.SENT
+    )
+    logger.info("Sent reply email for %s.", ticket.reference)
+
+
+def _is_agent_reply(message) -> bool:
+    from apps.tickets.models import TicketMessage
+
+    author = message.author
+    return message.channel == TicketMessage.Channel.AGENT or bool(
+        author and author.is_agent
+    )
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_ticket_reply_email(self, message_id: str) -> None:
+    """Notify the relevant party when a reply is added.
+
+    - If an agent replies -> email the requester, with the replies still unread
+    - If the requester replies -> notify the assigned agent (or all agents)
+    - Internal notes are never emailed externally
+    """
+    from apps.organizations.models import User
+    from apps.tickets.models import TicketMessage
+
+    message = _load_message(message_id)
+    if message is None:
+        return
+
+    if message.message_type == TicketMessage.MessageType.INTERNAL_NOTE:
+        logger.debug("Skipping email for internal note %s.", message_id)
+        return
+
+    ticket = message.ticket
+
+    if _is_agent_reply(message):
+        address = _requester_address(ticket)
+        if not address:
+            logger.info("No requester to email for ticket %s.", ticket.reference)
+            return
+        _email_requester(self, message, address)
+        return
+
+    if ticket.assigned_agent and ticket.assigned_agent.email:
+        recipients = [ticket.assigned_agent.email]
+    else:
+        recipients = list(
+            User.objects.filter(
+                organization=ticket.organization,
+                role__in=[User.Role.AGENT, User.Role.ADMIN],
+                is_active=True,
+            ).values_list("email", flat=True)
+        )
+    if not recipients:
+        return
+    author_label = ticket.requester_name or ticket.requester_email or "Requester"
 
     try:
         send_branded_email(
@@ -233,12 +331,10 @@ def send_ticket_reply_email(self, message_id: str) -> None:
             context={
                 "ticket": ticket,
                 "ticket_url": _ticket_url(ticket),
-                "message_body": message.body,
+                "replies": [_reply_entry(message, author_label)],
                 "author_label": author_label,
-                "author_initial": initial,
-                "intro": intro,
-                "cta_label": cta_label,
-                "attachments": attachments,
+                "intro": f"{author_label} replied on ticket {ticket.reference}.",
+                "cta_label": "Open ticket",
             },
         )
         logger.info(
@@ -249,6 +345,29 @@ def send_ticket_reply_email(self, message_id: str) -> None:
     except Exception as exc:
         logger.exception("Failed to send reply email for %s", ticket.reference)
         raise self.retry(exc=exc)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_unread_reply_email(self, message_id: str) -> None:
+    """Email an agent's reply the requester left unread in the widget.
+
+    Nothing if it was read, or if a later reply's own task will carry it.
+    """
+    from apps.email_channel import outbound
+    from apps.tickets.models import TicketMessage
+
+    message = _load_message(message_id)
+    if (
+        message is None
+        or message.message_type == TicketMessage.MessageType.INTERNAL_NOTE
+        or message.email_delivery_status == TicketMessage.DeliveryStatus.SENT
+        or outbound.read_in_widget(message)
+        or outbound.superseded(message)
+    ):
+        return
+    address = _requester_address(message.ticket)
+    if address:
+        _email_requester(self, message, address)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -300,13 +419,17 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
     from apps.tickets.models import Ticket
 
     try:
-        ticket = Ticket.objects.select_related("organization", "contact").get(
-            id=ticket_id
-        )
+        ticket = Ticket.objects.select_related(
+            "organization", "contact", "mailbox"
+        ).get(id=ticket_id)
     except Ticket.DoesNotExist:
         return
 
-    if not _requester_can_be_emailed(ticket):
+    from apps.email_channel import outbound
+
+    if not _requester_can_be_emailed(ticket) or (
+        ticket.contact and ticket.contact.is_unsubscribed
+    ):
         return
 
     try:
@@ -315,6 +438,8 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
             subject=f"[{ticket.reference}] Your ticket has been resolved",
             to=[ticket.requester_email],
             organization=ticket.organization,
+            from_email=outbound.from_address(ticket),
+            reply_to=outbound.reply_to(ticket),
             context={
                 "ticket": ticket,
                 "requester_name": ticket.requester_name,

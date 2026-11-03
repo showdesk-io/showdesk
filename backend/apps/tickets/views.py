@@ -36,6 +36,7 @@ from apps.core.throttling import (
     WidgetSubmitThrottle,
     WidgetUploadThrottle,
 )
+from apps.email_channel.outbound import queue_reply_email
 from apps.notifications.signals import (
     notify_message_deleted,
     notify_new_message,
@@ -84,7 +85,6 @@ from .serializers import (
 from .tasks import (
     send_ticket_assigned_email,
     send_ticket_created_email,
-    send_ticket_reply_email,
     send_ticket_resolved_email,
 )
 
@@ -1504,8 +1504,8 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         except Exception:
             logger.exception("WebSocket notification failed for message %s", message.id)
 
-        # Email notification (async via Celery)
-        send_ticket_reply_email.delay(str(message.id))
+        # Email to the requester: now, or once left unread in the widget.
+        queue_reply_email(message)
 
     def perform_destroy(self, instance) -> None:
         """Delete message and send WebSocket notification."""

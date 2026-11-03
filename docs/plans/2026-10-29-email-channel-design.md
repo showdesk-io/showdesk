@@ -405,6 +405,10 @@ inbound provider.
   `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` (200) per mailbox, which then also
   ignores everyone's mail for the hour. Admins see both in the mailbox's log.
 
+- Presence is one key per widget session. With the widget open in two tabs,
+  closing one deletes the key until the other's next ping, 25 s at most: an
+  agent's reply in that window is emailed at once instead of waiting.
+
 - `Mailbox.public_address` is unique across organizations and unverified: an
   organization can claim `support@bigcorp.com` before BigCorp does. It receives
   none of BigCorp's mail (the envelope, BigCorp's own inbound address, decides),

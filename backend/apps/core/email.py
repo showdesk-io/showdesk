@@ -83,12 +83,14 @@ def send_branded_email(
     from_email: str | None = None,
     fail_silently: bool = False,
     attachments: Iterable[tuple[str, bytes, str]] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> int:
     """Render and send a branded HTML + plain-text email.
 
     ``template`` is the base name under ``templates/emails/`` (e.g.
     ``"ticket_created"``); the helper loads ``<template>.html`` and
     ``<template>.txt``. ``attachments`` holds (name, content, mimetype) tuples.
+    ``headers`` are extra headers, such as ``Message-ID`` or ``In-Reply-To``.
     """
     recipients = [addr for addr in to if addr]
     if not recipients:
@@ -111,6 +113,7 @@ def send_branded_email(
         from_email=_format_from_email(from_email, organization),
         to=list(recipients),
         reply_to=list(reply_to) if reply_to else None,
+        headers=dict(headers) if headers else None,
     )
     message.attach_alternative(html_body, "text/html")
     for name, content, mimetype in attachments or ():
