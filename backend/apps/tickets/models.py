@@ -791,6 +791,8 @@ class TicketAttachment(TimestampedModel):
         null=True,
     )
     file = models.FileField(upload_to="attachments/%Y/%m/%d/")
+    # An agent's upload for a reply not posted yet: purged if none takes it.
+    awaiting_message = models.BooleanField(default=False)
     filename = models.CharField(max_length=255)
     content_type = models.CharField(max_length=100)
     file_size = models.PositiveBigIntegerField(help_text="File size in bytes.")

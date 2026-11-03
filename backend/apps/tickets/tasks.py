@@ -552,3 +552,46 @@ def deliver_widget_email_code(self, otp_id: str) -> None:
     except Exception as exc:
         logger.exception("Failed to send a widget email code")
         raise self.retry(exc=exc)
+
+
+# How long an agent's upload waits for the reply that names it.
+ORPHAN_UPLOAD_AFTER_HOURS = 24
+
+
+@shared_task
+def purge_orphan_agent_uploads() -> int:
+    """Delete agents' uploads no reply took within a day, with their files.
+
+    The agent's app uploads a reply's files first: if the reply was never posted,
+    nothing shows them. The files go once the deletion is committed. Return how
+    many went.
+    """
+    from datetime import timedelta
+
+    from django.db import transaction
+    from django.utils import timezone
+
+    from apps.tickets.models import TicketAttachment
+
+    with transaction.atomic():
+        orphans = list(
+            TicketAttachment.objects.select_for_update(skip_locked=True).filter(
+                awaiting_message=True,
+                message__isnull=True,
+                uploaded_by__isnull=False,
+                created_at__lt=timezone.now()
+                - timedelta(hours=ORPHAN_UPLOAD_AFTER_HOURS),
+            )
+        )
+        files = [(a.file.storage, a.file.name) for a in orphans if a.file]
+        TicketAttachment.objects.filter(pk__in=[a.pk for a in orphans]).delete()
+
+        def delete_files() -> None:
+            for storage, name in files:
+                try:
+                    storage.delete(name)
+                except Exception:
+                    logger.exception("Couldn't delete the orphan upload %s", name)
+
+        transaction.on_commit(delete_files)
+    return len(orphans)

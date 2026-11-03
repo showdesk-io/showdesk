@@ -261,6 +261,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.organizations.tasks.purge_expired_otp_codes",
         "schedule": 60 * 60 * 24,
     },
+    "purge-orphan-agent-uploads": {
+        "task": "apps.tickets.tasks.purge_orphan_agent_uploads",
+        "schedule": 60 * 60 * 24,
+    },
 }
 
 # =============================================================================

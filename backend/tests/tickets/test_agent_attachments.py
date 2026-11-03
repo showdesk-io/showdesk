@@ -4,6 +4,7 @@ The agent's app uploads them first, then posts the reply naming them: they're
 linked to it before anything announces or mails it.
 """
 
+import uuid
 from unittest import mock
 
 import pytest
@@ -209,3 +210,47 @@ def test_a_reply_only_takes_the_files_its_agent_uploaded(client, ticket, agent):
         assert res.status_code == 400, attachment_id
         assert "attachment_ids" in res.data
     assert not TicketMessage.objects.filter(ticket=ticket).exists()
+
+
+def test_an_agent_upload_left_without_its_reply_is_purged_after_a_day(
+    client, ticket, settings, django_capture_on_commit_callbacks
+):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.tickets.tasks import purge_orphan_agent_uploads
+
+    orphan = TicketAttachment.objects.get(pk=_upload(client, ticket).data["id"])
+    used = _upload(client, ticket).data["id"]
+    _reply(client, ticket, [used])
+    recent = _upload(client, ticket).data["id"]
+    # Files from before replies took them, and the customer's, are left alone.
+    older = TicketAttachment.objects.create(
+        ticket=ticket,
+        uploaded_by=orphan.uploaded_by,
+        filename="old.pdf",
+        content_type="application/pdf",
+        file_size=1,
+    )
+    customers = TicketAttachment.objects.create(
+        ticket=ticket, filename="c.pdf", content_type="application/pdf", file_size=1
+    )
+    long_ago = timezone.now() - timedelta(days=1, minutes=1)
+    TicketAttachment.objects.exclude(pk=recent).update(created_at=long_ago)
+    storage, name = orphan.file.storage, orphan.file.name
+
+    with django_capture_on_commit_callbacks(execute=True):
+        assert purge_orphan_agent_uploads() == 1
+
+    assert set(TicketAttachment.objects.values_list("pk", flat=True)) == {
+        uuid.UUID(used),
+        uuid.UUID(recent),
+        older.pk,
+        customers.pk,
+    }
+    assert not storage.exists(name)
+    assert settings.CELERY_BEAT_SCHEDULE["purge-orphan-agent-uploads"] == {
+        "task": "apps.tickets.tasks.purge_orphan_agent_uploads",
+        "schedule": 60 * 60 * 24,
+    }

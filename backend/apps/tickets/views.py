@@ -1728,7 +1728,7 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
                     ticket_id=message.ticket_id,
                     uploaded_by=self.request.user,
                     message__isnull=True,
-                ).update(message=message)
+                ).update(message=message, awaiting_message=False)
                 if linked != len({file.pk for file in files}):
                     # Taken by another message meanwhile.
                     raise ValidationError(
@@ -1772,8 +1772,14 @@ class TicketAttachmentViewSet(viewsets.ModelViewSet):
         return TicketAttachment.objects.none()
 
     def perform_create(self, serializer) -> None:
-        """Set uploaded_by on creation."""
-        serializer.save(uploaded_by=self.request.user)
+        """Set uploaded_by on creation.
+
+        A file on no message waits for the reply that names it, a day at most.
+        """
+        serializer.save(
+            uploaded_by=self.request.user,
+            awaiting_message=serializer.validated_data.get("message") is None,
+        )
 
 
 class TagViewSet(viewsets.ModelViewSet):
