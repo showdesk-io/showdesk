@@ -1484,7 +1484,12 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         """Filter messages by the active organization's tickets."""
         org = get_active_org(self.request)
         if org:
-            return TicketMessage.objects.filter(ticket__organization=org)
+            # sender_name reads the author, the session or the ticket's contact.
+            return (
+                TicketMessage.objects.filter(ticket__organization=org)
+                .select_related("ticket__contact", "author", "widget_session")
+                .prefetch_related("attachments")
+            )
         return TicketMessage.objects.none()
 
     def perform_create(self, serializer) -> None:
