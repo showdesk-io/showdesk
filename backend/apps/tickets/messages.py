@@ -74,9 +74,14 @@ def create_user_message(
             ).exists()
         ):
             session_id = None
-        return TicketMessage.objects.create(
+        message = TicketMessage(
             ticket=ticket,
             widget_session_id=session_id,
             sender_type=TicketMessage.SenderType.USER,
             **fields,
         )
+        if session is not None and session_id == session.pk:
+            # Already loaded: its name is the message's sender name.
+            message.widget_session = session
+        message.save(force_insert=True)
+        return message

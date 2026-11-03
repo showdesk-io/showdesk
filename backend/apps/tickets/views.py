@@ -668,7 +668,18 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Not on the others: an annotation would change what ``stats`` groups by.
         if self.action == "list":
             return ticket_list_rows(tickets)
-        return tickets.select_related("contact__company", "widget_session")
+        tickets = tickets.select_related("contact__company", "widget_session")
+        if self.action in ("retrieve", "update", "partial_update"):
+            # sender_name reads the author, the session or the ticket's contact.
+            tickets = tickets.prefetch_related(
+                models.Prefetch(
+                    "messages",
+                    queryset=TicketMessage.objects.select_related(
+                        "author", "widget_session"
+                    ).prefetch_related("attachments"),
+                )
+            )
+        return tickets
 
     def perform_create(self, serializer) -> None:
         """Set organization, reference and source on creation."""
