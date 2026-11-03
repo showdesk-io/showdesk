@@ -283,6 +283,28 @@ describe("a conversation seen through the history only", () => {
     expect(notice()?.style.display).not.toBe("none");
     expect(inputBar()?.style.display).toBe("none");
   });
+
+  it("is closed for writing when the ticket was closed too long ago", async () => {
+    const b = await bootOffered(undefined, {
+      history: { "anon-1": [historyItem("o1", "Old one", "closed")] },
+    });
+    await openOther(b, (call) =>
+      call.url.includes("widget_message")
+        ? { status: 409, data: { error: "closed" } }
+        : { status: 0, data: null },
+    );
+
+    const input = document.querySelector("textarea") as HTMLTextAreaElement;
+    input.value = "Hello";
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+
+    expect(notice()?.style.display).not.toBe("none");
+    expect(notice()?.textContent).toContain("This conversation is closed.");
+    expect(notice()?.textContent).toContain("Start a new conversation");
+    expect(inputBar()?.style.display).toBe("none");
+  });
 });
 
 describe("a proven session given another email", () => {

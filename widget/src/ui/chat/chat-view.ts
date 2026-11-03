@@ -95,10 +95,18 @@ export function renderChatView(
   // A conversation seen through the history only: read, not written.
   const readOnly = renderReadOnlyNotice(store);
   container.appendChild(readOnly);
+  const readOnlyText = readOnly.querySelector<HTMLElement>(".sd-read-only-text");
   const showReadOnly = () => {
-    const isReadOnly = store.state.activeTicketReadOnly && Boolean(store.state.activeTicketId);
+    const { activeTicketId, closedTicketId } = store.state;
+    const isReadOnly = store.state.activeTicketReadOnly && Boolean(activeTicketId);
     readOnly.style.display = isReadOnly ? "" : "none";
     input.style.display = isReadOnly ? "none" : "";
+    if (readOnlyText) {
+      readOnlyText.textContent =
+        activeTicketId && closedTicketId === activeTicketId
+          ? "This conversation is closed."
+          : "This conversation can only be read here.";
+    }
   };
   showReadOnly();
 
@@ -131,15 +139,22 @@ function renderReadOnlyNotice(store: WidgetStore): HTMLElement {
   return notice;
 }
 
-/** A refusal to write on the active conversation: show it read-only from now on. */
+/**
+ * A refusal to write on the active conversation: show it read-only from now on.
+ * A 403 is a conversation only seen through the history, a 409 one closed too long
+ * ago to reopen.
+ */
 function readOnlyIfRefused(err: unknown, store: WidgetStore, ticketId: string | null): void {
   if (
     err instanceof ApiError &&
-    err.status === 403 &&
+    (err.status === 403 || err.status === 409) &&
     ticketId &&
     store.state.activeTicketId === ticketId
   ) {
-    store.update({ activeTicketReadOnly: true });
+    store.update({
+      activeTicketReadOnly: true,
+      closedTicketId: err.status === 409 ? ticketId : store.state.closedTicketId,
+    });
   }
 }
 

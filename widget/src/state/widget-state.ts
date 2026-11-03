@@ -21,6 +21,8 @@ export interface WidgetState {
   activeTicketReference: string | null;
   /** The active conversation is only seen through the history: no writing there. */
   activeTicketReadOnly: boolean;
+  /** A conversation closed too long ago to reopen: the ticket ID, until another opens. */
+  closedTicketId: string | null;
   messages: ChatMessage[];
 
   /** History tab data. */
@@ -56,6 +58,7 @@ export function createWidgetStore(): WidgetStore {
     activeTicketId: null,
     activeTicketReference: null,
     activeTicketReadOnly: false,
+    closedTicketId: null,
     messages: [],
     conversations: [],
     isConnected: false,
