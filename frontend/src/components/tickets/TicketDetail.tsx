@@ -6,7 +6,7 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { clsx } from "clsx";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { isAxiosError } from "axios";
 import type {
@@ -46,7 +46,8 @@ import { CannedResponsePicker } from "./CannedResponsePicker";
 
 interface TicketDetailProps {
   ticket: Ticket;
-  onSendMessage: (body: string, messageType: string) => void;
+  /** ``attachmentIds``: files already uploaded to the ticket, for this message. */
+  onSendMessage: (body: string, messageType: string, attachmentIds: string[]) => void;
   isSending: boolean;
 }
 
@@ -72,13 +73,14 @@ export function TicketDetail({
   const [titleDraft, setTitleDraft] = useState(ticket.title);
   const [descDraft, setDescDraft] = useState(ticket.description);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Files of the reply being written already uploaded, by file: a retry skips them.
+  const uploadedFiles = useRef(new Map<File, string>());
   const threadRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const descInputRef = useRef<HTMLTextAreaElement>(null);
   const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
-  const queryClient = useQueryClient();
   const deleteMutation = useDeleteMessage(ticket.id);
   const updateTicketMutation = useUpdateTicket();
   const recordUseMutation = useRecordCannedResponseUse();
@@ -161,31 +163,38 @@ export function TicketDetail({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!messageBody.trim() && attachedFiles.length === 0) return;
+    if (isUploading) return;
 
-    if (messageBody.trim()) {
-      onSendMessage(messageBody, isInternalNote ? "internal_note" : "reply");
-      setMessageBody("");
-    }
-
+    // The files go up first, then the message naming them: it's announced and
+    // mailed with them. One already uploaded isn't sent again on a retry.
+    const attachmentIds: string[] = [];
     if (attachedFiles.length > 0) {
       setIsUploading(true);
       try {
         for (const file of attachedFiles) {
-          await uploadAttachment({ ticket: ticket.id, file });
+          let id = uploadedFiles.current.get(file);
+          if (!id) {
+            id = (await uploadAttachment({ ticket: ticket.id, file })).id;
+            uploadedFiles.current.set(file, id);
+          }
+          attachmentIds.push(id);
         }
-        toast.success(
-          `${attachedFiles.length} file${attachedFiles.length > 1 ? "s" : ""} uploaded.`,
-        );
-        setAttachedFiles([]);
-        void queryClient.invalidateQueries({
-          queryKey: ["ticket", ticket.id],
-        });
       } catch {
         toast.error("Failed to upload files.");
+        return;
       } finally {
         setIsUploading(false);
       }
     }
+
+    onSendMessage(
+      messageBody.trim() ? messageBody : "",
+      isInternalNote ? "internal_note" : "reply",
+      attachmentIds,
+    );
+    setMessageBody("");
+    setAttachedFiles([]);
+    uploadedFiles.current.clear();
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {

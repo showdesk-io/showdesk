@@ -65,7 +65,7 @@ export async function updateTicket(
 
 export async function createMessage(
   ticketId: string,
-  data: { body: string; message_type: string },
+  data: { body: string; message_type: string; attachment_ids?: string[] },
 ): Promise<TicketMessage> {
   const response = await apiClient.post<TicketMessage>("/messages/", {
     ticket: ticketId,

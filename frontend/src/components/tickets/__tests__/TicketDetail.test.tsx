@@ -9,6 +9,7 @@ import { AxiosError, type AxiosResponse } from "axios";
 import toast from "react-hot-toast";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { uploadAttachment } from "@/api/attachments";
 import { apiClient } from "@/api/client";
 import type { ContactSummary, Ticket, TicketMessage } from "@/types";
 import { TicketDetail } from "../TicketDetail";
@@ -21,6 +22,9 @@ vi.mock("react-hot-toast", () => ({
 }));
 vi.mock("@/hooks/useAuth", () => ({
   useCurrentUser: () => ({ data: { id: "u1", role: "agent" } }),
+}));
+vi.mock("@/api/attachments", () => ({
+  uploadAttachment: vi.fn(),
 }));
 vi.mock("@/api/users", () => ({
   fetchAgents: vi.fn().mockResolvedValue([]),
@@ -72,14 +76,14 @@ function makeTicket(overrides: Partial<Ticket> = {}): Ticket {
   } as unknown as Ticket;
 }
 
-function renderDetail(ticket: Ticket) {
+function renderDetail(ticket: Ticket, onSendMessage = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <TicketDetail ticket={ticket} onSendMessage={vi.fn()} isSending={false} />
+        <TicketDetail ticket={ticket} onSendMessage={onSendMessage} isSending={false} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -254,5 +258,55 @@ describe("TicketDetail messages", () => {
     );
 
     expect(screen.getByText(/Not delivered by email/)).toBeInTheDocument();
+  });
+});
+
+describe("TicketDetail reply with files", () => {
+  it("uploads the files, then sends the reply naming them", async () => {
+    const upload = vi.mocked(uploadAttachment);
+    upload
+      .mockResolvedValueOnce({ id: "a1" } as Awaited<ReturnType<typeof uploadAttachment>>)
+      .mockResolvedValueOnce({ id: "a2" } as Awaited<ReturnType<typeof uploadAttachment>>);
+    const onSendMessage = vi.fn();
+    const user = userEvent.setup();
+    const { container } = renderDetail(makeTicket(), onSendMessage);
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await user.upload(input, [
+      new File(["%PDF"], "invoice.pdf", { type: "application/pdf" }),
+      new File(["png"], "shot.png", { type: "image/png" }),
+    ]);
+    await user.type(screen.getByPlaceholderText(/Write a reply/), "Here you go");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalled());
+    // Uploaded to the ticket first: the reply links them before it's mailed.
+    expect(upload.mock.calls.map(([data]) => [data.ticket, data.message])).toEqual([
+      ["t1", undefined],
+      ["t1", undefined],
+    ]);
+    expect(onSendMessage).toHaveBeenCalledWith("Here you go", "reply", ["a1", "a2"]);
+    expect(upload.mock.invocationCallOrder[1]).toBeLessThan(
+      onSendMessage.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("keeps the reply when an upload fails, and sends files alone", async () => {
+    const upload = vi.mocked(uploadAttachment);
+    upload.mockRejectedValueOnce(new Error("down"));
+    const onSendMessage = vi.fn();
+    const user = userEvent.setup();
+    const { container } = renderDetail(makeTicket(), onSendMessage);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await user.upload(input, new File(["x"], "a.txt", { type: "text/plain" }));
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(onSendMessage).not.toHaveBeenCalled();
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
+
+    upload.mockResolvedValueOnce({ id: "a9" } as Awaited<ReturnType<typeof uploadAttachment>>);
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith("", "reply", ["a9"]));
   });
 });

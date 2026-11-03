@@ -12,9 +12,13 @@ export function TicketDetailPage() {
   const { data: ticket, isLoading, error } = useTicket(id!);
   const createMessage = useCreateMessage(id!);
 
-  const handleSendMessage = (body: string, messageType: string) => {
+  const handleSendMessage = (
+    body: string,
+    messageType: string,
+    attachmentIds: string[],
+  ) => {
     createMessage.mutate(
-      { body, message_type: messageType },
+      { body, message_type: messageType, attachment_ids: attachmentIds },
       {
         onSuccess: () => {
           toast.success("Message sent.");
