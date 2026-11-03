@@ -5,15 +5,18 @@ linked to it before anything announces or mails it.
 """
 
 import uuid
+from smtplib import SMTPSenderRefused
 from unittest import mock
 
 import pytest
 from django.core import mail
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
-from apps.email_channel.outbound import MAIL_ATTACHMENTS_MAX_BYTES
+from apps.email_channel.outbound import mail_attachments
 from apps.tickets.models import TicketAttachment, TicketMessage, WidgetSession
+from config.settings import base as base_settings
 from tests.factories import (
     ContactFactory,
     OrganizationFactory,
@@ -128,10 +131,15 @@ def test_a_reply_cannot_take_files_that_are_not_free_on_its_ticket(
     assert "message" in res.data
 
 
+def _budget(settings, encoded_bytes: int) -> None:
+    settings.REPLY_EMAIL_ATTACHMENTS_MAX_MB = encoded_bytes / (1024 * 1024)
+
+
 def test_a_reply_mail_attaches_files_up_to_its_limit_then_points_to_the_page(
-    client, ticket, monkeypatch
+    client, ticket, settings
 ):
-    monkeypatch.setattr("apps.email_channel.outbound.MAIL_ATTACHMENTS_MAX_BYTES", 20)
+    # Counted as sent: 10 bytes are 16 in base64, and a line break.
+    _budget(settings, 30)
     small = _upload(client, ticket, "small.txt", b"0123456789").data["id"]
     large = _upload(client, ticket, "large.txt", b"x" * 15).data["id"]
 
@@ -141,9 +149,76 @@ def test_a_reply_mail_attaches_files_up_to_its_limit_then_points_to_the_page(
     assert [name for name, *_ in sent.attachments] == ["small.txt"]
     assert "large.txt" in sent.body
     assert "too large to attach" in sent.body
+    assert "couldn't be attached" not in sent.body
     assert "/c/" in sent.body
     assert "amazonaws" not in sent.body and "/media/" not in sent.body
-    assert MAIL_ATTACHMENTS_MAX_BYTES == 10 * 1024 * 1024
+
+
+def test_the_limit_counts_the_bytes_stored_not_the_size_recorded(ticket, settings):
+    _budget(settings, 30)
+    message = TicketMessageFactory(ticket=ticket)
+    understated = TicketAttachment(
+        ticket=ticket,
+        message=message,
+        filename="big.bin",
+        content_type="application/octet-stream",
+        file_size=1,
+    )
+    understated.file.save("big.bin", ContentFile(b"x" * 100))
+
+    files, statuses = mail_attachments([message])
+
+    assert files == []
+    assert statuses == {understated.pk: "too_large"}
+    assert base_settings.REPLY_EMAIL_ATTACHMENTS_MAX_MB == 10
+
+
+def test_a_file_that_cant_be_read_is_named_and_asked_for(client, ticket):
+    ticket.contact.email = "someone-else@example.org"
+    ticket.contact.save(update_fields=["email"])  # No conversation link then.
+    gone = TicketAttachment.objects.get(pk=_upload(client, ticket).data["id"])
+    gone.file.storage.delete(gone.file.name)
+
+    assert _reply(client, ticket, [str(gone.pk)]).status_code == 201
+
+    (sent,) = mail.outbox
+    assert sent.attachments == []
+    assert "report.pdf" in sent.body
+    assert "couldn't be attached" in sent.body
+    assert "too large" not in sent.body
+    assert "Ask us for them" in sent.body
+    assert "/c/" not in sent.body
+
+
+def test_a_reply_takes_ten_files_at_most(client, ticket):
+    ids = [_upload(client, ticket, f"{n}.pdf").data["id"] for n in range(11)]
+
+    res = _reply(client, ticket, ids)
+
+    assert res.status_code == 400
+    assert "attachment_ids" in res.data
+    assert _reply(client, ticket, ids[:10]).status_code == 201
+
+
+def test_a_mail_refused_for_its_size_goes_again_without_its_files(client, ticket):
+    attachment_id = _upload(client, ticket).data["id"]
+    sent = []
+
+    def send(email, *args, **kwargs):
+        sent.append(email)
+        if email.attachments:
+            raise SMTPSenderRefused(552, b"5.3.4 Message size exceeds limit", "x")
+        return 1
+
+    with mock.patch(
+        "django.core.mail.EmailMultiAlternatives.send", autospec=True, side_effect=send
+    ):
+        assert _reply(client, ticket, [attachment_id]).status_code == 201
+
+    assert [len(email.attachments) for email in sent] == [1, 0]
+    assert "too large to attach" in sent[1].body
+    message = TicketMessage.objects.get(ticket=ticket)
+    assert message.email_delivery_status == TicketMessage.DeliveryStatus.SENT
 
 
 def test_the_requester_sees_the_files_in_the_widget_and_on_the_page(client, ticket):

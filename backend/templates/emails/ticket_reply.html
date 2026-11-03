@@ -34,7 +34,7 @@
   <tr>
     <td style="padding:10px 14px;border-top:{% if not forloop.first %}1px solid #E2E8F0{% else %}0{% endif %};font-size:13px;line-height:18px;">
       <span style="color:{{ brand.text_color }};font-weight:500;">{{ a.filename }}</span>
-      <span style="color:{{ brand.muted_color }};margin-left:6px;font-size:12px;">({{ a.size|filesizeformat }}{% if a.attached %}, attached{% endif %})</span>
+      <span style="color:{{ brand.muted_color }};margin-left:6px;font-size:12px;">({{ a.size|filesizeformat }}{% if a.status == "attached" %}, attached{% endif %})</span>
     </td>
   </tr>
   {% endfor %}
@@ -42,8 +42,8 @@
 {% endif %}
 {% endfor %}
 
-{% if files_not_attached %}
-<div class="sd-muted" style="margin:12px 0 0 0;font-size:13px;line-height:20px;color:{{ brand.muted_color }};">Some files were too large to attach to this email.{% if files_url %} <a href="{{ files_url }}" style="color:{{ brand.primary_color }};">Open the conversation</a> to get them.{% endif %}</div>
+{% if files_too_large or files_unavailable %}
+<div class="sd-muted" style="margin:12px 0 0 0;font-size:13px;line-height:20px;color:{{ brand.muted_color }};">{% if files_too_large %}Some files were too large to attach to this email. {% endif %}{% if files_unavailable %}Some files couldn't be attached to this email. {% endif %}{% if files_url %}<a href="{{ files_url }}" style="color:{{ brand.primary_color }};">Open the conversation</a> to get them.{% else %}Ask us for them.{% endif %}</div>
 {% endif %}
 
 <div style="margin-top:24px;">

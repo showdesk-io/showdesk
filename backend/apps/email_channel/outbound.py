@@ -36,8 +36,6 @@ CONTEXT_MESSAGES = 3
 MAX_DELAY_MINUTES = 55
 # How long a ticket's reply mail may take to build and send, at most.
 REPLY_LOCK_SECONDS = 300
-# What a reply mail attaches of its replies' files, in all. The rest is only named.
-MAIL_ATTACHMENTS_MAX_BYTES = 10 * 1024 * 1024
 _MIMETYPE = re.compile(r"[\w.+-]+/[\w.+-]+")
 
 
@@ -154,36 +152,58 @@ def unread_replies(message) -> list[TicketMessage]:
     ]  # fmt: skip
 
 
-def mail_attachments(replies) -> tuple[list[tuple[str, bytes, str]], set]:
-    """The files of ``replies`` their mail attaches, and the ids of those attached.
+class FileStatus(enum.StrEnum):
+    """What a reply mail did with a file."""
 
-    In the order they were sent, as long as they fit in
-    ``MAIL_ATTACHMENTS_MAX_BYTES`` together; one that doesn't is left for the next,
-    smaller ones. A file storage can't read is left out too: the mail names it.
+    ATTACHED = "attached"
+    TOO_LARGE = "too_large"  # Beyond what the mail could carry.
+    UNAVAILABLE = "unavailable"  # Storage couldn't give it.
+
+
+def encoded_size(size: int) -> int:
+    """The size of ``size`` bytes once attached: base64, in lines of 76 and CRLF."""
+    encoded = 4 * -(-size // 3)
+    return encoded + 2 * -(-encoded // 76)
+
+
+def mail_attachments(replies) -> tuple[list[tuple[str, bytes, str]], dict]:
+    """The files of ``replies`` their mail attaches, and what became of each file.
+
+    In the order they were sent, as long as they fit together in
+    ``REPLY_EMAIL_ATTACHMENTS_MAX_MB`` as sent; one that doesn't is left for the
+    next, smaller ones. The bytes stored count, not the size recorded.
     """
-    budget = MAIL_ATTACHMENTS_MAX_BYTES
-    files, attached = [], set()
+    budget = int(settings.REPLY_EMAIL_ATTACHMENTS_MAX_MB * 1024 * 1024)
+    files, statuses = [], {}
     for reply in replies:
         for attachment in sorted(reply.attachments.all(), key=lambda a: a.created_at):
-            if not attachment.file or attachment.file_size > budget:
+            if not attachment.file:
+                statuses[attachment.pk] = FileStatus.UNAVAILABLE
                 continue
+            if encoded_size(attachment.file_size) > budget:
+                statuses[attachment.pk] = FileStatus.TOO_LARGE
+                continue
+            # Enough to tell a file that wouldn't fit, without reading it all.
+            readable = budget * 3 // 4 + 1
             try:
                 with attachment.file.open("rb") as stored:
-                    content = stored.read(budget + 1)
+                    content = stored.read(readable)
             except Exception:
                 logger.exception(
                     "Couldn't read attachment %s to mail it", attachment.pk
                 )
+                statuses[attachment.pk] = FileStatus.UNAVAILABLE
                 continue
-            if len(content) > budget:
+            if encoded_size(len(content)) > budget:
+                statuses[attachment.pk] = FileStatus.TOO_LARGE
                 continue
-            budget -= len(content)
+            budget -= encoded_size(len(content))
             mimetype = attachment.content_type
             if not _MIMETYPE.fullmatch(mimetype or ""):
                 mimetype = "application/octet-stream"
             files.append((one_line(attachment.filename) or "file", content, mimetype))
-            attached.add(attachment.pk)
-    return files, attached
+            statuses[attachment.pk] = FileStatus.ATTACHED
+    return files, statuses
 
 
 def context_messages(first) -> list[TicketMessage]:

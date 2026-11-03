@@ -415,6 +415,11 @@ INBOUND_EMAIL_LOG_RETENTION_DAYS = config(
 WIDGET_UNREAD_EMAIL_DELAY_MINUTES = config(
     "WIDGET_UNREAD_EMAIL_DELAY_MINUTES", default=5, cast=int
 )
+# Size, in MB as sent (base64), of the files a reply mail attaches in all. The
+# others are named in the mail, with the conversation link.
+REPLY_EMAIL_ATTACHMENTS_MAX_MB = config(
+    "REPLY_EMAIL_ATTACHMENTS_MAX_MB", default=10, cast=int
+)
 # Lifetime of the conversation links sent by email.
 CONVERSATION_LINK_MAX_AGE_DAYS = config(
     "CONVERSATION_LINK_MAX_AGE_DAYS", default=30, cast=int

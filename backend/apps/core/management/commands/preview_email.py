@@ -87,12 +87,12 @@ SAMPLES: dict[str, Callable[[], tuple[str, dict[str, Any]]]] = {
                         {
                             "filename": "screenshot.png",
                             "size": 204800,
-                            "attached": True,
+                            "status": "attached",
                         },
                         {
                             "filename": "console-log.txt",
                             "size": 1280,
-                            "attached": True,
+                            "status": "attached",
                         },
                     ],
                 },

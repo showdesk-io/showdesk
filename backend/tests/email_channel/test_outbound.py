@@ -27,6 +27,7 @@ from apps.email_channel.tokens import (
 )
 from apps.tickets.models import Ticket, TicketMessage, WidgetSession
 from apps.tickets.tasks import (
+    REPLY_LOCK_OUTAGE_MAX_RETRIES,
     send_ticket_reply_email,
     send_ticket_resolved_email,
     send_unread_reply_email,
@@ -163,6 +164,43 @@ def test_a_retry_sends_the_same_message_id_and_failing_for_good_says_so(
     assert attempts == [outbound_message_id(message)] * 4
     message.refresh_from_db()
     assert message.external_id == outbound_message_id(message)
+    assert message.email_delivery_status == TicketMessage.DeliveryStatus.FAILED
+
+
+def test_waiting_for_the_ticket_leaves_the_smtp_attempts_whole(ticket, agent, settings):
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    message = _reply(ticket, agent)
+    attempts = []
+
+    def send(email, *args, **kwargs):
+        attempts.append(1)
+        raise SMTPException("down")
+
+    with mock.patch(
+        "django.core.mail.EmailMultiAlternatives.send", autospec=True, side_effect=send
+    ):
+        # As after many retries spent waiting for the ticket's lock.
+        send_ticket_reply_email.apply(args=[str(message.id)], retries=20)
+
+    assert len(attempts) == 4
+    message.refresh_from_db()
+    assert message.email_delivery_status == TicketMessage.DeliveryStatus.FAILED
+
+
+def test_a_cache_outage_that_lasts_fails_the_delivery(ticket, agent):
+    message = _reply(ticket, agent)
+
+    with mock.patch(
+        "apps.email_channel.outbound.cache.add",
+        side_effect=RedisConnectionError("down"),
+    ):
+        send_ticket_reply_email.apply(
+            args=[str(message.id)],
+            kwargs={"lock_outages": REPLY_LOCK_OUTAGE_MAX_RETRIES},
+        )
+
+    assert mail.outbox == []
+    message.refresh_from_db()
     assert message.email_delivery_status == TicketMessage.DeliveryStatus.FAILED
 
 

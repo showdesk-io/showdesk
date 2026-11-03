@@ -8,6 +8,7 @@ Handles email notifications for ticket lifecycle events:
 """
 
 import logging
+import smtplib
 from email.utils import parseaddr
 
 from celery import shared_task
@@ -26,6 +27,9 @@ REPLY_LOCK_RETRY_SECONDS = 15
 # A reply mail that can't take its lock in a cache outage tries again, for an hour.
 REPLY_LOCK_OUTAGE_RETRY_SECONDS = 60
 REPLY_LOCK_OUTAGE_MAX_RETRIES = 60
+# A reply mail the mail server didn't take is tried again, this many more times.
+REPLY_MAIL_SMTP_MAX_RETRIES = 3
+REPLY_MAIL_SMTP_RETRY_SECONDS = 60
 
 
 def _ticket_url(ticket) -> str:
@@ -125,27 +129,27 @@ def send_ticket_created_email(self, ticket_id: str) -> None:
         raise self.retry(exc=exc)
 
 
-def _attachments(message, attached=()) -> list[dict]:
+def _attachments(message, statuses=None) -> list[dict]:
     """The message's files as a mail names them: never by a storage URL.
 
-    ``attached`` are those the mail carries.
+    ``statuses`` tells what the mail did with each (``outbound.FileStatus``).
     """
     return [
         {
             "filename": att.filename,
             "size": att.file_size,
-            "attached": att.pk in attached,
+            "status": (statuses or {}).get(att.pk, ""),
         }
         for att in message.attachments.all()
     ]
 
 
-def _reply_entry(message, author_label: str, attached=()) -> dict:
+def _reply_entry(message, author_label: str, statuses=None) -> dict:
     return {
         "author_label": author_label,
         "author_initial": (author_label[:1] or "?").upper(),
         "body": message.body,
-        "attachments": _attachments(message, attached),
+        "attachments": _attachments(message, statuses),
     }
 
 
@@ -178,7 +182,31 @@ def _requester_address(ticket) -> str:
     return requester_reply_address(ticket)
 
 
-def _email_requester(task, message, address: str) -> None:
+def _retry(task, countdown: int, **counts):
+    """Run ``task`` again, carrying its own counts of each kind of attempt.
+
+    Celery's count of retries mixes them: waiting for the ticket's lock must not
+    spend the SMTP attempts.
+    """
+    return task.retry(
+        kwargs={**task.request.kwargs, **counts},
+        countdown=countdown,
+        # Each count has its own limit: Celery's (None means its default) never binds.
+        max_retries=task.request.retries + 1,
+    )
+
+
+def _mark_failed(message) -> None:
+    from apps.tickets.models import TicketMessage
+
+    TicketMessage.objects.filter(pk=message.pk).exclude(
+        email_delivery_status=TicketMessage.DeliveryStatus.SENT
+    ).update(email_delivery_status=TicketMessage.DeliveryStatus.FAILED)
+
+
+def _email_requester(
+    task, message, address: str, smtp_attempts: int = 0, lock_outages: int = 0
+) -> None:
     """Email ``address`` the unread replies up to ``message``, ``message``'s mail.
 
     One reply mail at a time per ticket, so that two close replies don't both
@@ -192,20 +220,39 @@ def _email_requester(task, message, address: str) -> None:
     except RedisError as exc:
         # Without the lock, two mails could carry the same replies: wait for the cache.
         logger.warning("Reply lock unavailable for ticket %s: %s", ticket.pk, exc)
-        raise task.retry(
-            countdown=REPLY_LOCK_OUTAGE_RETRY_SECONDS,
-            max_retries=REPLY_LOCK_OUTAGE_MAX_RETRIES,
+        if lock_outages >= REPLY_LOCK_OUTAGE_MAX_RETRIES:
+            logger.error("Reply mail of %s given up: no cache", ticket.reference)
+            _mark_failed(message)
+            return
+        raise _retry(
+            task, REPLY_LOCK_OUTAGE_RETRY_SECONDS, lock_outages=lock_outages + 1
         ) from exc
     if not locked:
-        raise task.retry(countdown=REPLY_LOCK_RETRY_SECONDS, max_retries=None)
+        raise _retry(task, REPLY_LOCK_RETRY_SECONDS)
     try:
-        _send_requester_mail(task, message, address)
+        _send_requester_mail(task, message, address, smtp_attempts)
     finally:
         outbound.unlock_replies(ticket)
 
 
-def _send_requester_mail(task, message, address: str) -> None:
-    """Build and send ``message``'s mail; its Message-ID is the same on a retry."""
+def _refused_for_size(exc: Exception) -> bool:
+    """Tell if the mail server refused the mail for its size."""
+    if not isinstance(exc, smtplib.SMTPResponseException):
+        return False
+    if exc.smtp_code == 552:
+        return True
+    error = exc.smtp_error
+    text = error.decode("utf-8", "replace") if isinstance(error, bytes) else str(error)
+    return isinstance(exc, smtplib.SMTPSenderRefused | smtplib.SMTPDataError) and (
+        "size" in text.lower()
+    )
+
+
+def _send_requester_mail(task, message, address: str, smtp_attempts: int = 0) -> None:
+    """Build and send ``message``'s mail; its Message-ID is the same on a retry.
+
+    Refused for its size, it goes once more at once, naming its files instead.
+    """
     from apps.email_channel import outbound
     from apps.email_channel.tokens import outbound_message_id
     from apps.tickets.models import TicketMessage
@@ -216,11 +263,7 @@ def _send_requester_mail(task, message, address: str) -> None:
         return
     ticket = message.ticket
     replies = outbound.unread_replies(message)
-    files, attached = outbound.mail_attachments(replies)
-    entries = [
-        _reply_entry(reply, outbound.sender_label(reply, address), attached)
-        for reply in replies
-    ]
+    files, statuses = outbound.mail_attachments(replies)
     conversation_url = outbound.conversation_url(ticket, address)
     # The history recalls what the contact said: only for the contact's address.
     history = [
@@ -233,11 +276,11 @@ def _send_requester_mail(task, message, address: str) -> None:
             outbound.context_messages(replies[0]) if conversation_url else ()
         )
     ]
-    author_label = entries[-1]["author_label"]
+    author_label = outbound.sender_label(replies[-1], address)
     intro = (
         f"{author_label} replied to your support ticket."
-        if len(entries) == 1
-        else f"You have {len(entries)} new replies on your support ticket."
+        if len(replies) == 1
+        else f"You have {len(replies)} new replies on your support ticket."
     )
 
     message_id = outbound_message_id(message)
@@ -248,7 +291,17 @@ def _send_requester_mail(task, message, address: str) -> None:
         **outbound.threading_headers(ticket, before=message.created_at),
     }
 
-    try:
+    def send(files, statuses) -> None:
+        entries = [
+            _reply_entry(reply, outbound.sender_label(reply, address), statuses)
+            for reply in replies
+        ]
+        named = {
+            status
+            for entry in entries
+            for file in entry["attachments"]
+            if (status := file["status"]) != outbound.FileStatus.ATTACHED
+        }
         send_branded_email(
             template="ticket_reply",
             subject=f"Re: [{ticket.reference}] {ticket.title}",
@@ -266,22 +319,29 @@ def _send_requester_mail(task, message, address: str) -> None:
                 "author_label": author_label,
                 "intro": intro,
                 "cta_label": "View conversation",
-                "files_not_attached": any(
-                    not file["attached"]
-                    for entry in entries
-                    for file in entry["attachments"]
-                ),
+                "files_too_large": outbound.FileStatus.TOO_LARGE in named,
+                "files_unavailable": outbound.FileStatus.UNAVAILABLE in named,
                 "files_url": conversation_url,
             },
             attachments=files,
         )
+
+    try:
+        try:
+            send(files, statuses)
+        except Exception as exc:
+            if not (files and _refused_for_size(exc)):
+                raise
+            logger.warning("Reply mail of %s too large, sent without files", ticket)
+            send([], {pk: outbound.FileStatus.TOO_LARGE for pk in statuses})
     except Exception as exc:
         logger.exception("Failed to send reply email for %s", ticket.reference)
-        if task.request.retries >= task.max_retries:
-            TicketMessage.objects.filter(pk=message.pk).update(
-                email_delivery_status=TicketMessage.DeliveryStatus.FAILED
-            )
-        raise task.retry(exc=exc)
+        if smtp_attempts >= REPLY_MAIL_SMTP_MAX_RETRIES:
+            _mark_failed(message)
+            return
+        raise _retry(
+            task, REPLY_MAIL_SMTP_RETRY_SECONDS, smtp_attempts=smtp_attempts + 1
+        ) from exc
     TicketMessage.objects.filter(pk__in=[reply.pk for reply in replies]).update(
         email_delivery_status=TicketMessage.DeliveryStatus.SENT
     )
@@ -298,7 +358,9 @@ def _is_agent_reply(message) -> bool:
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_ticket_reply_email(self, message_id: str) -> None:
+def send_ticket_reply_email(
+    self, message_id: str, smtp_attempts: int = 0, lock_outages: int = 0
+) -> None:
     """Notify the relevant party when a reply is added.
 
     - If an agent replies -> email the requester, with the replies still unread
@@ -323,7 +385,7 @@ def send_ticket_reply_email(self, message_id: str) -> None:
         if not address:
             logger.info("No requester to email for ticket %s.", ticket.reference)
             return
-        _email_requester(self, message, address)
+        _email_requester(self, message, address, smtp_attempts, lock_outages)
         return
 
     if ticket.assigned_agent and ticket.assigned_agent.email:
@@ -374,7 +436,9 @@ def send_ticket_reply_email(self, message_id: str) -> None:
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_unread_reply_email(self, message_id: str) -> None:
+def send_unread_reply_email(
+    self, message_id: str, smtp_attempts: int = 0, lock_outages: int = 0
+) -> None:
     """Email an agent's reply the requester left unread in the widget.
 
     Nothing if it was read, or if a later reply's own task will carry it.
@@ -393,7 +457,7 @@ def send_unread_reply_email(self, message_id: str) -> None:
         return
     address = _requester_address(message.ticket)
     if address:
-        _email_requester(self, message, address)
+        _email_requester(self, message, address, smtp_attempts, lock_outages)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)

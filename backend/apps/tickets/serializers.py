@@ -177,6 +177,10 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
         return value
 
 
+# Files an agent's message takes, at most.
+MAX_FILES_PER_MESSAGE = 10
+
+
 class TicketMessageSerializer(serializers.ModelSerializer):
     """Serializer for ticket messages."""
 
@@ -230,6 +234,10 @@ class TicketMessageSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         ticket = attrs.get("ticket") or getattr(self.instance, "ticket", None)
         files = attrs.get("attachment_ids") or []
+        if len(files) > MAX_FILES_PER_MESSAGE:
+            raise serializers.ValidationError(
+                {"attachment_ids": f"At most {MAX_FILES_PER_MESSAGE} files a message."}
+            )
         if self.instance is not None and files:
             raise serializers.ValidationError(
                 {"attachment_ids": "Files are only added to a new message."}
