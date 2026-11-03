@@ -1,5 +1,6 @@
 """Serializers for ticket-related models."""
 
+from django.conf import settings
 from django.db.models import Count, Q
 from rest_framework import serializers
 from rest_framework.fields import empty
@@ -683,7 +684,10 @@ class WidgetSessionSerializer(serializers.ModelSerializer):
         """Whether the widget offers a code: an email without a proof.
 
         Whatever exists behind the address, so the answer tells nothing about it.
+        Never on an instance that receives no mail: no conversation came by email.
         """
+        if not settings.INBOUND_EMAIL_DOMAIN:
+            return False
         email = normalized_email(obj.email)
         return bool(email) and not (
             obj.email_verified_at and obj.email_verified_for == email

@@ -36,6 +36,8 @@ SESSION_URL = "/api/v1/tickets/widget_session/"
 @pytest.fixture(autouse=True)
 def _eager(settings):
     settings.CELERY_TASK_ALWAYS_EAGER = True
+    # Email-born conversations, the ones a code opens, need the inbound channel.
+    settings.INBOUND_EMAIL_DOMAIN = "in.example.com"
 
 
 @pytest.fixture
@@ -292,6 +294,18 @@ class TestProofSource:
         assert res.data["email_proof_offered"] is True
         res = _post(org, SESSION_URL)
         assert res.data["email_proof_offered"] is False
+
+    def test_neither_offered_nor_mailed_without_the_inbound_channel(
+        self, org, settings
+    ):
+        settings.INBOUND_EMAIL_DOMAIN = ""
+        _email_ticket(org, ContactFactory(organization=org, email="a@x.io"))
+
+        res = _post(org, SESSION_URL, email="a@x.io")
+        assert res.data["email_proof_offered"] is False
+        session = WidgetSession.objects.get(pk=res.data["session_id"])
+        assert _post(org, CODE_URL, session).status_code == 202
+        assert mail.outbox == []
 
 
 def _asking(org, email="a@x.io", **fields):

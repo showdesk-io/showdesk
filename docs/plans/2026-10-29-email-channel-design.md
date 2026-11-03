@@ -545,3 +545,11 @@ What agents and admins have:
   the browser.
 - `manage.py seed` adds a "Support" mailbox to the demo organization when
   `INBOUND_EMAIL_DOMAIN` is set.
+
+Without `INBOUND_EMAIL_DOMAIN` (an instance that receives no mail):
+
+- The widget never offers the email code (`email_proof_offered` is false), and the
+  code routes answer as when a proof would open nothing: no conversation came by
+  email.
+- The conversation link, its page and its API stay available: reply mails still
+  carry the link, a useful way back to the conversation on its own.

@@ -10,6 +10,7 @@ proof of anything.
 from functools import reduce
 from operator import or_
 
+from django.conf import settings
 from django.db.models import Q, QuerySet
 
 from apps.contacts.models import Contact
@@ -118,8 +119,10 @@ def email_proof_would_open(session, email: str) -> bool:
     anonymous session links to that contact, an identified one only takes an
     email-only contact's history into its own contact with no email (Contacts design
     §3 rule 1), and only with an external id the service would use. Anywhere else, a
-    code would prove nothing.
+    code would prove nothing, as on an instance that receives no mail.
     """
+    if not settings.INBOUND_EMAIL_DOMAIN:
+        return False
     org_id = session.organization_id
     holder = Contact.objects.filter(
         organization_id=org_id, email=email, is_anonymized=False
