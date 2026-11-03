@@ -257,6 +257,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.email_channel.tasks.purge_inbound_raw",
         "schedule": 60 * 60 * 24,
     },
+    "purge-expired-otp-codes": {
+        "task": "apps.organizations.tasks.purge_expired_otp_codes",
+        "schedule": 60 * 60 * 24,
+    },
 }
 
 # =============================================================================

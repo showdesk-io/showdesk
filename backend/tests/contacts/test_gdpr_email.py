@@ -9,11 +9,13 @@ from django.core.files.base import ContentFile
 
 from apps.contacts.gdpr import anonymize_contact, build_contact_export
 from apps.email_channel.models import InboundEmail
-from apps.tickets.models import TicketMessage
+from apps.organizations.models import OTPCode
+from apps.tickets.models import TicketMessage, WidgetSession
 from tests.factories import (
     ContactFactory,
     InboundEmailFactory,
     MailboxFactory,
+    OrganizationFactory,
     TicketFactory,
     TicketMessageFactory,
 )
@@ -121,3 +123,32 @@ def test_anonymization_clears_the_contacts_address_as_a_mail_sender(mailbox, con
     in_another_org.refresh_from_db()
     assert elsewhere_in_org.external_sender == ""
     assert in_another_org.external_sender == "ann@example.org"
+
+
+def test_anonymization_deletes_the_contacts_widget_codes(mailbox, contact):
+    org = mailbox.organization
+    own_session = WidgetSession.objects.create(
+        organization=org, contact=contact, email="ann@other.example"
+    )
+    stranger = WidgetSession.objects.create(organization=org, email=ANN)
+    elsewhere = OrganizationFactory()
+    kept = [
+        OTPCode.generate(ANN),  # A login code: the address may be an agent's too.
+        OTPCode.generate(
+            ANN,
+            purpose=OTPCode.Purpose.WIDGET_EMAIL,
+            organization=elsewhere,
+            widget_session=WidgetSession.objects.create(organization=elsewhere),
+        ),
+    ]
+    for session in (own_session, stranger):
+        OTPCode.generate(
+            session.email,
+            purpose=OTPCode.Purpose.WIDGET_EMAIL,
+            organization=org,
+            widget_session=session,
+        )
+
+    anonymize_contact(contact)
+
+    assert set(OTPCode.objects.values_list("pk", flat=True)) == {otp.pk for otp in kept}

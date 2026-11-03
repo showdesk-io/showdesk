@@ -233,6 +233,24 @@ def _delete_inbound_mail(contact: Contact, email: str, ticket_ids) -> None:
         ).update(external_sender="", updated_at=timezone.now())
 
 
+def _delete_widget_codes(contact: Contact) -> None:
+    """Delete the widget codes mailed to the contact's address, or to its sessions.
+
+    In the contact's organization only. To be called before the address is scrubbed
+    and the sessions unlinked. Login codes aren't the organization's to delete.
+    """
+    from apps.organizations.models import OTPCode
+
+    query = Q(widget_session__contact=contact)
+    if contact.email:
+        query |= Q(email=contact.email)
+    OTPCode.objects.filter(
+        query,
+        purpose=OTPCode.Purpose.WIDGET_EMAIL,
+        organization_id=contact.organization_id,
+    ).delete()
+
+
 def _tickets_of(contact: Contact, session_ids, external_id: str):
     """Return the contact's tickets, and those it wrote that don't say so.
 
@@ -305,6 +323,7 @@ def anonymize_contact(contact: Contact) -> Contact | None:
     )
     ticket_ids = [ticket.pk for ticket in tickets]
     _delete_inbound_mail(contact, contact.email, ticket_ids)
+    _delete_widget_codes(contact)
     _scrub_contact(contact)
 
     # Free text written by agents, which can hold personal data about the contact.
