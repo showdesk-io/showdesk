@@ -233,3 +233,24 @@ def test_the_delivery_backfill_covers_every_batch() -> None:
         ("agent", "sent"),
         ("user", ""),
     ]
+
+
+def test_the_tickets_table_is_never_locked_to_index_the_mailbox():
+    """The mailbox index is built concurrently, outside any transaction."""
+    from django.contrib.postgres.operations import AddIndexConcurrently
+    from django.db.migrations.loader import MigrationLoader
+
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    added_field = loader.get_migration(*BEFORE_CHANNEL_BACKFILL).operations[0]
+    assert added_field.name == "mailbox"
+    assert added_field.field.db_index is False
+    builds = [
+        (migration, operation)
+        for (app, _), migration in loader.disk_migrations.items()
+        if app == "tickets"
+        for operation in migration.operations
+        if isinstance(operation, AddIndexConcurrently)
+        and operation.index.fields == ["mailbox"]
+    ]
+    assert len(builds) == 1
+    assert builds[0][0].atomic is False

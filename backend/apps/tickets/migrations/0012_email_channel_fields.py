@@ -16,6 +16,7 @@ class Migration(migrations.Migration):
             name="mailbox",
             field=models.ForeignKey(
                 blank=True,
+                db_index=False,
                 help_text="Mailbox the ticket was opened through, for tickets opened by email.",
                 null=True,
                 on_delete=django.db.models.deletion.SET_NULL,

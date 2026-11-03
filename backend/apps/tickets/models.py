@@ -424,6 +424,8 @@ class Ticket(TimestampedModel):
         null=True,
         blank=True,
         related_name="tickets",
+        # Indexed in Meta.indexes, built concurrently on a table that may be large.
+        db_index=False,
         help_text="Mailbox the ticket was opened through, for tickets opened by email.",
     )
     widget_last_read_at = models.DateTimeField(
@@ -451,6 +453,7 @@ class Ticket(TimestampedModel):
             models.Index(fields=["organization", "status"]),
             models.Index(fields=["organization", "priority"]),
             models.Index(fields=["assigned_agent", "status"]),
+            models.Index(fields=["mailbox"], name="ticket_mailbox"),
         ]
 
     def __str__(self) -> str:
