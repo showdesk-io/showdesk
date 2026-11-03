@@ -81,3 +81,27 @@ def test_a_ticket_resolved_too_long_ago_takes_nothing_more(settings):
     assert ticket.status == Ticket.Status.RESOLVED
     assert not TicketMessage.objects.filter(ticket=ticket).exists()
     assert not TicketAttachment.objects.filter(ticket=ticket).exists()
+
+
+def test_a_refused_file_reopens_nothing_and_writes_nothing(settings):
+    settings.INBOUND_EMAIL_REOPEN_DAYS = 7
+    ticket, client = _closed_ticket(days_ago=2)
+
+    def send(ticket_id=None):
+        data = {
+            "body_type": "file",
+            "file": SimpleUploadedFile("run.exe", b"MZ", "application/x-msdownload"),
+        }
+        if ticket_id:
+            data["ticket_id"] = ticket_id
+        return client.post(f"{API}widget_message_attachment/", data, format="multipart")
+
+    refused = send(str(ticket.pk))
+    assert refused.status_code == 400
+    assert "file" in refused.data
+    ticket.refresh_from_db()
+    assert ticket.status == Ticket.Status.RESOLVED
+    assert not TicketMessage.objects.exists()
+    # Nor does it open a ticket.
+    assert send().status_code == 400
+    assert Ticket.objects.count() == 1

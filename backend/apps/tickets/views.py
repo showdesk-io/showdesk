@@ -1336,6 +1336,14 @@ class TicketViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Checked before anything is written: a refused file opens or reopens nothing.
+        try:
+            TicketAttachmentSerializer(context={"organization": org}).validate_file(
+                uploaded_file
+            )
+        except ValidationError as exc:
+            raise ValidationError({"file": exc.detail}) from exc
+
         ticket_id = request.data.get("ticket_id")
         body_type = request.data.get("body_type", "image")
         body = request.data.get("body", "")
