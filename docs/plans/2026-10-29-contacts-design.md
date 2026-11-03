@@ -117,7 +117,8 @@ session and refused (403) when it's the only way to the session asked for (rule 
 a malformed `external_user_id` is a 400.
 
 1. **Identified widget session** (valid `user_hash`): the Contact is found or
-   created on `(organization, external_id)`. No automatic merge, ever.
+   created on `(organization, external_id)`. No automatic merge, but for the one
+   case of a proven email below.
    - **Unproven email**: `Contact.email` never receives it. It is stored in
      `declared_email`, only on that session's own Contact, and the latest value
      wins, so a different email on a resume also replaces `WidgetSession.email`. An
@@ -126,11 +127,20 @@ a malformed `external_user_id` is a 400.
      API search.
    - **Proven email**: a Contact with a blank `email` takes it if no other Contact
      owns it. A new external id attaches to the email-only Contact owning it
-     (`external_id` blank). A Contact holding another email keeps it, and a proven
-     email that is owned elsewhere stays with its owner: in both cases the session
-     proved nothing about this Contact, nothing is marked verified and
-     `declared_email` is left as it is. Otherwise `declared_email` is cleared if it
-     equals the proven email.
+     (`external_id` blank). A Contact with a blank `email` whose proven email is
+     held by an email-only, non-anonymized Contact reunites their history: that
+     Contact's tickets, sessions and notes move to it, its name, phone, avatar, job
+     title, locale, timezone, company and first-seen date fill the blanks, its
+     attributes fill the missing keys, an unsubscription is kept, and the
+     email-only row is deleted in the same transaction before the email moves.
+     Nothing moved becomes verified: `sender_verified` stays false on those
+     tickets, and their sessions open no history without a proof of their own.
+     The identified Contact is locked first, then the email-only one, and nothing
+     locks two Contacts the other way. A Contact holding another email keeps it,
+     and a proven email that is owned by an identified or anonymized Contact stays
+     with its owner: in both cases the session proved nothing about this Contact,
+     nothing is marked verified and `declared_email` is left as it is. Otherwise
+     `declared_email` is cleared if it equals the proven email.
 2. **Proof of an email**: a valid `email_hash` (`data-user-email-hash` /
    `user.emailHash`), or a later proof of ownership (see the email channel design).
    When the Contact ends up holding that email, the session and the Contact are
@@ -422,10 +432,12 @@ in the widget.
 
 ## 8. Known limitations
 
-- An identified Contact with a blank `email` can't take a proven email currently
-  held by an email-only Contact, since there's no merge. No access is granted. To
-  resolve in the email channel PR, where history reunion needs it, by reassigning that
-  unverified Contact's tickets on proof, or with the planned manual merge.
+- An identified Contact with a blank `email` takes a proven email held by an
+  email-only Contact with its history (rule 1). One holding another email, or whose
+  proven email is held by another identified Contact, can't: no access is granted,
+  and only the planned manual merge reunites them. The reunion moves everything the
+  email-only Contact had, including tickets someone else may have filed under that
+  address before the proof: they stay unverified, as they were.
 - An unsigned payload can link a Contact without a Company to any existing Company by
   id. It's a claim shown to agents and grants no access.
 - A login moves the anonymous session's tickets to whoever logs in on that browser. On

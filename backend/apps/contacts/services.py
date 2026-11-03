@@ -11,16 +11,19 @@ Email rules:
   An identified session's unproven email goes to ``declared_email`` on its own
   contact, where the latest value wins.
 - A proven email (``email_verified=True``) fills the blank ``email`` of the
-  session's contact unless another contact owns it, or attaches the session to
-  an email-only contact when the external id is new. It is never moved between
-  contacts, and it only counts when it is the email the contact ends up with.
+  session's contact unless an identified or anonymized contact owns it, or attaches
+  the session to an email-only contact when the external id is new. It only counts
+  when it is the email the contact ends up with.
 - Anonymous sessions and inbound mail still use email-only contacts, first come,
   unverified: that grants no access, and a proof later attaches to the contact.
 - An anonymous session's unproven email writes nothing on a contact that already
   exists: no seen dates, no ``updated_at``, no company. It only links the session.
   An inbound mail writes one thing at most: a missing company, from the domain of
   the email the contact already holds (see ``resolve_contact_for_email``).
-- Two contacts are never merged.
+- Two contacts are never merged, but for one case: an identified contact with no
+  email proving the address of an email-only one takes its tickets, sessions, notes
+  and blanks, then its email, and the email-only row is deleted
+  (``_absorb_email_only_contact``). Nothing moved becomes verified.
 - A conversation link mailed to the address a contact holds proves it
   (``mark_email_proven``).
 
@@ -61,9 +64,16 @@ from apps.organizations.models import (
     is_end_user_account,
     is_public_email_domain,
 )
+from apps.tickets.models import Ticket, WidgetSession
 
 from .attributes import clean_attributes, is_storable, merged_attributes
-from .models import Company, CompanyAttributeDef, Contact, ContactAttributeDef
+from .models import (
+    Company,
+    CompanyAttributeDef,
+    Contact,
+    ContactAttributeDef,
+    ContactNote,
+)
 
 _EMAIL_MAX = Contact._meta.get_field("email").max_length
 _NAME_MAX = Contact._meta.get_field("name").max_length
@@ -364,9 +374,65 @@ def _record_identified_email(
     if not email_verified:
         # The email it already holds is no separate claim for agents to review.
         _set(contact, changed, declared_email="" if email == contact.email else email)
-    elif not contact.email and not _email_taken(org, email):
-        # A verification date left by a previous email is about that email.
-        _set(contact, changed, email=email, email_verified_at=None)
+    elif not contact.email:
+        other = _email_only_holder(org, email)
+        if other is not None:
+            _absorb_email_only_contact(contact, other, changed)
+        elif not _email_taken(org, email):
+            # A verification date left by a previous email is about that email.
+            _set(contact, changed, email=email, email_verified_at=None)
+
+
+def _email_only_holder(org, email: str) -> Contact | None:
+    """Return the email-only, non-anonymized contact holding ``email``, locked.
+
+    Locked to be deleted: a plain ``FOR UPDATE``, so nothing can link to it meanwhile.
+    The lock order is the identified contact, then this one. Nothing locks them the
+    other way around: an email-only contact never takes another one's history.
+    """
+    return (
+        Contact.objects.select_for_update()
+        .filter(organization=org, email=email, external_id="", is_anonymized=False)
+        .first()
+    )
+
+
+_FILLED_FIELDS = ("name", "phone", "avatar_url", "job_title", "locale", "timezone")
+
+
+def _absorb_email_only_contact(
+    contact: Contact, other: Contact, changed: set[str]
+) -> None:
+    """Give a contact that proved an email what an email-only contact holds under it.
+
+    Only on a proof, and only from a contact with no identity of its own (Contacts
+    design §8). Everything moved was written under a merely declared address, so no
+    sender becomes verified: the sessions that wrote those tickets still have to prove
+    themselves. The contact's own values win, the other's fill its blanks, and an
+    unsubscription is kept. Sessions before tickets, the identity lock order.
+    """
+    WidgetSession.objects.filter(contact=other).update(contact=contact)
+    Ticket.objects.filter(contact=other).update(contact=contact)
+    ContactNote.objects.filter(contact=other).update(contact=contact)
+    for field in _FILLED_FIELDS:
+        if getattr(other, field) and not getattr(contact, field):
+            _set(contact, changed, **{field: getattr(other, field)})
+    if other.company_id and not contact.company_id:
+        _set(contact, changed, company=other.company)
+    theirs = other.attributes if isinstance(other.attributes, dict) else {}
+    if theirs and isinstance(contact.attributes, dict):
+        _set(contact, changed, attributes={**theirs, **contact.attributes})
+    if other.is_unsubscribed:
+        _set(contact, changed, is_unsubscribed=True)
+    if other.first_seen_at and (
+        contact.first_seen_at is None or other.first_seen_at < contact.first_seen_at
+    ):
+        _set(contact, changed, first_seen_at=other.first_seen_at)
+    email = other.email
+    # Frees the email in this transaction, before ours takes it.
+    other.delete()
+    # A verification date left by a previous email is about that email.
+    _set(contact, changed, email=email, email_verified_at=None)
 
 
 def _resolve_session_once(
