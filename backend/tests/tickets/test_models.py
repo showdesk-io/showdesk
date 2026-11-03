@@ -20,6 +20,8 @@ from tests.factories import (
 
 BEFORE_CHANNEL_BACKFILL = ("tickets", "0012_email_channel_fields")
 CHANNEL_BACKFILL = ("tickets", "0013_backfill_message_channel")
+BEFORE_DELIVERY_BACKFILL = ("tickets", "0014_ticketmessage_external_id_index")
+DELIVERY_BACKFILL = ("tickets", "0015_backfill_reply_delivery")
 
 
 @pytest.mark.django_db
@@ -180,4 +182,54 @@ def test_backfill_covers_every_batch() -> None:
         ("agent", "agent"),
         ("system", "system"),
         ("user", "widget"),
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_replies_before_the_email_channel_count_as_emailed() -> None:
+    """Else the first mail after the upgrade would send them all again."""
+    executor = MigrationExecutor(connection)
+    executor.migrate([BEFORE_DELIVERY_BACKFILL])
+    try:
+        historical = executor.loader.project_state(BEFORE_DELIVERY_BACKFILL).apps
+        ticket = historical.get_model("tickets", "Ticket").objects.create(
+            organization_id=OrganizationFactory().pk, reference="SD-0001", title="Old"
+        )
+        create = historical.get_model("tickets", "TicketMessage").objects.create
+        reply = create(ticket_id=ticket.pk, sender_type="agent")
+        note = create(
+            ticket_id=ticket.pk, sender_type="agent", message_type="internal_note"
+        )
+        user = create(ticket_id=ticket.pk, sender_type="user")
+        executor = MigrationExecutor(connection)
+        executor.migrate([DELIVERY_BACKFILL])
+    finally:
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+    statuses = dict(
+        TicketMessage.objects.filter(ticket_id=ticket.pk).values_list(
+            "pk", "email_delivery_status"
+        )
+    )
+    assert statuses == {reply.pk: "sent", note.pk: "", user.pk: ""}
+
+
+@pytest.mark.django_db
+def test_the_delivery_backfill_covers_every_batch() -> None:
+    backfill = importlib.import_module(
+        "apps.tickets.migrations.0015_backfill_reply_delivery"
+    ).backfill_delivery
+    ticket = TicketFactory(requester=None)
+    for sender_type in ("agent", "user", "agent", "agent"):
+        TicketMessageFactory(ticket=ticket, author=None, sender_type=sender_type)
+
+    backfill(django_apps, None, batch_size=2)
+
+    assert sorted(
+        ticket.messages.values_list("sender_type", "email_delivery_status")
+    ) == [
+        ("agent", "sent"),
+        ("agent", "sent"),
+        ("agent", "sent"),
+        ("user", ""),
     ]
