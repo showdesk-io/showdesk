@@ -140,6 +140,25 @@ function renderReadOnlyNotice(store: WidgetStore): HTMLElement {
 }
 
 /**
+ * The messages, with the optimistic one now sent under its real id. The WebSocket may
+ * have brought the same message first: the optimistic one, with its local preview,
+ * stays in its place.
+ */
+function confirmSent(
+  store: WidgetStore,
+  tempId: string,
+  result: { messageId: string; ticketId: string },
+): ChatMessage[] {
+  return store.state.messages
+    .filter((m) => m.id !== result.messageId)
+    .map((m) =>
+      m.id === tempId
+        ? { ...m, id: result.messageId, ticketId: result.ticketId, _status: "sent" as const }
+        : m,
+    );
+}
+
+/**
  * A refusal to write on the active conversation: show it read-only from now on.
  * A 403 is a conversation only seen through the history, a 409 one closed too long
  * ago to reopen.
@@ -433,11 +452,7 @@ async function postText(
     if (!store.state.messages.some((m) => m.id === tempId)) return;
 
     // Update optimistic message with real data
-    const updated = store.state.messages.map((m) =>
-      m.id === tempId
-        ? { ...m, id: result.messageId, ticketId: result.ticketId, _status: "sent" as const }
-        : m,
-    );
+    const updated = confirmSent(store, tempId, result);
     store.update({
       messages: updated,
       activeTicketId: result.ticketId,
@@ -501,11 +516,7 @@ async function handleSendAttachment(
 
     if (!store.state.messages.some((m) => m.id === tempId)) return;
 
-    const updated = store.state.messages.map((m) =>
-      m.id === tempId
-        ? { ...m, id: result.messageId, ticketId: result.ticketId, _status: "sent" as const }
-        : m,
-    );
+    const updated = confirmSent(store, tempId, result);
     store.update({
       messages: updated,
       activeTicketId: result.ticketId,

@@ -270,6 +270,23 @@ async function runSession(config: ShowdeskConfig, run: number): Promise<void> {
   }
 }
 
+/** User messages from the WebSocket, waiting for this widget's sends to answer. */
+let heldUserMessages: ChatMessage[] = [];
+let releaseHeld: (() => void) | null = null;
+
+/** Show the held user messages of the open conversation not on screen yet. */
+function showHeldUserMessages(s: WidgetStore): void {
+  if (!heldUserMessages.length) return;
+  if (s.state.messages.some((m) => m._status === "sending")) return;
+  const held = heldUserMessages;
+  heldUserMessages = [];
+  const shown = new Set(s.state.messages.map((m) => m.id));
+  const fresh = held.filter(
+    (m) => m.ticketId === s.state.activeTicketId && !shown.has(m.id),
+  );
+  if (fresh.length) s.update({ messages: [...s.state.messages, ...fresh] });
+}
+
 /** Point the shared WebSocket at a session, instead of the one it was on. */
 function connectWebSocket(
   config: ShowdeskConfig,
@@ -278,15 +295,25 @@ function connectWebSocket(
 ): void {
   const socket = getWebSocket();
   socket.disconnect();
+  heldUserMessages = [];
+  releaseHeld?.();
+  releaseHeld = s.subscribe(() => showHeldUserMessages(s));
   socket.onMessage = (msg: ChatMessage) => {
-    // Skip user's own messages — already handled by optimistic UI
-    if (msg.senderType === "user") return;
-
     // The user is actively looking at this ticket only if the panel is
     // open AND the ticket is the currently-displayed one. Otherwise the
     // message counts as unread, even on the "last active" ticket.
     const isViewing =
       isPanelVisible() && msg.ticketId === s.state.activeTicketId;
+
+    // The user's own words: shown if they wrote elsewhere (by email, on the
+    // conversation page), never counted as unread. What this widget sent is
+    // already on screen under its id, or will be once its request answers: until
+    // then, the event waits, so as not to stand for the message being sent.
+    if (msg.senderType === "user") {
+      heldUserMessages.push(msg);
+      showHeldUserMessages(s);
+      return;
+    }
 
     if (isViewing) {
       // Don't add duplicates
