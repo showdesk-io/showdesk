@@ -315,7 +315,7 @@ def test_the_raw_mail_has_no_url_in_any_serializer(): ...  # added with Task 16
 
 **Step 3: Implement**
 
-`recipients.resolve(message) -> Recipient(mailbox, ticket, address)` follows §4.1: `reply+{token}` on any header, then the envelope recipient, `Delivered-To`, `X-Original-To`, `X-Forwarded-To`, `To`, `Cc`, matching `local_part@INBOUND_EMAIL_DOMAIN` or `public_address` (lowercased) on an active mailbox.
+`recipients.resolve(message) -> Recipient(mailbox, ticket, address)` follows §4.1. With an envelope recipient, it alone is resolved: a `reply+{token}`, or `local_part@INBOUND_EMAIL_DOMAIN` or `public_address` (lowercased) of an active mailbox; anything else is `rejected/unknown_recipient`. Without one (`ingest_eml` without `--recipient`), the headers are searched: `reply+{token}` on any of them first, then `Delivered-To`, `X-Original-To`, `X-Forwarded-To`, `To`, `Cc` in that order. A mailbox or ticket of an inactive organization is `rejected/inactive_organization`. The `InboundEmail` foreign key to the message is `ticket_message` (`message` would clash with the `message_id` column).
 
 `inbound.store(message) -> InboundEmail | None` is the only entry point, used by the signal and `ingest_eml`. In one transaction: resolve the recipient, normalize the Message-ID, `get_or_create` on `(message_id, mailbox)`, save the raw bytes only if created, `transaction.on_commit(process_inbound_email.delay)` unless rejected. It returns None for a duplicate. Any exception reaches the view, so the provider retries.
 
@@ -654,7 +654,7 @@ Commit: `feat(widget): prove an email by code to see its conversations`
 
 **Files:** Create `backend/apps/email_channel/{views,serializers}.py`, modify `backend/config/api_urls.py`, `backend/apps/tickets/serializers.py` (`channel`, `external_sender`, `mailbox`, `email_delivery_status` read-only), `backend/apps/organizations/serializers.py` or the setup response (`inbound_email_enabled`); test `test_mailbox_api.py`.
 
-- `/api/v1/mailboxes/`: agents read, admins write (`IsOrgAdminOrReadOnly`, `HasStrictActiveOrg`, org-scoped). `POST …/{id}/regenerate-address/`. `local_part` read-only, `default_team` validated in the organization, `public_address` unique with a clear 400.
+- `/api/v1/mailboxes/`: agents read, admins write (`IsOrgAdminOrReadOnly`, `HasStrictActiveOrg`, org-scoped). `POST …/{id}/regenerate-address/`. `local_part` read-only, `default_team` validated in the organization, `public_address` unique with a clear 400. The serializer runs the model's `full_clean()`: the check that `public_address` is off `INBOUND_EMAIL_DOMAIN` is in `Mailbox.clean()` only.
 - `GET /api/v1/mailboxes/{id}/inbound/`: paginated log filtered to `ignored`, `rejected`, `failed`. Rejected mails have no mailbox, so they stay in the admin only.
 - `POST /api/v1/inbound-emails/{id}/replay/` for admins, on a `failed` row.
 - `GET /api/v1/tickets/{id}/messages/{mid}/original/`: agents of the organization; streams the raw file as `message/rfc822` with `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`.

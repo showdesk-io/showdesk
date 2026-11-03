@@ -100,7 +100,11 @@ class Mailbox(TimestampedModel):
         super().save(*args, **kwargs)
 
     def regenerate_address(self) -> None:
-        """Give this mailbox a new inbound address. The previous one stops working."""
+        """Give this mailbox a new inbound address.
+
+        Mail the provider delivers to the previous one is then rejected, whatever
+        its headers say.
+        """
         self.local_part = _generate_local_part(self.organization.slug)
         self.save(update_fields=["local_part", "updated_at"])
 

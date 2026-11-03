@@ -68,3 +68,23 @@ def test_a_forged_token_is_not_a_recipient():
     forged = f"reply+{ticket.id.hex}.{signature}@in.example.com"
 
     assert resolve(parse(build(To=forged))) is None
+
+
+def test_a_regenerated_address_is_rejected_even_with_the_public_address_in_to():
+    # Headers are the sender's to write: only the provider's envelope is trusted.
+    mailbox = MailboxFactory(public_address="support@acme.example.com")
+    previous = mailbox.inbound_address
+    mailbox.regenerate_address()
+
+    assert resolve(parse(build(), envelope_recipient=previous)) is None
+
+
+def test_the_envelope_wins_over_a_reply_token_in_the_headers():
+    other_ticket = TicketFactory(mailbox=MailboxFactory())
+    mailbox = MailboxFactory()
+    raw = build(Cc=reply_address(other_ticket))
+
+    recipient = resolve(parse(raw, envelope_recipient=mailbox.inbound_address))
+
+    assert recipient.mailbox == mailbox
+    assert recipient.ticket is None

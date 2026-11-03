@@ -8,8 +8,9 @@ from django.core.management import call_command
 
 from apps.email_channel.inbound import store
 from apps.email_channel.models import InboundEmail
+from apps.email_channel.tokens import reply_address
 from tests.email_channel.mails import build, fixture_bytes, parse
-from tests.factories import MailboxFactory
+from tests.factories import MailboxFactory, OrganizationFactory, TicketFactory
 
 pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("local_media")]
 
@@ -73,6 +74,26 @@ def test_unknown_recipient_is_stored_rejected_with_no_task(
     assert stored.status == InboundEmail.Status.REJECTED
     assert stored.reason == "unknown_recipient"
     assert stored.raw
+    delay.assert_not_called()
+
+
+def test_mail_for_an_inactive_organization_is_rejected(
+    delay, django_capture_on_commit_callbacks
+):
+    organization = OrganizationFactory(is_active=False)
+    mailbox = MailboxFactory(organization=organization)
+    ticket = TicketFactory(
+        organization=organization, mailbox=MailboxFactory(organization=organization)
+    )
+    with django_capture_on_commit_callbacks(execute=True):
+        to_mailbox = store(parse(build(), envelope_recipient=mailbox.inbound_address))
+        to_ticket = store(
+            parse(build(Message_ID="<2@x>"), envelope_recipient=reply_address(ticket))
+        )
+
+    for stored in (to_mailbox, to_ticket):
+        assert stored.status == InboundEmail.Status.REJECTED
+        assert stored.reason == "inactive_organization"
     delay.assert_not_called()
 
 

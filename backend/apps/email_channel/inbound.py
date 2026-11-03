@@ -61,6 +61,9 @@ def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
         if recipient is None:
             defaults["status"] = InboundEmail.Status.REJECTED
             defaults["reason"] = "unknown_recipient"
+        elif not recipient.organization.is_active:
+            defaults["status"] = InboundEmail.Status.REJECTED
+            defaults["reason"] = "inactive_organization"
         inbound, created = InboundEmail.objects.get_or_create(
             message_id=normalize_message_id(message, raw),
             mailbox=mailbox,

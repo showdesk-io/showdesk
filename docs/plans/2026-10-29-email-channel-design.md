@@ -123,14 +123,20 @@ same pipeline (testing, self-hosters, replaying).
 
 ### 4.1 Recipient resolution
 
+The envelope recipient is what the provider delivered to; the headers are
+whatever the sender wrote. So when the provider gives an envelope recipient, it
+alone is resolved. The headers are only searched for a mail without one, as fed
+to `ingest_eml` without `--recipient`.
+
 1. `reply+{token}@…` → ticket (and its mailbox).
-2. Otherwise search, in order, the envelope recipient (when the provider
-   exposes it), `Delivered-To`, `X-Original-To`, `X-Forwarded-To`, `To`, `Cc`
-   for an active Mailbox matching `local_part@INBOUND_EMAIL_DOMAIN` **or**
-   `public_address`. This covers forwarding, where `To` stays
+2. Otherwise an active Mailbox matching `local_part@INBOUND_EMAIL_DOMAIN`
+   **or** `public_address`: the envelope recipient, or, without one, the first
+   match in `Delivered-To`, `X-Original-To`, `X-Forwarded-To`, `To`, `Cc`.
+   A forward is delivered to the inbound address while `To` stays
    `support@acme.com`.
-3. Nothing found → `rejected` / `unknown_recipient`. Inbound email never
-   creates an Organization or a Mailbox.
+3. Nothing found → `rejected` / `unknown_recipient`; a mailbox or ticket of an
+   inactive organization → `rejected` / `inactive_organization`. Inbound email
+   never creates an Organization or a Mailbox.
 
 ### 4.2 Filters (status `ignored`, reason recorded)
 
@@ -353,6 +359,14 @@ All new variables are documented in `.env.example` with safe defaults.
 Operators must publish SPF/DKIM for `INBOUND_EMAIL_DOMAIN` with their sending
 service, since fallback mail is sent from that domain, and point its MX to the
 inbound provider.
+
+### Known limitations
+
+- `Mailbox.public_address` is unique across organizations and unverified: an
+  organization can claim `support@bigcorp.com` before BigCorp does. It receives
+  none of BigCorp's mail (the envelope, BigCorp's own inbound address, decides),
+  but BigCorp can't register the address until it is freed. To be tied to a
+  verified sending domain in PR 3.
 
 ---
 
