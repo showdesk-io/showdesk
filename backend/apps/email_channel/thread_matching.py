@@ -147,6 +147,17 @@ def lock_matched_ticket(match: Match, organization) -> Ticket | None:
     )
 
 
+def reopen_expired(ticket: Ticket) -> bool:
+    """Tell if ``ticket`` was resolved or closed too long ago to reopen."""
+    if ticket.status not in (Ticket.Status.RESOLVED, Ticket.Status.CLOSED):
+        return False
+    ended = max(
+        (date for date in (ticket.resolved_at, ticket.closed_at) if date),
+        default=ticket.updated_at,
+    )
+    return timezone.now() - ended > timedelta(days=settings.INBOUND_EMAIL_REOPEN_DAYS)
+
+
 def apply_reopen_rule(ticket: Ticket) -> ReopenOutcome:
     """Reopen ``ticket`` for a new mail if it was closed recently.
 
@@ -156,11 +167,7 @@ def apply_reopen_rule(ticket: Ticket) -> ReopenOutcome:
     """
     if ticket.status not in (Ticket.Status.RESOLVED, Ticket.Status.CLOSED):
         return ReopenOutcome.OPEN
-    ended = max(
-        (date for date in (ticket.resolved_at, ticket.closed_at) if date),
-        default=ticket.updated_at,
-    )
-    if timezone.now() - ended > timedelta(days=settings.INBOUND_EMAIL_REOPEN_DAYS):
+    if reopen_expired(ticket):
         return ReopenOutcome.EXPIRED
     ticket.status = Ticket.Status.OPEN
     ticket.resolved_at = None

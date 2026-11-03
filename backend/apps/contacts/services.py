@@ -21,6 +21,8 @@ Email rules:
   An inbound mail writes one thing at most: a missing company, from the domain of
   the email the contact already holds (see ``resolve_contact_for_email``).
 - Two contacts are never merged.
+- A conversation link mailed to the address a contact holds proves it
+  (``mark_email_proven``).
 
 Company rules, without a valid ``company_hash``: an existing company is never
 modified, only linked, and a contact that already has a company is never moved.
@@ -44,6 +46,7 @@ somebody else's identifier.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from django.core.exceptions import ValidationError
@@ -550,3 +553,26 @@ def delete_contact_if_left_empty(contact_id) -> bool:
             return False
         contact.delete()
         return True
+
+
+def mark_email_proven(contact_id, proves: Callable[[str], bool]) -> bool:
+    """Mark a contact's email verified if ``proves`` holds of the address it has now.
+
+    ``proves`` tells if a proof (a conversation link's hash) is of an address: an
+    agent may have changed the email since, and a proof of the previous one says
+    nothing of the new one. A contact that was already verified keeps its first
+    date. Under the contact's row lock, so the email and ``is_anonymized`` are
+    current. Return whether the contact is verified on that address.
+    """
+    with transaction.atomic():
+        contact = _locked(Contact, pk=contact_id)
+        if contact is None or contact.is_anonymized or not proves(contact.email):
+            return False
+        changed: set[str] = set()
+        _set(
+            contact,
+            changed,
+            email_verified_at=contact.email_verified_at or timezone.now(),
+        )
+        _save_changes(contact, changed)
+    return True

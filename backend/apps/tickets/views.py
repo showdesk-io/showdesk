@@ -50,6 +50,7 @@ from apps.organizations.models import (
     User,
 )
 
+from .messages import create_user_message
 from .models import (
     PRE_LOGIN_ANONYMOUS_KEY,
     CannedResponse,
@@ -399,27 +400,6 @@ def _delete_contacts_left_empty(contact_ids) -> None:
             delete_contact_if_left_empty(contact_id)
         except DatabaseError:
             logger.exception("Could not delete the emptied contact %s", contact_id)
-
-
-def _create_user_message(ticket, **fields) -> TicketMessage:
-    """Create a widget user's message on the session its ticket is on now.
-
-    A login may have moved the ticket since the request found it through the anonymous
-    session. Under this lock, either the login is over and the message follows the
-    ticket, or it's still to come and it will move the committed message.
-    """
-    with transaction.atomic():
-        session_id = (
-            Ticket.objects.select_for_update(no_key=True)
-            .values_list("widget_session_id", flat=True)
-            .get(pk=ticket.pk)
-        )
-        return TicketMessage.objects.create(
-            ticket=ticket,
-            widget_session_id=session_id,
-            sender_type=TicketMessage.SenderType.USER,
-            **fields,
-        )
 
 
 def _create_or_resume_session(request, org, identity) -> Response:
@@ -1161,7 +1141,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = _create_user_message(ticket, body=body, body_type=body_type)
+        message = create_user_message(ticket, body=body, body_type=body_type)
 
         try:
             notify_new_message(message)
@@ -1246,7 +1226,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = _create_user_message(ticket, body=body, body_type=body_type)
+        message = create_user_message(ticket, body=body, body_type=body_type)
 
         # Validate and save attachment
         att_serializer = TicketAttachmentSerializer(

@@ -12,6 +12,12 @@ from apps.contacts.views import (
 )
 from apps.core.setup_views import SetupInitializeView, SetupStatusView
 from apps.core.views import HealthCheckView
+from apps.email_channel.conversation_views import (
+    ConversationAttachmentView,
+    ConversationMessageView,
+    ConversationRenewView,
+    ConversationView,
+)
 from apps.knowledge_base.views import ArticleViewSet, CategoryViewSet
 from apps.organizations.auth_views import RequestOTPView, VerifyOTPView
 from apps.organizations.signup_views import (
@@ -137,6 +143,27 @@ urlpatterns = [
         "widget/identity-hash/",
         InternalWidgetIdentityView.as_view(),
         name="widget-identity-hash",
+    ),
+    # The conversation page, opened by a link mailed to the requester
+    path(
+        "conversations/renew/",
+        ConversationRenewView.as_view(),
+        name="conversation-renew",
+    ),
+    path(
+        "conversations/<str:token>/",
+        ConversationView.as_view(),
+        name="conversation",
+    ),
+    path(
+        "conversations/<str:token>/messages/",
+        ConversationMessageView.as_view(),
+        name="conversation-messages",
+    ),
+    path(
+        "conversations/<str:token>/attachments/",
+        ConversationAttachmentView.as_view(),
+        name="conversation-attachments",
     ),
     # Instance setup (first-time initialization)
     path("setup/status/", SetupStatusView.as_view(), name="setup-status"),

@@ -115,3 +115,40 @@ def _delete_file(storage, name: str) -> None:
         storage.delete(name)
     except Exception:
         logger.exception("Couldn't delete the raw mail %s", name)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_conversation_link(self, ticket_id: str) -> None:
+    """Mail the ticket's contact a fresh link to its conversation, as asked for.
+
+    Only to the address the contact holds, whoever asked, and only where a reply
+    mail would carry a link and would go at all.
+    """
+    from apps.core.email import send_branded_email
+    from apps.email_channel import outbound
+    from apps.tickets.models import Ticket
+
+    ticket = (
+        Ticket.objects.select_related("organization", "contact")
+        .filter(pk=ticket_id)
+        .first()
+    )
+    if ticket is None or ticket.contact is None:
+        return
+    address = ticket.contact.email
+    url = outbound.conversation_url(ticket, address) if address else ""
+    if not url or outbound.suppressed_by_unsubscribe(ticket):
+        return
+    try:
+        send_branded_email(
+            template="conversation_link",
+            subject=f"[{ticket.reference}] Your link to the conversation",
+            to=[address],
+            organization=ticket.organization,
+            from_email=outbound.from_address(ticket),
+            reply_to=outbound.reply_to(ticket),
+            context={"ticket": ticket, "conversation_url": url},
+        )
+    except Exception as exc:
+        logger.exception("Failed to send a conversation link for %s", ticket.reference)
+        raise self.retry(exc=exc)

@@ -104,3 +104,19 @@ class OTPVerifyEmailThrottle(_OTPEmailThrottle):
 # multiplied by switching between login, signup and the Django admin.
 OTP_REQUEST_THROTTLES = [OTPRequestIPThrottle, OTPRequestEmailThrottle]
 OTP_VERIFY_THROTTLES = [OTPVerifyIPThrottle, OTPVerifyEmailThrottle]
+
+
+class _ConversationThrottle(_OTPIPThrottle):
+    """Count a conversation link's traffic per client IP. Rates: DEFAULT_THROTTLE_RATES."""
+
+
+class ConversationReadThrottle(_ConversationThrottle):
+    scope = "conversation_read"
+
+
+class ConversationWriteThrottle(_ConversationThrottle):
+    scope = "conversation_write"
+
+
+class ConversationRenewThrottle(_ConversationThrottle):
+    scope = "conversation_renew"

@@ -290,6 +290,13 @@ class TicketSerializer(serializers.ModelSerializer):
         Saving the whole row could restore what an anonymization just removed.
         """
         tags = validated_data.pop("tags", None)
+        if (
+            "contact" in validated_data
+            and getattr(validated_data["contact"], "pk", None) != instance.contact_id
+            and instance.sender_verified_at
+        ):
+            # The proof came from the previous contact's conversation link.
+            validated_data["sender_verified_at"] = None
         for field, value in validated_data.items():
             setattr(instance, field, value)
         instance.save(update_fields=[*validated_data, "updated_at"])

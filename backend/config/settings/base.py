@@ -137,6 +137,11 @@ REST_FRAMEWORK = {
         "otp_request_email": config("OTP_REQUEST_EMAIL_RATE", default="5/hour"),
         "otp_verify_ip": config("OTP_VERIFY_IP_RATE", default="60/hour"),
         "otp_verify_email": config("OTP_VERIFY_EMAIL_RATE", default="10/hour"),
+        # The conversation page reached by a mailed link, per client IP. It polls
+        # every 15 s while visible.
+        "conversation_read": config("CONVERSATION_READ_RATE", default="60/minute"),
+        "conversation_write": config("CONVERSATION_WRITE_RATE", default="20/minute"),
+        "conversation_renew": config("CONVERSATION_RENEW_RATE", default="10/hour"),
     },
 }
 
