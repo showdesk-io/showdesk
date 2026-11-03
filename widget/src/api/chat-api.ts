@@ -299,6 +299,7 @@ function mapMessage(raw: Record<string, unknown>): ChatMessage {
       }),
     ),
     createdAt: raw.created_at as string,
+    ...(typeof raw.deletable === "boolean" ? { deletable: raw.deletable } : {}),
     _status: "sent",
   };
 }

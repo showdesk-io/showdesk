@@ -48,7 +48,7 @@ export function renderMessageBubble(
   }
 
   // Delete button for sent user messages
-  if (isUser && onDelete && msg._status !== "sending") {
+  if (isUser && onDelete && msg.deletable !== false && msg._status !== "sending") {
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "sd-msg-delete";
     deleteBtn.title = "Delete message";

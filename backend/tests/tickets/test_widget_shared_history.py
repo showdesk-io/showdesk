@@ -199,6 +199,37 @@ class TestShared:
         assert res.status_code == 404
         assert TicketMessage.objects.filter(pk=mailed.pk).exists()
 
+    def test_the_conversation_tells_which_messages_the_session_may_delete(
+        self, org, holder, email_ticket
+    ):
+        """The widget offers to delete only what the session wrote."""
+        session = _session(org, holder, proven=True)
+        mailed = TicketMessageFactory(
+            ticket=email_ticket,
+            author=None,
+            sender_type=TicketMessage.SenderType.USER,
+        )
+        own = TicketMessageFactory(
+            ticket=email_ticket,
+            author=None,
+            sender_type=TicketMessage.SenderType.USER,
+            widget_session=session,
+        )
+        reply = TicketMessageFactory(
+            ticket=email_ticket, sender_type=TicketMessage.SenderType.AGENT
+        )
+
+        res = _client(org, session).get(
+            f"{API}widget_conversation/", {"ticket_id": str(email_ticket.pk)}
+        )
+
+        deletable = {m["id"]: m["deletable"] for m in res.json()["messages"]}
+        assert deletable == {
+            str(mailed.pk): False,
+            str(own.pk): True,
+            str(reply.pk): False,
+        }
+
 
 class TestReplies:
     def test_replies_reach_every_entitled_session(self, org, holder, email_ticket):

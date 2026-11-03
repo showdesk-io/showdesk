@@ -54,3 +54,25 @@ describe("a text message with attachments", () => {
     expect(links(el)).toEqual([]);
   });
 });
+
+describe("deleting", () => {
+  const onDelete = () => {};
+
+  it("is offered on the session's own messages", () => {
+    const el = renderMessageBubble({ ...message("Mine", []), deletable: true }, onDelete);
+
+    expect(el.querySelector(".sd-msg-delete")).not.toBeNull();
+  });
+
+  it("isn't offered on a mail, nor on another session's message", () => {
+    const el = renderMessageBubble({ ...message("Mailed", []), deletable: false }, onDelete);
+
+    expect(el.querySelector(".sd-msg-delete")).toBeNull();
+  });
+
+  it("is offered on a message just sent, before the server said anything", () => {
+    const el = renderMessageBubble(message("Just sent", []), onDelete);
+
+    expect(el.querySelector(".sd-msg-delete")).not.toBeNull();
+  });
+});

@@ -146,6 +146,11 @@ export interface ChatMessage {
   senderName: string;
   attachments: ChatAttachment[];
   createdAt: string;
+  /**
+   * False when this session may not delete it: a mail, or another session's message
+   * on a shared ticket. Absent on a message just sent, which is the session's own.
+   */
+  deletable?: boolean;
   /** Client-only status for optimistic updates. */
   _status?: "sending" | "sent" | "failed";
   /** Client-only blob URL for immediate preview before server upload. */

@@ -132,6 +132,10 @@ class ConversationMessageSerializer(WidgetMessageSerializer):
 
     sender_name = serializers.SerializerMethodField()
 
+    class Meta(WidgetMessageSerializer.Meta):
+        fields = [f for f in WidgetMessageSerializer.Meta.fields if f != "deletable"]
+        read_only_fields = fields
+
     def get_sender_name(self, message: TicketMessage) -> str:
         if message.sender_type == TicketMessage.SenderType.USER:
             return ""

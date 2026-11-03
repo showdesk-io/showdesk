@@ -716,6 +716,7 @@ class WidgetMessageSerializer(serializers.ModelSerializer):
 
     attachments = TicketAttachmentSerializer(many=True, read_only=True)
     sender_name = serializers.CharField(read_only=True)
+    deletable = serializers.SerializerMethodField()
 
     class Meta:
         model = TicketMessage
@@ -728,8 +729,21 @@ class WidgetMessageSerializer(serializers.ModelSerializer):
             "sender_name",
             "attachments",
             "created_at",
+            "deletable",
         ]
         read_only_fields = fields
+
+    def get_deletable(self, obj) -> bool:
+        """Whether the widget's session may delete it: a message it wrote itself.
+
+        Not a mail, nor what another session wrote on a shared ticket.
+        """
+        session = self.context.get("session")
+        return (
+            session is not None
+            and obj.sender_type == TicketMessage.SenderType.USER
+            and obj.widget_session_id == session.pk
+        )
 
 
 class WidgetConversationListSerializer(serializers.ModelSerializer):

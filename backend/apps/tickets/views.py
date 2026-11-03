@@ -1431,7 +1431,9 @@ class TicketViewSet(viewsets.ModelViewSet):
             .order_by("created_at")
         )
 
-        serializer = WidgetMessageSerializer(messages, many=True)
+        serializer = WidgetMessageSerializer(
+            messages, many=True, context={"session": session}
+        )
         return Response(
             {
                 "ticket_id": str(ticket.id),
