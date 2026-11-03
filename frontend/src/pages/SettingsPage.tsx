@@ -1,5 +1,5 @@
 /**
- * Settings page with tabs: Agents, Widget, Organization.
+ * Settings page with tabs: Agents, Widget, Email, Organization…
  */
 
 import { useRef, useState } from "react";
@@ -46,6 +46,7 @@ import { AVAILABLE_VARIABLES } from "@/lib/cannedResponseVars";
 import type { Organization, Tag, User, UserRole } from "@/types";
 import { AttributeDefsTab } from "@/components/settings/AttributeDefsTab";
 import { DomainsList } from "@/components/settings/DomainsList";
+import { MailboxesTab } from "@/components/settings/MailboxesTab";
 
 const tabs = [
   "Agents",
@@ -56,6 +57,7 @@ const tabs = [
   "Contact attributes",
   "Company attributes",
   "Widget",
+  "Email",
   "Branding",
   "Organization",
 ] as const;
@@ -84,6 +86,8 @@ export function SettingsPage() {
   const enabledFeatures = new Set(org?.enabled_features ?? []);
 
   const visibleTabs = tabs.filter((tab) => {
+    // Off unless the instance has an inbound domain: no mail could reach a mailbox.
+    if (tab === "Email") return org?.inbound_email_enabled === true;
     const flag = TABS_REQUIRING_FEATURE[tab];
     return !flag || enabledFeatures.has(flag);
   });
@@ -131,6 +135,7 @@ export function SettingsPage() {
           <AttributeDefsTab entity="company" isAdmin={isAdmin} />
         )}
         {activeTab === "Widget" && <WidgetTab isAdmin={isAdmin} />}
+        {activeTab === "Email" && <MailboxesTab isAdmin={isAdmin} />}
         {activeTab === "Branding" && <BrandingTab isAdmin={isAdmin} />}
         {activeTab === "Organization" && (
           <OrganizationTab isAdmin={isAdmin} />

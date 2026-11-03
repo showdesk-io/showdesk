@@ -14,6 +14,7 @@ from apps.contacts.models import (
     ContactAttributeDef,
     ContactNote,
 )
+from apps.email_channel.models import InboundEmail, Mailbox
 from apps.knowledge_base.models import Article, Category
 from apps.organizations.models import Organization, Team, User
 from apps.tickets.models import (
@@ -159,6 +160,29 @@ class SLAPolicyFactory(factory.django.DjangoModelFactory):
     first_response_minutes = 240
     resolution_minutes = 1440
     is_active = True
+
+
+class MailboxFactory(factory.django.DjangoModelFactory):
+    """Factory for creating Mailbox instances."""
+
+    class Meta:
+        model = Mailbox
+
+    organization = factory.SubFactory(OrganizationFactory)
+    name = factory.Sequence(lambda n: f"Mailbox {n}")
+
+
+class InboundEmailFactory(factory.django.DjangoModelFactory):
+    """Factory for creating InboundEmail instances."""
+
+    class Meta:
+        model = InboundEmail
+
+    mailbox = factory.SubFactory(MailboxFactory)
+    message_id = factory.Sequence(lambda n: f"<message-{n}@example.org>")
+    sender = "customer@example.org"
+    recipients = factory.LazyFunction(lambda: ["support@example.com"])
+    subject = "Help"
 
 
 class TicketFactory(factory.django.DjangoModelFactory):

@@ -1,14 +1,23 @@
 {% extends "emails/base.txt" %}
-{% block content %}{{ intro }}
+{% block content %}{% autoescape off %}{% if reply_marker %}{{ reply_marker }}
+
+{% endif %}{{ intro }}
 
 Ticket: {{ ticket.title }} ({{ ticket.reference }})
+{% for reply in replies %}
+{{ reply.author_label }} wrote:
+---
+{{ reply.body }}
+---
+{% if reply.attachments %}Attachments:
+{% for a in reply.attachments %}- {{ a.filename }} ({{ a.size|filesizeformat }}{% if a.status == "attached" %}, attached{% endif %})
+{% endfor %}{% endif %}{% endfor %}{% if files_too_large or files_unavailable %}
+{% if files_too_large %}Some files were too large to attach to this email. {% endif %}{% if files_unavailable %}Some files couldn't be attached to this email. {% endif %}{% if files_url %}Open the conversation to get them: {{ files_url }}{% else %}Ask us for them.{% endif %}
+{% endif %}
+{{ cta_label }}: {{ ticket_url }}{% if history %}
 
-{{ author_label }} wrote:
----
-{{ message_body }}
----
-{% if attachments %}
-Attachments:
-{% for a in attachments %}- {{ a.filename }} ({{ a.size|filesizeformat }}){% if a.url %} {{ a.url }}{% endif %}
-{% endfor %}{% endif %}
-{{ cta_label }}: {{ ticket_url }}{% endblock %}
+Earlier in this conversation:
+{% for earlier in history %}
+{{ earlier.author_label }}{% if earlier.created_at %} ({{ earlier.created_at|date:"M j, H:i" }}){% endif %}:
+{{ earlier.body|truncatechars:600 }}
+{% endfor %}{% endif %}{% endautoescape %}{% endblock %}

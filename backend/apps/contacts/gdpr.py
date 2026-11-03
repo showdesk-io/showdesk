@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 REMOVED_TITLE = "[Removed at the contact's request]"
 REMOVED_BODY = "[Content removed at the contact's request]"
 KEPT_CONTEXT_KEYS = {"browser", "os", "language", "timezone", "screen_resolution"}
+# The ticket an inbound mail would have continued: kept, as long as it's an id.
+PREVIOUS_TICKET_KEY = "previous_ticket"
 MAX_KEPT_CONTEXT_LENGTH = 100
 # What mail servers commonly accept, counted as sent: base64 adds a third.
 MAX_EXPORT_ENCODED_BYTES = 20 * 1024 * 1024
@@ -102,6 +104,16 @@ def _delete_uploads(ticket_ids) -> None:
     VideoRecording.objects.filter(pk__in=[row.pk for row in videos]).delete()
 
 
+def _is_uuid(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _kept_metadata(metadata) -> dict:
     """Keep the whitelist, which also takes the ``pre_login_*`` trace of a login.
 
@@ -111,10 +123,13 @@ def _kept_metadata(metadata) -> dict:
     return {
         key: value
         for key, value in (metadata if isinstance(metadata, dict) else {}).items()
-        if key in KEPT_CONTEXT_KEYS
-        and isinstance(value, str)
-        and len(value) <= MAX_KEPT_CONTEXT_LENGTH
-        and "@" not in value
+        if (key == PREVIOUS_TICKET_KEY and _is_uuid(value))
+        or (
+            key in KEPT_CONTEXT_KEYS
+            and isinstance(value, str)
+            and len(value) <= MAX_KEPT_CONTEXT_LENGTH
+            and "@" not in value
+        )
     }
 
 
@@ -172,15 +187,68 @@ def _scrub_tickets(contact: Contact, tickets) -> None:
 
 def _scrub_messages(ticket_ids) -> None:
     body_type = TicketMessage.BodyType.TEXT
+    # A Message-ID can name the sender's domain, and the external sender is a From.
     TicketMessage.objects.filter(
         Q(sender_type=TicketMessage.SenderType.USER) | _the_requester("author"),
         ticket__in=ticket_ids,
-    ).exclude(body=REMOVED_BODY, body_type=body_type, widget_session=None).update(
+    ).exclude(
         body=REMOVED_BODY,
         body_type=body_type,
         widget_session=None,
+        external_id="",
+        external_sender="",
+    ).update(
+        body=REMOVED_BODY,
+        body_type=body_type,
+        widget_session=None,
+        external_id="",
+        external_sender="",
         updated_at=timezone.now(),
     )
+
+
+def _delete_inbound_mail(contact: Contact, email: str, ticket_ids) -> None:
+    """Delete the mail stored for the contact's tickets, or sent from its address.
+
+    Rows and raw files: the files go once the deletion is committed, by the
+    ``post_delete`` receiver of the email channel. Only in the contact's
+    organization: the same address may write to another one.
+    """
+    from apps.email_channel.models import InboundEmail
+
+    query = Q(ticket__in=ticket_ids)
+    if email:
+        query |= Q(sender=email) & (
+            Q(mailbox__organization_id=contact.organization_id)
+            | Q(ticket__organization_id=contact.organization_id)
+        )
+    InboundEmail.objects.filter(query).delete()
+    if email:
+        # Their address as the sender of a mail, on tickets that aren't theirs:
+        # a reply in a thread they were copied on, for instance.
+        TicketMessage.objects.filter(
+            Q(external_sender__iexact=email)
+            | Q(external_sender__iendswith=f"<{email}>"),
+            ticket__organization_id=contact.organization_id,
+        ).update(external_sender="", updated_at=timezone.now())
+
+
+def _delete_widget_codes(contact: Contact) -> None:
+    """Delete the widget codes mailed to the contact's address, or to its sessions.
+
+    In the contact's organization only. To be called before the address is scrubbed
+    and the sessions unlinked. Login codes aren't the organization's to delete.
+    """
+    from apps.organizations.models import OTPCode
+
+    query = Q(widget_session__contact=contact)
+    if contact.email:
+        query |= Q(email=contact.email)
+    OTPCode.objects.filter(
+        query,
+        purpose=OTPCode.Purpose.WIDGET_EMAIL,
+        organization_id=contact.organization_id,
+    ).delete()
 
 
 def _tickets_of(contact: Contact, session_ids, external_id: str):
@@ -254,6 +322,8 @@ def anonymize_contact(contact: Contact) -> Contact | None:
         ).select_related("requester")
     )
     ticket_ids = [ticket.pk for ticket in tickets]
+    _delete_inbound_mail(contact, contact.email, ticket_ids)
+    _delete_widget_codes(contact)
     _scrub_contact(contact)
 
     # Free text written by agents, which can hold personal data about the contact.
@@ -264,6 +334,8 @@ def anonymize_contact(contact: Contact) -> Contact | None:
         name="",
         external_user_id="",
         email_verified_at=None,
+        email_verified_for="",
+        email_proof_source="",
         user_agent="",
         contact=None,
     )
@@ -337,6 +409,7 @@ def _exported_ticket(ticket: Ticket) -> dict:
         "messages": [
             {
                 "sender_type": message.sender_type,
+                "channel": message.channel,
                 "body": message.body,
                 "body_type": message.body_type,
                 "created_at": message.created_at,
@@ -420,8 +493,10 @@ def build_contact_export(contact: Contact) -> bytes:
             ),
             Prefetch(
                 "attachments",
-                # An agent's upload has no message, even for an internal note: only
-                # the contact's own say nothing internal.
+                # A file on a reply is the contact's to read, one on an internal
+                # note isn't. A file on no message is in only if the contact
+                # uploaded it: an agent's is waiting for its reply, or older than
+                # replies taking their files, and may be meant for a note.
                 TicketAttachment.objects.filter(
                     Q(message__isnull=True) & _by_the_contact("uploaded_by")
                     | Q(message__message_type=public)

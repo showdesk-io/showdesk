@@ -46,6 +46,10 @@ x-backend-env: &backend-env
   OTP_REQUEST_EMAIL_RATE: ${OTP_REQUEST_EMAIL_RATE:-5/hour}
   OTP_VERIFY_IP_RATE: ${OTP_VERIFY_IP_RATE:-60/hour}
   OTP_VERIFY_EMAIL_RATE: ${OTP_VERIFY_EMAIL_RATE:-10/hour}
+  WIDGET_EMAIL_CODE_IP_RATE: ${WIDGET_EMAIL_CODE_IP_RATE:-30/hour}
+  WIDGET_EMAIL_CODE_EMAIL_RATE: ${WIDGET_EMAIL_CODE_EMAIL_RATE:-5/hour}
+  WIDGET_EMAIL_VERIFY_IP_RATE: ${WIDGET_EMAIL_VERIFY_IP_RATE:-60/hour}
+  WIDGET_EMAIL_VERIFY_EMAIL_RATE: ${WIDGET_EMAIL_VERIFY_EMAIL_RATE:-10/hour}
   CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://localhost}
   SITE_URL: ${SITE_URL:-https://localhost}
   EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.smtp.EmailBackend}
@@ -58,6 +62,21 @@ x-backend-env: &backend-env
   DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@showdesk.io}
   MAILJET_API_KEY: ${MAILJET_API_KEY:-}
   MAILJET_SECRET_KEY: ${MAILJET_SECRET_KEY:-}
+  INBOUND_EMAIL_DOMAIN: ${INBOUND_EMAIL_DOMAIN:-}
+  ANYMAIL_POSTAL_WEBHOOK_KEY: ${ANYMAIL_POSTAL_WEBHOOK_KEY:-}
+  ANYMAIL_WEBHOOK_SECRET: ${ANYMAIL_WEBHOOK_SECRET:-}
+  INBOUND_EMAIL_REOPEN_DAYS: ${INBOUND_EMAIL_REOPEN_DAYS:-7}
+  INBOUND_EMAIL_MAX_SIZE_MB: ${INBOUND_EMAIL_MAX_SIZE_MB:-25}
+  INBOUND_EMAIL_RATE_LIMIT_PER_HOUR: ${INBOUND_EMAIL_RATE_LIMIT_PER_HOUR:-20}
+  INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR: ${INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR:-200}
+  INBOUND_EMAIL_RAW_RETENTION_DAYS: ${INBOUND_EMAIL_RAW_RETENTION_DAYS:-30}
+  INBOUND_EMAIL_LOG_RETENTION_DAYS: ${INBOUND_EMAIL_LOG_RETENTION_DAYS:-90}
+  WIDGET_UNREAD_EMAIL_DELAY_MINUTES: ${WIDGET_UNREAD_EMAIL_DELAY_MINUTES:-5}
+  REPLY_EMAIL_ATTACHMENTS_MAX_MB: ${REPLY_EMAIL_ATTACHMENTS_MAX_MB:-10}
+  CONVERSATION_LINK_MAX_AGE_DAYS: ${CONVERSATION_LINK_MAX_AGE_DAYS:-30}
+  CONVERSATION_READ_RATE: ${CONVERSATION_READ_RATE:-60/minute}
+  CONVERSATION_WRITE_RATE: ${CONVERSATION_WRITE_RATE:-20/minute}
+  CONVERSATION_RENEW_RATE: ${CONVERSATION_RENEW_RATE:-10/hour}
   LIVEKIT_URL: ${LIVEKIT_URL:-}
   LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
   LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
@@ -112,6 +131,16 @@ configs:
           reverse_proxy backend:8000
         }
 
+        # Inbound mail webhooks (email channel). The backend refuses a body over
+        # about 2 x INBOUND_EMAIL_MAX_SIZE_MB (25 by default), but only once it is
+        # received: this bounds what is read. Raise it with INBOUND_EMAIL_MAX_SIZE_MB.
+        handle /anymail/* {
+          request_body {
+            max_size 50MB
+          }
+          reverse_proxy backend:8000
+        }
+
         handle /cdn/* {
           uri strip_prefix /cdn
           reverse_proxy widget:80
@@ -133,6 +162,12 @@ configs:
           handle {
             respond 404
           }
+        }
+
+        # The conversation page's URL holds its link's token: no Referer may carry it.
+        handle /c/* {
+          header Referrer-Policy no-referrer
+          reverse_proxy frontend:80
         }
 
         handle {

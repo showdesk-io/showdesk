@@ -12,6 +12,17 @@ from apps.contacts.views import (
 )
 from apps.core.setup_views import SetupInitializeView, SetupStatusView
 from apps.core.views import HealthCheckView
+from apps.email_channel.conversation_views import (
+    ConversationAttachmentView,
+    ConversationMessageView,
+    ConversationRenewView,
+    ConversationView,
+)
+from apps.email_channel.views import (
+    InboundReplayView,
+    MailboxViewSet,
+    OriginalMailView,
+)
 from apps.knowledge_base.views import ArticleViewSet, CategoryViewSet
 from apps.organizations.auth_views import RequestOTPView, VerifyOTPView
 from apps.organizations.signup_views import (
@@ -81,6 +92,9 @@ router.register(
     basename="canned-response",
 )
 
+# Email channel
+router.register(r"mailboxes", MailboxViewSet, basename="mailbox")
+
 # Videos
 router.register(r"videos", VideoRecordingViewSet, basename="video")
 
@@ -97,6 +111,17 @@ router.register(
 
 urlpatterns = [
     path("", include(router.urls)),
+    # Email channel: what agents and admins do with received mail
+    path(
+        "inbound-emails/<uuid:pk>/replay/",
+        InboundReplayView.as_view(),
+        name="inbound-email-replay",
+    ),
+    path(
+        "tickets/<uuid:ticket_id>/messages/<uuid:message_id>/original/",
+        OriginalMailView.as_view(),
+        name="ticket-message-original",
+    ),
     # OTP authentication (passwordless)
     path("auth/request-otp/", RequestOTPView.as_view(), name="request-otp"),
     path("auth/verify-otp/", VerifyOTPView.as_view(), name="verify-otp"),
@@ -137,6 +162,27 @@ urlpatterns = [
         "widget/identity-hash/",
         InternalWidgetIdentityView.as_view(),
         name="widget-identity-hash",
+    ),
+    # The conversation page, opened by a link mailed to the requester
+    path(
+        "conversations/renew/",
+        ConversationRenewView.as_view(),
+        name="conversation-renew",
+    ),
+    path(
+        "conversations/<str:token>/",
+        ConversationView.as_view(),
+        name="conversation",
+    ),
+    path(
+        "conversations/<str:token>/messages/",
+        ConversationMessageView.as_view(),
+        name="conversation-messages",
+    ),
+    path(
+        "conversations/<str:token>/attachments/",
+        ConversationAttachmentView.as_view(),
+        name="conversation-attachments",
     ),
     # Instance setup (first-time initialization)
     path("setup/status/", SetupStatusView.as_view(), name="setup-status"),

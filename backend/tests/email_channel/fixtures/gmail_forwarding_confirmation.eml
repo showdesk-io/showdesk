@@ -1,0 +1,26 @@
+Delivered-To: acme-fixture01@in.example.com
+From: Gmail Team <forwarding-noreply@google.com>
+To: acme-fixture01@in.example.com
+Subject: (#614028937) Gmail Forwarding Confirmation - Receive Mail from support@acme.example.com
+Date: Mon, 2 Nov 2026 08:00:00 +0000
+Message-ID: <confirmation-1@google.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+support@acme.example.com has requested to automatically forward mail to your
+email address acme-fixture01@in.example.com.
+Confirmation code: 614028937
+
+To allow support@acme.example.com to automatically forward mail to your
+address, please click the link below to confirm the request:
+
+https://mail-settings.google.com/mail/vf-%5BANGjdJ8example%5D-AbCdEfGh
+
+If you click the link and it appears to be broken, please copy and paste it
+into a new browser window.
+
+Thanks for using Gmail!
+
+Sincerely,
+
+The Gmail Team

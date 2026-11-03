@@ -1,0 +1,20 @@
+From: Ann Customer <ann@example.org>
+To: support@acme.example.com
+Subject: Printer on fire
+Date: Mon, 2 Nov 2026 09:00:00 +0000
+Message-ID: <html-1@mail.example.org>
+MIME-Version: 1.0
+Content-Type: text/html; charset="UTF-8"
+
+<html><head><title>Ignored title</title><style>p { color: red; }</style>
+<script>alert("head")</script></head>
+<body onload="alert(1)">
+<p>Hello&nbsp;Acme,</p>
+<p>The printer is <b>on fire</b> &amp; smoking.<br>Steps:</p>
+<ul><li>Open the tray</li><li>Run</li></ul>
+<p>See <a href="https://status.example.net/printer">the status page</a>
+or <a href="javascript:alert(2)">this</a>.</p>
+<img src="https://tracker.example.net/pixel.gif" onerror="alert(3)" alt="">
+<script>alert("body")</script>
+<p>Ann</p>
+</body></html>

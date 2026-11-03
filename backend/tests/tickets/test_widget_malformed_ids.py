@@ -86,6 +86,7 @@ def test_message_delete_still_deletes(api_client, headers, organization) -> None
     message = TicketMessageFactory(
         ticket__organization=organization,
         ticket__requester=None,
+        ticket__widget_session=session,
         author=None,
         widget_session=session,
         sender_type="user",

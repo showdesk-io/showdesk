@@ -79,7 +79,11 @@ class TestEmailProof:
         now = timezone.now()
         contact = ContactFactory(organization=org, email=EMAIL)
         session = WidgetSession.objects.create(
-            organization=org, contact=contact, email=EMAIL, email_verified_at=now
+            organization=org,
+            contact=contact,
+            email=EMAIL,
+            email_verified_at=now,
+            email_verified_for=EMAIL.lower(),
         )
         ticket = TicketFactory(
             organization=org, contact=contact, widget_session=session, requester=None

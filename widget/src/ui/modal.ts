@@ -64,6 +64,7 @@ function pickConversationToResume(
 const EMPTY_CONVERSATION: Partial<WidgetState> = {
   activeTicketId: null,
   activeTicketReference: null,
+  activeTicketReadOnly: false,
   messages: [],
 };
 
@@ -75,6 +76,7 @@ const EMPTY_VIEW: Partial<WidgetState> = {
   isLoading: false,
   contactNudgeDismissed: false,
   contactNudgeShown: false,
+  emailCodeSentAt: null,
 };
 
 let currentPanel: HTMLElement | null = null;
@@ -177,6 +179,16 @@ export function switchSession(config: ShowdeskConfig): Promise<void> {
 }
 
 /**
+ * Init again at once for an anonymous session that proved its email, now given another
+ * one: someone else on that browser. What the previous person sees leaves the view now,
+ * and the backend decides whether the stored session goes on.
+ */
+export function restartForNewEmail(config: ShowdeskConfig): Promise<void> {
+  clearUserFromView(config);
+  return startSessionRun(config);
+}
+
+/**
  * Start over with a new anonymous session, for the identity now in `config`: a logout
  * that keeps the widget. Nothing of the session it replaces is resumed, shown or stored,
  * even if the request then fails. Opening the panel tries again in that case.
@@ -220,7 +232,12 @@ async function runSession(config: ShowdeskConfig, run: number): Promise<void> {
 
     const previous = s.state.session;
     const changed = previous?.sessionId !== session.sessionId;
-    s.update({ session });
+    // A code asked for by another session, or for another email, isn't to enter here.
+    s.update(
+      changed || previous?.email !== session.email
+        ? { session, emailCodeSentAt: null }
+        : { session },
+    );
 
     if (changed) {
       connectWebSocket(config, s, session.sessionId);
@@ -253,6 +270,48 @@ async function runSession(config: ShowdeskConfig, run: number): Promise<void> {
   }
 }
 
+/** User messages from the WebSocket, waiting for this widget's sends to answer. */
+let heldUserMessages: ChatMessage[] = [];
+let releaseHeld: (() => void) | null = null;
+let heldTimer: ReturnType<typeof setTimeout> | null = null;
+/** How long they wait at most, should a send never answer. */
+const HOLD_MAX_MS = 15_000;
+
+/** ``messages`` with ``fresh`` ones put in their place by time. */
+function insertByTime(messages: ChatMessage[], fresh: ChatMessage[]): ChatMessage[] {
+  const result = [...messages];
+  for (const msg of fresh) {
+    const at = result.findIndex((m) => m.createdAt > msg.createdAt);
+    if (at === -1) result.push(msg);
+    else result.splice(at, 0, msg);
+  }
+  return result;
+}
+
+/**
+ * Show the held user messages of the open conversation not on screen yet, once no
+ * send is waiting for its answer, or at once with ``force``.
+ */
+function showHeldUserMessages(s: WidgetStore, force = false): void {
+  if (!heldUserMessages.length) return;
+  if (!force && s.state.messages.some((m) => m._status === "sending")) {
+    heldTimer ??= setTimeout(() => {
+      heldTimer = null;
+      showHeldUserMessages(s, true);
+    }, HOLD_MAX_MS);
+    return;
+  }
+  if (heldTimer) clearTimeout(heldTimer);
+  heldTimer = null;
+  const held = heldUserMessages;
+  heldUserMessages = [];
+  const shown = new Set(s.state.messages.map((m) => m.id));
+  const fresh = held.filter(
+    (m) => m.ticketId === s.state.activeTicketId && !shown.has(m.id),
+  );
+  if (fresh.length) s.update({ messages: insertByTime(s.state.messages, fresh) });
+}
+
 /** Point the shared WebSocket at a session, instead of the one it was on. */
 function connectWebSocket(
   config: ShowdeskConfig,
@@ -261,15 +320,27 @@ function connectWebSocket(
 ): void {
   const socket = getWebSocket();
   socket.disconnect();
+  heldUserMessages = [];
+  if (heldTimer) clearTimeout(heldTimer);
+  heldTimer = null;
+  releaseHeld?.();
+  releaseHeld = s.subscribe(() => showHeldUserMessages(s));
   socket.onMessage = (msg: ChatMessage) => {
-    // Skip user's own messages — already handled by optimistic UI
-    if (msg.senderType === "user") return;
-
     // The user is actively looking at this ticket only if the panel is
     // open AND the ticket is the currently-displayed one. Otherwise the
     // message counts as unread, even on the "last active" ticket.
     const isViewing =
       isPanelVisible() && msg.ticketId === s.state.activeTicketId;
+
+    // The user's own words: shown if they wrote elsewhere (by email, on the
+    // conversation page), never counted as unread. What this widget sent is
+    // already on screen under its id, or will be once its request answers: until
+    // then, the event waits, so as not to stand for the message being sent.
+    if (msg.senderType === "user") {
+      heldUserMessages.push(msg);
+      showHeldUserMessages(s);
+      return;
+    }
 
     if (isViewing) {
       // Don't add duplicates
@@ -325,6 +396,8 @@ async function refreshActiveConversation(
     const unsent = s.state.messages.filter((m) => m._status !== "sent");
     s.update({
       activeTicketReference: data.reference,
+      activeTicketReadOnly: data.readOnly,
+      closedTicketId: data.closed ? data.ticketId : null,
       messages: [...data.messages, ...unsent],
     });
   } catch (err) {
@@ -356,6 +429,7 @@ function resumeActiveConversation(config: ShowdeskConfig): void {
       activeTab: "chat",
       activeTicketId: resume.id,
       activeTicketReference: resume.reference,
+      activeTicketReadOnly: switchingTicket ? false : s.state.activeTicketReadOnly,
       // Only wipe messages when we're jumping to a different ticket —
       // otherwise keep them visible while we refetch.
       messages: switchingTicket ? [] : s.state.messages,
@@ -373,6 +447,8 @@ function resumeActiveConversation(config: ShowdeskConfig): void {
           s.update({
             activeTicketId: data.ticketId,
             activeTicketReference: data.reference,
+            activeTicketReadOnly: data.readOnly,
+            closedTicketId: data.closed ? data.ticketId : null,
             messages: data.messages,
             isLoading: false,
           });

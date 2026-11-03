@@ -65,7 +65,7 @@ export async function updateTicket(
 
 export async function createMessage(
   ticketId: string,
-  data: { body: string; message_type: string },
+  data: { body: string; message_type: string; attachment_ids?: string[] },
 ): Promise<TicketMessage> {
   const response = await apiClient.post<TicketMessage>("/messages/", {
     ticket: ticketId,
@@ -108,6 +108,18 @@ export async function reopenTicket(ticketId: string): Promise<Ticket> {
 
 export async function deleteMessage(messageId: string): Promise<void> {
   await apiClient.delete(`/messages/${messageId}/`);
+}
+
+/**
+ * The raw mail a message came from. Through the API client, as it needs the token:
+ * the raw mail has no URL of its own.
+ */
+export async function fetchOriginalMail(ticketId: string, messageId: string): Promise<Blob> {
+  const response = await apiClient.get<Blob>(
+    `/tickets/${ticketId}/messages/${messageId}/original/`,
+    { responseType: "blob" },
+  );
+  return response.data;
 }
 
 // ── Bulk update ──────────────────────────────────────────────────────

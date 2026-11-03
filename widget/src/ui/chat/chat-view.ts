@@ -6,6 +6,7 @@
  */
 
 import {
+  ApiError,
   sendMessage,
   sendAttachmentMessage,
   deleteMessage,
@@ -63,8 +64,13 @@ export function renderChatView(
         updateSessionContact(config, session.sessionId, name, email).catch(
           console.error,
         );
+        // A new address has no proof yet; the same one keeps what it had.
+        const emailProofOffered =
+          email === session.email ? session.emailProofOffered : Boolean(email.trim());
         store.update({
-          session: { ...session, name, email },
+          session: { ...session, name, email, emailProofOffered },
+          // A code asked for the previous email isn't one to enter now.
+          ...(email === session.email ? {} : { emailCodeSentAt: null }),
         });
       }
     });
@@ -86,11 +92,89 @@ export function renderChatView(
   });
   container.appendChild(input);
 
+  // A conversation seen through the history only: read, not written.
+  const readOnly = renderReadOnlyNotice(store);
+  container.appendChild(readOnly);
+  const readOnlyText = readOnly.querySelector<HTMLElement>(".sd-read-only-text");
+  const showReadOnly = () => {
+    const { activeTicketId, closedTicketId } = store.state;
+    const isReadOnly = store.state.activeTicketReadOnly && Boolean(activeTicketId);
+    readOnly.style.display = isReadOnly ? "" : "none";
+    input.style.display = isReadOnly ? "none" : "";
+    if (readOnlyText) {
+      readOnlyText.textContent =
+        activeTicketId && closedTicketId === activeTicketId
+          ? "This conversation is closed."
+          : "This conversation can only be read here.";
+    }
+  };
+  showReadOnly();
+
   // Subscribe to state changes
   store.subscribe(() => {
     renderMessages(store, config);
+    showReadOnly();
     scrollToBottom();
   });
+}
+
+function renderReadOnlyNotice(store: WidgetStore): HTMLElement {
+  const notice = document.createElement("div");
+  notice.className = "sd-read-only";
+  const text = document.createElement("div");
+  text.className = "sd-read-only-text";
+  text.textContent = "This conversation can only be read here.";
+  const start = document.createElement("button");
+  start.className = "sd-btn-small sd-btn-primary";
+  start.textContent = "Start a new conversation";
+  start.onclick = () => {
+    store.update({
+      activeTicketId: null,
+      activeTicketReference: null,
+      activeTicketReadOnly: false,
+      messages: [],
+    });
+  };
+  notice.append(text, start);
+  return notice;
+}
+
+/**
+ * The messages, with the optimistic one now sent under its real id. The WebSocket may
+ * have brought the same message first: the optimistic one, with its local preview,
+ * stays in its place.
+ */
+function confirmSent(
+  store: WidgetStore,
+  tempId: string,
+  result: { messageId: string; ticketId: string },
+): ChatMessage[] {
+  return store.state.messages
+    .filter((m) => m.id !== result.messageId)
+    .map((m) =>
+      m.id === tempId
+        ? { ...m, id: result.messageId, ticketId: result.ticketId, _status: "sent" as const }
+        : m,
+    );
+}
+
+/**
+ * A refusal to write on the active conversation: show it read-only from now on.
+ * A 403 is a conversation only seen through the history, a 409 one closed too long
+ * ago to reopen.
+ */
+function readOnlyIfRefused(err: unknown, store: WidgetStore, ticketId: string | null): void {
+  if (
+    err instanceof ApiError &&
+    (err.status === 403 || err.status === 409) &&
+    ticketId &&
+    store.state.activeTicketId === ticketId
+  ) {
+    store.update({
+      activeTicketReadOnly: true,
+      closedTicketId: err.status === 409 ? ticketId : store.state.closedTicketId,
+    });
+  }
 }
 
 function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
@@ -126,7 +210,8 @@ function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
     .querySelectorAll("[data-message-id]")
     .forEach((el) => existingIds.add((el as HTMLElement).dataset.messageId!));
 
-  for (const msg of store.state.messages) {
+  const messages = store.state.messages;
+  for (const [index, msg] of messages.entries()) {
     if (existingIds.has(msg.id)) {
       // Update status if changed
       const existing = messageListEl.querySelector(
@@ -141,7 +226,14 @@ function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
       continue;
     }
     const bubble = renderMessageBubble(msg, onDelete);
-    messageListEl.appendChild(bubble);
+    // In its place among those shown: a message can arrive after later ones.
+    const next = messages
+      .slice(index + 1)
+      .find((later) => existingIds.has(later.id));
+    const before = next
+      ? messageListEl.querySelector(`[data-message-id="${CSS.escape(next.id)}"]`)
+      : null;
+    messageListEl.insertBefore(bubble, before);
   }
 
   scrollToBottom();
@@ -333,6 +425,8 @@ async function postText(
   store.update({
     messages: [...store.state.messages, optimisticMsg],
   });
+  // Where it's going, should writing there be refused.
+  const ticketId = store.state.activeTicketId;
 
   try {
     // Gather context on first message
@@ -366,22 +460,19 @@ async function postText(
     if (!store.state.messages.some((m) => m.id === tempId)) return;
 
     // Update optimistic message with real data
-    const updated = store.state.messages.map((m) =>
-      m.id === tempId
-        ? { ...m, id: result.messageId, ticketId: result.ticketId, _status: "sent" as const }
-        : m,
-    );
+    const updated = confirmSent(store, tempId, result);
     store.update({
       messages: updated,
       activeTicketId: result.ticketId,
       activeTicketReference: result.reference,
     });
-  } catch {
+  } catch (err) {
     // Mark as failed
     const updated = store.state.messages.map((m) =>
       m.id === tempId ? { ...m, _status: "failed" as const } : m,
     );
     store.update({ messages: updated });
+    readOnlyIfRefused(err, store, ticketId);
   }
 }
 
@@ -418,6 +509,8 @@ async function handleSendAttachment(
   store.update({
     messages: [...store.state.messages, optimisticMsg],
   });
+  // Where it's going, should writing there be refused.
+  const ticketId = store.state.activeTicketId;
 
   try {
     const result = await sendAttachmentMessage(
@@ -431,21 +524,18 @@ async function handleSendAttachment(
 
     if (!store.state.messages.some((m) => m.id === tempId)) return;
 
-    const updated = store.state.messages.map((m) =>
-      m.id === tempId
-        ? { ...m, id: result.messageId, ticketId: result.ticketId, _status: "sent" as const }
-        : m,
-    );
+    const updated = confirmSent(store, tempId, result);
     store.update({
       messages: updated,
       activeTicketId: result.ticketId,
       activeTicketReference: result.reference,
     });
-  } catch {
+  } catch (err) {
     const updated = store.state.messages.map((m) =>
       m.id === tempId ? { ...m, _status: "failed" as const } : m,
     );
     store.update({ messages: updated });
+    readOnlyIfRefused(err, store, ticketId);
   }
 }
 
@@ -847,6 +937,8 @@ async function loadPopupUploadedMessage(
     store.update({
       activeTicketId: conv.ticketId,
       activeTicketReference: conv.reference,
+      activeTicketReadOnly: conv.readOnly,
+      closedTicketId: conv.closed ? conv.ticketId : null,
       messages: conv.messages,
     });
   } catch (err) {

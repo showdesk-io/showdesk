@@ -104,3 +104,69 @@ class OTPVerifyEmailThrottle(_OTPEmailThrottle):
 # multiplied by switching between login, signup and the Django admin.
 OTP_REQUEST_THROTTLES = [OTPRequestIPThrottle, OTPRequestEmailThrottle]
 OTP_VERIFY_THROTTLES = [OTPVerifyIPThrottle, OTPVerifyEmailThrottle]
+
+
+class _ConversationThrottle(_OTPIPThrottle):
+    """Count a conversation link's traffic per client IP. Rates: DEFAULT_THROTTLE_RATES."""
+
+
+class ConversationReadThrottle(_ConversationThrottle):
+    scope = "conversation_read"
+
+
+class ConversationWriteThrottle(_ConversationThrottle):
+    scope = "conversation_write"
+
+
+class ConversationRenewThrottle(_ConversationThrottle):
+    scope = "conversation_renew"
+
+
+class _WidgetEmailThrottle(SimpleRateThrottle):
+    """Count a widget email code's traffic per address, whichever session asks.
+
+    Not a DRF ``throttle_classes`` entry: the view applies it once it has read the
+    session, with the address it acts on (``check_address``), so the counter and the
+    code can't be about two different addresses.
+    """
+
+    def __init__(self, email: str) -> None:
+        super().__init__()
+        self.email = email
+
+    def get_cache_key(self, request, view) -> str | None:
+        if not self.email:
+            return None
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": hashlib.sha256(self.email.encode()).hexdigest(),
+        }
+
+    @classmethod
+    def check_address(cls, request, view, email: str) -> None:
+        """Count a request for ``email``. Raise ``Throttled`` past the rate."""
+        throttle = cls(email)
+        if not throttle.allow_request(request, view):
+            view.throttled(request, throttle.wait())
+
+
+class WidgetEmailCodeIPThrottle(_OTPIPThrottle):
+    scope = "widget_email_code_ip"
+
+
+class WidgetEmailCodeEmailThrottle(_WidgetEmailThrottle):
+    scope = "widget_email_code_email"
+
+
+class WidgetEmailVerifyIPThrottle(_OTPIPThrottle):
+    scope = "widget_email_verify_ip"
+
+
+class WidgetEmailVerifyEmailThrottle(_WidgetEmailThrottle):
+    scope = "widget_email_verify_email"
+
+
+# Their own scopes: a widget visitor naming someone's address must not use up the
+# login codes that person can ask for. Per IP here, per address in the views.
+WIDGET_EMAIL_CODE_THROTTLES = [WidgetEmailCodeIPThrottle]
+WIDGET_EMAIL_VERIFY_THROTTLES = [WidgetEmailVerifyIPThrottle]

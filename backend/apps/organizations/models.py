@@ -518,11 +518,35 @@ class OTPCode(models.Model):
     A new code is generated for each login attempt. Codes expire after
     OTP_EXPIRY_SECONDS (default 10 minutes), can only be used once, and stop
     working after OTP_MAX_ATTEMPTS submissions.
+
+    A code only works for its purpose, and asking for one only cancels the pending
+    codes of that purpose: a widget visitor naming someone's address can't spend
+    the attempts of their login code, nor cancel it.
     """
+
+    class Purpose(models.TextChoices):
+        LOGIN = "login", "Login"
+        WIDGET_EMAIL = "widget_email", "Widget email proof"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(db_index=True)
     code = models.CharField(max_length=8)
+    purpose = models.CharField(
+        max_length=20, choices=Purpose.choices, default=Purpose.LOGIN
+    )
+    # A widget code is only good in the organization and the session that asked for
+    # it: another organization's page could otherwise relay a code it got mailed. A
+    # login code has neither.
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, null=True, blank=True, related_name="+"
+    )
+    widget_session = models.ForeignKey(
+        "tickets.WidgetSession",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     used_at = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
@@ -537,7 +561,15 @@ class OTPCode(models.Model):
         return f"OTP for {self.email} ({self.code})"
 
     @classmethod
-    def redeem(cls, email: str, code: str) -> "OTPCode | None":
+    def redeem(
+        cls,
+        email: str,
+        code: str,
+        purpose: str = Purpose.LOGIN,
+        *,
+        organization=None,
+        widget_session=None,
+    ) -> "OTPCode | None":
         """Spend one attempt on the email's active code; consume it if it matches.
 
         Returns the code on success. Returns None for a wrong code, and for an
@@ -552,6 +584,9 @@ class OTPCode(models.Model):
         otp = (
             cls.objects.filter(
                 email=email,
+                purpose=purpose,
+                organization=organization,
+                widget_session=widget_session,
                 used_at__isnull=True,
                 created_at__gte=now - timedelta(seconds=expiry),
             )
@@ -573,19 +608,31 @@ class OTPCode(models.Model):
         return None
 
     @classmethod
-    def generate(cls, email: str) -> "OTPCode":
+    def generate(
+        cls,
+        email: str,
+        purpose: str = Purpose.LOGIN,
+        *,
+        organization=None,
+        widget_session=None,
+    ) -> "OTPCode":
         """Generate a new OTP code for the given email.
 
-        Invalidates any existing unused codes for this email.
+        Invalidates any existing unused codes for this email, purpose, organization
+        and widget session: a login code has neither, a widget code has both.
         """
+        scope = {
+            "email": email,
+            "purpose": purpose,
+            "organization": organization,
+            "widget_session": widget_session,
+        }
         # Invalidate previous unused codes
-        cls.objects.filter(email=email, used_at__isnull=True).update(
-            used_at=timezone.now()
-        )
+        cls.objects.filter(**scope, used_at__isnull=True).update(used_at=timezone.now())
 
         length = getattr(settings, "OTP_LENGTH", 6)
         code = "".join(secrets.choice("0123456789") for _ in range(length))
-        return cls.objects.create(email=email, code=code)
+        return cls.objects.create(**scope, code=code)
 
 
 class OrganizationDomain(TimestampedModel):

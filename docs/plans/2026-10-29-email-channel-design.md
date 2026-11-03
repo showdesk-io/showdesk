@@ -1,7 +1,7 @@
 # Email Channel (send + receive) — Design Document
 
 > Date: 2026-10-29
-> Status: Validated
+> Status: Validated. PR 2 built on `feat/email-channel` (2026-11-03), see §10.
 > Phase: 3.5 (Channels & Integrations)
 > Research input: `docs/brainstorm/multi-channel-communication.md` (§1, §6)
 > Depends on: `docs/plans/2026-10-29-contacts-design.md`
@@ -123,14 +123,24 @@ same pipeline (testing, self-hosters, replaying).
 
 ### 4.1 Recipient resolution
 
+The envelope recipient is what the provider delivered to; the headers are
+whatever the sender wrote. So when the provider gives an envelope recipient, it
+alone is resolved. The headers are only searched for a mail without one, as fed
+to `ingest_eml` without `--recipient`.
+
 1. `reply+{token}@…` → ticket (and its mailbox).
-2. Otherwise search, in order, the envelope recipient (when the provider
-   exposes it), `Delivered-To`, `X-Original-To`, `X-Forwarded-To`, `To`, `Cc`
-   for an active Mailbox matching `local_part@INBOUND_EMAIL_DOMAIN` **or**
-   `public_address`. This covers forwarding, where `To` stays
+2. Otherwise an active Mailbox matching `local_part@INBOUND_EMAIL_DOMAIN`
+   **or** `public_address`: the envelope recipient, or, without one, the first
+   match in `Delivered-To`, `X-Original-To`, `X-Forwarded-To`, `To`, `Cc`.
+   A forward is delivered to the inbound address while `To` stays
    `support@acme.com`.
-3. Nothing found → `rejected` / `unknown_recipient`. Inbound email never
-   creates an Organization or a Mailbox.
+3. Nothing found → `rejected` / `unknown_recipient`; a mailbox or ticket of an
+   inactive organization → `rejected` / `inactive_organization`. Inbound email
+   never creates an Organization or a Mailbox. Such a row keeps the sender,
+   subject and reason, never the raw mail, and at most
+   `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` of them are kept per sender (and mailbox)
+   and hour, and at most `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` overall. A mail rejected without a mailbox doesn't make the same mail,
+   delivered to a valid reply address, a duplicate.
 
 ### 4.2 Filters (status `ignored`, reason recorded)
 
@@ -145,7 +155,12 @@ same pipeline (testing, self-hosters, replaying).
 - **Loops**: sender on `INBOUND_EMAIL_DOMAIN`, already-known Message-ID.
 - **Spam**: provider verdict/score when available (`spam_detected`).
 - **Rate limit**: more than `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` (default 20)
-  emails from the same sender to the same mailbox.
+  emails from the same sender to the same mailbox, or more than
+  `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` (default 200) to the mailbox from
+  anyone. Checked before anything else a mail can make us do, such as mailing
+  the admins a forwarding confirmation (at most once per mailbox per 10 minutes).
+- **Duplicates**: a Message-ID already on a message of the organization (one
+  mail sent to a reply address and to the inbound address arrives twice).
 
 Ignored and rejected emails are listed in the Mailbox settings.
 
@@ -162,21 +177,39 @@ If the matched ticket is resolved/closed: reopen it when the last activity is
 within `INBOUND_EMAIL_REOPEN_DAYS` (default 7); otherwise create a new ticket
 whose `context_metadata` references the previous one.
 
+The same window applies to the requester's other writes, on every ticket and also
+on an instance that receives no mail: a message or file from the widget or the
+conversation page reopens a ticket within it, and past it is refused (409, the
+widget and the page then offer a new conversation, and show it closed up front
+from `can_reply`).
+
 ### 4.4 Content
 
-- Prefer `text/plain`; otherwise convert sanitized HTML to text.
-- Strip quoted history: first at our own marker
-  (`-- Reply above this line --`), then heuristically (`On … wrote:`,
-  `Le … a écrit :`, `>` blocks, Outlook separators) using
-  `email-reply-parser`. Agents can always open the original email.
+- Every inline `text/plain` part, in order; otherwise convert the HTML to text.
+  A part declaring an unknown charset is read as UTF-8, with replacement.
+- Strip quoted history, line by line on bounded lines, in linear time (a
+  regex library such as `email-reply-parser` is cubic on hostile text): at our
+  own marker (`-- Reply above this line --`), at an `On … wrote:` /
+  `Le … a écrit :` attribution (also wrapped over two lines), at an Outlook
+  header block (three header lines or more, with From/De, Sent/Envoyé/Date and
+  To/À or Subject/Objet), then a trailing block of `>` lines. Nothing is taken
+  for a signature. Agents can always open the original email.
 - Attachments → `TicketAttachment` with the same extension blocklist as widget
-  uploads; total size capped by `INBOUND_EMAIL_MAX_SIZE_MB` (default 25);
-  oversize parts are dropped and noted in the message.
+  uploads; total size capped by `INBOUND_EMAIL_MAX_SIZE_MB` (default 25), and at
+  most 50 files; blocked, oversize and extra parts are dropped and named in a note
+  appended to the message. A file keeps its base name only.
+- HTML is reduced to its text by a parser (links as `text (url)`, quotes as `>`
+  lines): no markup reaches a message, whose body is always shown as text.
+- A forward (`Fwd:`, `Fw:`, `TR:`, `WG:` subject) keeps its quoted part: it is the
+  request. A mail that is only history keeps its full text.
 
 ### 4.5 Write
 
 - Resolve or create the Contact from `From` (declared, unverified email) via
-  `apps.contacts.services`.
+  `apps.contacts.services`, for a new ticket only: a mail on an existing ticket
+  keeps its Contact and shows its own sender (`external_sender`), as a colleague
+  in copy would. The address of an agent, admin or superuser of the organization
+  never becomes a Contact, and an anonymized Contact's address gets none.
 - New ticket: `source = email`, title = subject (fallback "(no subject)"),
   `mailbox`, `assigned_team = mailbox.default_team`, `contact`,
   `requester_email`/`requester_name`.
@@ -185,9 +218,28 @@ whose `context_metadata` references the previous one.
 
 ### 4.6 Errors
 
-Exceptions mark the row `failed` and the task retries with backoff; an admin
-action replays any `InboundEmail`. Idempotency relies on
-`(message_id, mailbox)`.
+Exceptions mark the row `failed` and the task retries with backoff. An admin
+replays a `failed` row, from the Django admin (a platform operator, on any
+organization's rows, including those without a mailbox) or from the API (an
+organization admin, on the rows of their organization's mailboxes only): the row goes back to `pending` before
+it's queued, so a replay asked twice runs once. Idempotency relies on
+`(message_id, mailbox)`, and the task does nothing unless the row is `pending`
+or `failed`, under its row lock: it can be queued twice.
+
+The raw `.eml` doesn't hold what the provider said about it: the row stores the
+envelope recipient and sender, and the provider's spam verdict and score (for
+Postal, its `X-Postal-Spam: yes` header). Processing rebuilds the recipient and
+the verdict from those columns, never from the headers when an envelope was
+stored.
+The row's `ticket` is the ticket the mail landed on; a reply address's ticket
+is found again from the stored envelope.
+
+A mail nested deeper than the parser can go is stored `rejected` /
+`unparseable` (known by its content's hash) and the webhook answers 200, so
+the provider stops retrying. A stored mail that can't be parsed, or whose raw
+file is gone, is `failed` with `unparseable` or `raw_missing`, without retries.
+Attachment files are stored before the transaction that writes the ticket (and
+takes the organization's row lock for its reference), and deleted if it fails.
 
 ---
 
@@ -206,6 +258,12 @@ template:
 - Subject `Re: [SD-123] {title}`.
 - Body: reply marker, the new (unread) replies, the last three messages as
   context, a "View conversation" button (signed link, §6).
+- The replies' files go as real attachments, up to `REPLY_EMAIL_ATTACHMENTS_MAX_MB`
+  (10) in all as sent; the others are
+  only named, with a pointer to the conversation link when there is one. A mail
+  never carries a storage URL. The agent's app uploads the files to the ticket
+  first, then posts the reply naming them (`attachment_ids`): they're linked
+  before the reply is announced or mailed.
 - Tickets without a mailbox fall back to the organization's first active
   mailbox, else to `DEFAULT_FROM_EMAIL` (current behaviour) with the
   `Reply-To` as soon as `INBOUND_EMAIL_DOMAIN` is set.
@@ -224,6 +282,13 @@ For a public agent reply:
 Presence: `WidgetConsumer` sets `widget_presence:{session_id}` in Redis with a
 60 s TTL, refreshed by a 25 s client ping, deleted on disconnect.
 
+As built: the key holds the socket's channel name, and a socket only deletes its
+own, so the late disconnect of a socket a reconnect replaced leaves the new one
+present. "Connected" means any widget session that would see the reply: the
+ticket's own, and those entitled to it through the Contact's history (§6.2). A
+cache outage reads as "not connected", so the reply is emailed at once rather
+than lost. Two tabs share one key: see Known limitations.
+
 `Contact.is_unsubscribed` suppresses notification emails, except on tickets
 the contact opened by email (the channel they chose).
 
@@ -239,12 +304,22 @@ showing the channel.
 - Public frontend route `/c/:token`, branded with the organization's logo and
   colour, no account needed: full public thread (no internal notes), reply
   box, attachments. Messages posted there use `channel = widget`.
-- `token` = `django.core.signing` of `{ticket_id, contact_id}` with a dedicated
-  salt and `max_age = CONVERSATION_LINK_MAX_AGE_DAYS` (default 30). Every email
-  carries a fresh link.
+- `token` = `django.core.signing` of `{ticket_id, contact_id, keyed hash of the
+  address mailed}` (never the address in clear: a link is forwarded and logged; keyed,
+  so a list of addresses can't be hashed to find it) with a dedicated salt and
+  `max_age = CONVERSATION_LINK_MAX_AGE_DAYS` (default 30). Every email carries a fresh
+  link. A link opens its conversation only while the ticket is still its contact's,
+  the contact still holds the address mailed and isn't anonymized, and no login moved
+  the ticket: once an agent corrects a contact's address, the previous address's
+  holder loses the conversation.
 - Expired link → "Send me a new link": the new link goes **only** to the
-  ticket contact's email; the requester never chooses the address.
-- Opening a valid link proves mailbox ownership → `Contact.email_verified_at`.
+  ticket contact's email; the requester never chooses the address. At most once per
+  ticket per hour and three times per contact per day, and only for a link up to 180
+  days old; past that the page says to contact support.
+- Opening a valid link proves mailbox ownership → `Contact.email_verified_at`. Neither
+  opening it nor posting through it makes the ticket's `sender_verified` true: that
+  proves who holds the mailbox now, not who wrote the ticket. The page shows no name or
+  address on the requester's side, and opening it counts as reading the replies.
 - API, scoped to the token's ticket and throttled:
   `GET /api/v1/conversations/{token}/`, `POST …/messages/`,
   `POST …/attachments/`, `POST /api/v1/conversations/renew/`.
@@ -254,11 +329,23 @@ showing the channel.
 
 - **Signed email** (`email_hash`, delivered with Contacts): the session is
   verified on init.
-- **One-time code**: when a session has a declared but unproven email and the
-  Contact owning it in `Contact.email` has tickets outside this session, the
-  widget offers
-  "You have N email conversations — get a code to see them". Six-digit code
-  via the existing `OTPCode` (expiry, attempt limit, throttling).
+- **One-time code**: when a session has a declared but unproven email, the widget
+  offers "Have earlier conversations by email? Get a code", whatever exists behind
+  the address: the email is only declared, so a count would tell anyone whether an
+  address is a customer's (Decision A of the implementation plan). The route always
+  answers 202, and a code is only mailed when the Contact owning the address in
+  `Contact.email` has tickets outside this session that the proof would open.
+  Six-digit code via the existing `OTPCode`, with its own purpose (`widget_email`)
+  and throttles, so it neither spends nor cancels a login code, and good only in the
+  organization and the session that asked for it. A code proof is recorded as such
+  (`email_proof_source = code`) and survives an unsigned init, but not one declaring
+  another email.
+- A proof is about the address it was made for (`WidgetSession.email_verified_for`),
+  written only if the session still has that address: a proof racing an email change
+  proves nothing.
+- From the history, a session writes on its own tickets, on tickets opened by email,
+  and on those opened by a session that's entitled too. Others are read-only there:
+  a message would reach whoever opened them.
 - Proof is stored **per session** (`WidgetSession.email_verified_at`); a
   verification made elsewhere never opens anything in this session.
 - Widget history = session tickets ∪ `external_user_id` tickets (unchanged) ∪
@@ -268,8 +355,10 @@ showing the channel.
   proven only (or set by an agent): an identified session's unproven email goes to
   `Contact.declared_email`, so forging somebody's address can never attach their
   email-born tickets to the forger's Contact. `declared_email` is never used to
-  match a Contact, to send mail or to open history. The rule is in the Contacts
-  design, §3.
+  match a Contact or to open history. It is only mailed an agent's reply, as the
+  last fallback of a ticket with no `requester_email` and a Contact with no `email`
+  (Contacts §5): that reply carries no conversation link, which only goes to the
+  address the Contact holds. The rule is in the Contacts design, §3.
 
 ---
 
@@ -324,7 +413,14 @@ emails org admins.
 
 ### 7.4 UI
 
-Mailbox settings, "Send from support@acme.com" wizard: (1) domain ownership
+PR 2 ships the Settings "Email" tab without the sending wizard: mailboxes,
+their inbound address with a copy button, public address, default team,
+active toggle, address regeneration (confirmed first), the forwarding steps
+below, the detected Gmail code and link, and the log of ignored, rejected and
+failed mail with a replay for admins. The tab is hidden while
+`INBOUND_EMAIL_DOMAIN` is empty.
+
+PR 3 adds to it a "Send from support@acme.com" wizard: (1) domain ownership
 (existing flow), (2) DNS records with copy buttons, (3) status and "Check now".
 The same screen documents forwarding for Google Workspace / Gmail (including
 the detected confirmation link/code) and Microsoft 365 (external forwarding is
@@ -340,10 +436,13 @@ All new variables are documented in `.env.example` with safe defaults.
 |---|---|---|---|
 | `INBOUND_EMAIL_DOMAIN` | empty (channel disabled) | 2 | Domain receiving inbound mail and reply tokens. |
 | `ANYMAIL_POSTAL_WEBHOOK_KEY` | empty | 2 | Postal public key (signature check). Other providers use their Anymail setting. |
-| `INBOUND_EMAIL_REOPEN_DAYS` | 7 | 2 | Reopen window for resolved/closed tickets. |
+| `INBOUND_EMAIL_REOPEN_DAYS` | 7 | 2 | Reopen window for resolved/closed tickets, for mail and for widget and conversation page writes alike (§4.3). |
+| `REPLY_EMAIL_ATTACHMENTS_MAX_MB` | 10 | 2 | Files a reply mail attaches in all, counted as sent (base64); the others are named (§5.1). |
 | `INBOUND_EMAIL_MAX_SIZE_MB` | 25 | 2 | Attachment size cap. |
-| `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` | 20 | 2 | Per sender and mailbox. |
-| `INBOUND_EMAIL_RAW_RETENTION_DAYS` | 30 | 2 | Raw `.eml` retention. |
+| `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` | 20 | 2 | Per sender and mailbox; also bounds the rejected rows kept per sender (§4.1). |
+| `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` | 200 | 2 | Per mailbox, all senders; also bounds the rejected rows kept overall (§4.1). |
+| `INBOUND_EMAIL_RAW_RETENTION_DAYS` | 30 | 2 | Raw `.eml` retention, purged daily; the row stays, and pending or failed mail keeps its file. |
+| `INBOUND_EMAIL_LOG_RETENTION_DAYS` | 90 | 2 | Log of received mails (rows), purged daily; pending or failed ones stay. |
 | `WIDGET_UNREAD_EMAIL_DELAY_MINUTES` | 5 | 2 | Delay before emailing an unread widget reply. |
 | `CONVERSATION_LINK_MAX_AGE_DAYS` | 30 | 2 | Conversation link lifetime. |
 | `SENDING_DOMAIN_PROVIDER` | `none` | 3 | `none`, `manual`, `scaleway_tem`. |
@@ -353,6 +452,40 @@ All new variables are documented in `.env.example` with safe defaults.
 Operators must publish SPF/DKIM for `INBOUND_EMAIL_DOMAIN` with their sending
 service, since fallback mail is sent from that domain, and point its MX to the
 inbound provider.
+
+### Known limitations
+
+- A mail's `From` is forgeable. Anyone can send mail under a real customer's
+  address and use up that address's quota (`INBOUND_EMAIL_RATE_LIMIT_PER_HOUR`
+  per mailbox): the customer's own mail is then ignored, as `rate_limited`, for
+  the rest of the hour. A forger changing the `From` at each mail is bounded by
+  `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` (200) per mailbox, which then also
+  ignores everyone's mail for the hour. Admins see both in the mailbox's log.
+
+- Presence is one key per widget session. With the widget open in two tabs,
+  closing one deletes the key until the other's next ping, 25 s at most: an
+  agent's reply in that window is emailed at once instead of waiting.
+
+- `Mailbox.public_address` is unique across organizations and unverified: an
+  organization can claim `support@bigcorp.com` before BigCorp does. It receives
+  none of BigCorp's mail (the envelope, BigCorp's own inbound address, decides),
+  but BigCorp can't register the address until it is freed. To be tied to a
+  verified sending domain in PR 3.
+
+- The widget code task's broker message carries the widget session's id, a bearer
+  token for that session, and the address. The code itself never does: the task
+  that sends it gets the code's id. Anyone who can read the broker's queue can use
+  the session id as the widget would.
+
+- The per-address code throttles (`WIDGET_EMAIL_CODE_EMAIL_RATE`,
+  `WIDGET_EMAIL_VERIFY_EMAIL_RATE`) count an address across every organization: a
+  visitor asking for codes in one organization's widget uses up what the same
+  address can ask for in another's.
+
+- A ticket filed through `widget_submit` has no session, and its external id and
+  address come with the public token alone. It shows in the history of the user
+  with that external id, read-only: a message there would go to the address it
+  names.
 
 ---
 
@@ -375,3 +508,68 @@ inbound provider.
 - **Development environment**: outbound mail is captured by Mailpit (headers
   checked there); inbound is exercised with `manage.py ingest_eml` using
   replies crafted from captured mails, until an inbound provider is connected.
+
+---
+
+## 10. As built (PR 2)
+
+The implementation plan (`docs/plans/2026-11-01-email-channel-plan.md`) made
+these choices beyond this design. Each one is pinned by a test.
+
+| # | Choice | Why |
+|---|---|---|
+| 1 | Only the configured provider's webhook is mounted: `/anymail/postal/inbound/` needs `ANYMAIL_POSTAL_WEBHOOK_KEY`, the rest of `anymail.urls` needs `ANYMAIL_WEBHOOK_SECRET`. | Without a secret, Anymail's basic-auth check only warns: any other provider's inbound route would take a forged mail. |
+| 2 | Our own `PostalInboundView`, subclassing Anymail's. | Anymail decodes the raw message as UTF-8 (an 8-bit Latin-1 mail was a 500) and reads it through `request.body`, capped far below `INBOUND_EMAIL_MAX_SIZE_MB`. |
+| 3 | `TicketMessage.external_sender`: the display name and address of the mail's `From`. | A third party's reply on a thread shows who wrote it. Anonymization clears it. |
+| 4 | The raw `.eml` never gets a URL, in the API or the Django admin. Agents of the ticket's organization download it from `GET /api/v1/tickets/{id}/messages/{mid}/original/` (`message/rfc822`, attachment, `nosniff`); a purged one is a 404. | The default storage builds URLs, and a mail holds personal data. |
+| 5 | Anonymization deletes the contact's `InboundEmail` rows and raw files (its own, its tickets', those sent from its address), the organization's widget codes mailed to its address or its sessions, and clears `external_id` and `external_sender` on its messages. Expired one-time codes, of every purpose, are purged daily. | Otherwise the raw mail keeps everything the anonymization removes. |
+| 6 | The conversation token carries a keyed hash of the address it was mailed to (16 hex characters of an HMAC-SHA256 of the lowercased address, with its own salt), never the address. A link opens its conversation, and verifies the contact, only while the contact's email has that hash. | An agent correcting a contact's email must neither let an old link prove the new address nor keep the old address's holder in the conversation. |
+| 7 | The conversation link never makes a ticket's `sender_verified` true. | It proves who holds the mailbox now, not who wrote the ticket. |
+| 8 | `OTPCode.purpose` (`login`, `widget_email`), with separate throttles. | A widget visitor can't spend, cancel or exhaust someone's login codes. |
+| 9 | `WidgetSession.email_proof_source` (`signed`, `code`); the logout rule (Contacts §3 rule 8) only applies to `signed`. | A host page that never signs would lose a code proof at the next page load. |
+| 10 | Agents' own addresses never become contacts on inbound mail. | Contacts §5: an agent, admin or superuser never becomes a Contact. |
+| 11 | Reuniting history on proof (Contacts §8) moves tickets, sessions and notes from the email-only contact to the identified one, fills the blanks, keeps an unsubscription, then deletes the email-only row. | The email has to move for the proof to hold. |
+
+Decisions taken on 2026-11-03:
+
+- **A. The widget's code banner** is the same neutral one for every unproven
+  email, the route always answers 202, and a code is only mailed when there's
+  something to see (§6.2).
+- **B. Unsubscribed contacts** get no email for a widget ticket and find the
+  reply in the widget; tickets they opened by email still get replies (§5.2,
+  and Contacts §5 corrected accordingly).
+
+What agents and admins have:
+
+- `/api/v1/mailboxes/`: agents read, admins create and edit (the serializer runs
+  `Mailbox.full_clean()`, so the inbound-domain and team checks apply; a public
+  address already taken is a 400 on that field). Mailboxes are deactivated,
+  never deleted, since their log would go with them. The Gmail confirmation is
+  only sent to admins. `POST …/{id}/regenerate-address/` (admins).
+- `GET /api/v1/mailboxes/{id}/inbound/`: the paginated log of the mailbox's
+  `ignored`, `rejected` and `failed` mail. Mail no mailbox was found for stays in
+  the Django admin.
+- `POST /api/v1/inbound-emails/{id}/replay/` (admins, `failed` rows of their
+  organization only; 409 otherwise), and the same replay as a Django admin action.
+- The organization payload carries `inbound_email_enabled` and
+  `inbound_email_domain`, which show or hide the Settings "Email" tab.
+- On a ticket: a channel badge per message, the mail's sender, "View original"
+  (downloaded through the authenticated API client), and "Not delivered by email"
+  when a reply bounced. The Gmail confirmation link is only linked when it's an
+  https link to `mail.google.com` or `mail-settings.google.com`, checked again in
+  the browser.
+- `manage.py seed` adds a "Support" mailbox to the demo organization when
+  `INBOUND_EMAIL_DOMAIN` is set.
+
+Writes from the widget follow the reopen window of §4.3, on every ticket, as the
+conversation page's do: `widget_conversation` returns `can_reply`, and a write past
+the window is a 409.
+
+Without `INBOUND_EMAIL_DOMAIN` (an instance that receives no mail):
+
+- The widget never offers the email code (`email_proof_offered` is false), and the
+  code routes answer as when a proof would open nothing: no conversation came by
+  email.
+- The conversation link, its page and its API stay available: reply mails still
+  carry the link, a useful way back to the conversation on its own.
+- The reopen window still applies to widget and conversation page writes.

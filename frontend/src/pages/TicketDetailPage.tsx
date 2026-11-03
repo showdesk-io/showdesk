@@ -12,19 +12,23 @@ export function TicketDetailPage() {
   const { data: ticket, isLoading, error } = useTicket(id!);
   const createMessage = useCreateMessage(id!);
 
-  const handleSendMessage = (body: string, messageType: string) => {
-    createMessage.mutate(
-      { body, message_type: messageType },
-      {
-        onSuccess: () => {
+  const handleSendMessage = (
+    body: string,
+    messageType: string,
+    attachmentIds: string[],
+  ) =>
+    // Rejects on failure, so the composer keeps the reply and its files.
+    createMessage
+      .mutateAsync({ body, message_type: messageType, attachment_ids: attachmentIds })
+      .then(
+        () => {
           toast.success("Message sent.");
         },
-        onError: () => {
+        (error: unknown) => {
           toast.error("Failed to send message.");
+          throw error;
         },
-      },
-    );
-  };
+      );
 
   if (isLoading) {
     return (

@@ -72,28 +72,41 @@ SAMPLES: dict[str, Callable[[], tuple[str, dict[str, Any]]]] = {
         "Re: [ACM-1042] Cannot upload my profile picture",
         {
             "ticket": _fake_ticket(),
-            "ticket_url": "https://app.showdesk.io/tickets/ACM-1042",
-            "message_body": (
-                "Thanks for the report!\n\nWe pushed a fix this morning -- "
-                "could you try again and let us know?\n\nDetails: "
-                "https://status.example.com/incident/482"
-            ),
-            "author_label": "Alice",
-            "author_initial": "A",
-            "intro": "Alice replied to your support ticket.",
-            "cta_label": "View conversation",
-            "attachments": [
+            "ticket_url": "https://app.showdesk.io/c/sample-token",
+            "reply_marker": "-- Reply above this line --",
+            "replies": [
                 {
-                    "filename": "screenshot.png",
-                    "url": "https://example.com/preview/screenshot.png",
-                    "size": 204800,
-                },
-                {
-                    "filename": "console-log.txt",
-                    "url": "https://example.com/preview/console-log.txt",
-                    "size": 1280,
+                    "author_label": "Alice",
+                    "author_initial": "A",
+                    "body": (
+                        "Thanks for the report!\n\nWe pushed a fix this morning -- "
+                        "could you try again and let us know?\n\nDetails: "
+                        "https://status.example.com/incident/482"
+                    ),
+                    "attachments": [
+                        {
+                            "filename": "screenshot.png",
+                            "size": 204800,
+                            "status": "attached",
+                        },
+                        {
+                            "filename": "console-log.txt",
+                            "size": 1280,
+                            "status": "attached",
+                        },
+                    ],
                 },
             ],
+            "history": [
+                {
+                    "author_label": "You",
+                    "body": "My profile picture upload fails with an error.",
+                    "created_at": None,
+                },
+            ],
+            "author_label": "Alice",
+            "intro": "Alice replied to your support ticket.",
+            "cta_label": "View conversation",
         },
     ),
     "ticket_assigned": lambda: (
@@ -171,6 +184,17 @@ SAMPLES: dict[str, Callable[[], tuple[str, dict[str, Any]]]] = {
         {
             "org_name": "Acme",
             "domain": "acme.com",
+        },
+    ),
+    "forwarding_confirmation": lambda: (
+        "Gmail forwarding confirmation for Support",
+        {
+            "org_name": "Acme",
+            "mailbox_name": "Support",
+            "inbound_address": "acme-x7k2m9ab3c@in.example.com",
+            "code": "614028937",
+            "url": "https://mail-settings.google.com/mail/vf-%5Bexample%5D-AbCd",
+            "settings_url": "https://app.showdesk.io/settings",
         },
     ),
     "contact_export_ready": lambda: (

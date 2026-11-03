@@ -16,6 +16,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { SetupPage } from "./pages/SetupPage";
 import { SignupPage } from "./pages/SignupPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
+import { ConversationPage } from "./pages/ConversationPage";
 
 export function App() {
   return (
@@ -23,6 +24,8 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/signup" element={<SignupPage />} />
+      {/* Public: a requester's conversation, opened by the link mailed to them. */}
+      <Route path="/c/:token" element={<ConversationPage />} />
       <Route
         path="/onboarding"
         element={

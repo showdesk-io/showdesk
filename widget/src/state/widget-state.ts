@@ -19,6 +19,10 @@ export interface WidgetState {
   /** Current active conversation ticket ID. */
   activeTicketId: string | null;
   activeTicketReference: string | null;
+  /** The active conversation is only seen through the history: no writing there. */
+  activeTicketReadOnly: boolean;
+  /** A conversation closed too long ago to reopen: the ticket ID, until another opens. */
+  closedTicketId: string | null;
   messages: ChatMessage[];
 
   /** History tab data. */
@@ -32,6 +36,9 @@ export interface WidgetState {
 
   /** Unread badge count (agent replies while modal closed). */
   unreadCount: number;
+
+  /** When this session last asked for an email code (ms), null if it hasn't. */
+  emailCodeSentAt: number | null;
 }
 
 type Listener = () => void;
@@ -50,6 +57,8 @@ export function createWidgetStore(): WidgetStore {
     session: null,
     activeTicketId: null,
     activeTicketReference: null,
+    activeTicketReadOnly: false,
+    closedTicketId: null,
     messages: [],
     conversations: [],
     isConnected: false,
@@ -57,6 +66,7 @@ export function createWidgetStore(): WidgetStore {
     contactNudgeDismissed: false,
     contactNudgeShown: false,
     unreadCount: 0,
+    emailCodeSentAt: null,
   };
 
   function subscribe(fn: Listener): () => void {

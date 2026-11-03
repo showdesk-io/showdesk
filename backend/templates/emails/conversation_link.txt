@@ -1,0 +1,11 @@
+{% extends "emails/base.txt" %}
+{% block content %}{% autoescape off %}Here is a new link to your conversation with {{ ticket.organization.name }}.
+
+Ticket: {{ ticket.title }} ({{ ticket.reference }})
+
+View conversation: {{ conversation_url }}
+
+If you didn't ask for it, you can ignore this email. Keep the link to yourself: it opens your conversation.
+
+-- The {{ ticket.organization.name }} team{% endautoescape %}{% endblock %}
+{% block footer %}Sent by {{ ticket.organization.name }} via Showdesk.{% endblock %}

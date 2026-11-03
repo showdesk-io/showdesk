@@ -117,7 +117,8 @@ session and refused (403) when it's the only way to the session asked for (rule 
 a malformed `external_user_id` is a 400.
 
 1. **Identified widget session** (valid `user_hash`): the Contact is found or
-   created on `(organization, external_id)`. No automatic merge, ever.
+   created on `(organization, external_id)`. No automatic merge, but for the one
+   case of a proven email below.
    - **Unproven email**: `Contact.email` never receives it. It is stored in
      `declared_email`, only on that session's own Contact, and the latest value
      wins, so a different email on a resume also replaces `WidgetSession.email`. An
@@ -126,11 +127,20 @@ a malformed `external_user_id` is a 400.
      API search.
    - **Proven email**: a Contact with a blank `email` takes it if no other Contact
      owns it. A new external id attaches to the email-only Contact owning it
-     (`external_id` blank). A Contact holding another email keeps it, and a proven
-     email that is owned elsewhere stays with its owner: in both cases the session
-     proved nothing about this Contact, nothing is marked verified and
-     `declared_email` is left as it is. Otherwise `declared_email` is cleared if it
-     equals the proven email.
+     (`external_id` blank). A Contact with a blank `email` whose proven email is
+     held by an email-only, non-anonymized Contact reunites their history: that
+     Contact's tickets, sessions and notes move to it, its name, phone, avatar, job
+     title, locale, timezone, company and first-seen date fill the blanks, its
+     attributes fill the missing keys, an unsubscription is kept, and the
+     email-only row is deleted in the same transaction before the email moves.
+     Nothing moved becomes verified: `sender_verified` stays false on those
+     tickets, and their sessions open no history without a proof of their own.
+     The identified Contact is locked first, then the email-only one, and nothing
+     locks two Contacts the other way. A Contact holding another email keeps it,
+     and a proven email that is owned by an identified or anonymized Contact stays
+     with its owner: in both cases the session proved nothing about this Contact,
+     nothing is marked verified and `declared_email` is left as it is. Otherwise
+     `declared_email` is cleared if it equals the proven email.
 2. **Proof of an email**: a valid `email_hash` (`data-user-email-hash` /
    `user.emailHash`), or a later proof of ownership (see the email channel design).
    When the Contact ends up holding that email, the session and the Contact are
@@ -189,12 +199,17 @@ a malformed `external_user_id` is a 400.
    session id alone (`X-Widget-Session`), so an id stays a bearer token (see §8). The
    session id the widget stored decides what an init does:
    - **Anonymous, no valid hash**: resumed. An id sent without a valid hash is ignored.
-   - **Anonymous with a proven email, no valid hash and no valid `email_hash`
+   - **Anonymous with a signed email, no valid hash and no valid `email_hash`
      (logout)**: handled as an identified session's logout below: a new anonymous
      session, the stored one left as it is. The proof stays true of what that session
      wrote, and nothing new is written under it. An integrator signing the email on every
      init keeps its session. A wrong `user_hash` here is refused (403) as on an identified
-     session, since nothing else in the request proves anything.
+     session, since nothing else in the request proves anything. An email proven by a
+     code mailed to it (`WidgetSession.email_proof_source = code`, email channel design
+     §6.2) isn't lost this way, since a page that never signs couldn't sign it again,
+     unless the init declares a different, non-empty email: that's someone else on the
+     same browser, and it's a logout too. A reload declaring the same email, or none,
+     keeps the session.
    - **Anonymous, valid hash (login)**: the identified session is found or created,
      and returned for the widget to store instead. In one transaction, within the
      organization, the anonymous session's tickets move to it and to its Contact
@@ -304,8 +319,8 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   ZIP attached (never a URL): `contact.json` (profile, attributes, the notes agents wrote
   about the contact), `tickets.json` (tickets, public messages, metadata of the files on
   public messages or with no message if the contact uploaded them, the contact's recordings
-  with their transcription; never internal ticket notes, nor who at the organization wrote
-  what) and `tickets.csv` (formula-like cells escaped). Beyond 20 MB once base64 encoded,
+  with their transcription, each message's channel; never internal ticket notes, nor who
+  at the organization wrote what, nor the raw mails or their Message-IDs) and `tickets.csv` (formula-like cells escaped). Beyond 20 MB once base64 encoded,
   as an email carries it, nothing is attached. That and a build or send still failing after
   its retries each send the requester one `contact_export_failed` email with the reason; if
   that email fails, it's only logged.
@@ -327,9 +342,16 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   (one who's staff stays), external_user_id, context_url and
   context_user_agent cleared, `context_metadata` reduced to a whitelist (which also removes
   the `pre_login_*` trace), where only strings of 100 characters at most without `@` stay,
-  `widget_session` unlinked. On those tickets, the contact's messages (sender type `user`,
-  or written by the requester): body replaced by a placeholder, unlinked from their
-  session. Files: the contact's attachments and recordings are deleted, rows and files.
+  plus `previous_ticket` when it's a ticket id (the closed ticket an inbound mail would
+  have continued), `widget_session` unlinked. On those tickets, the contact's messages
+  (sender type `user`, or written by the requester): body replaced by a placeholder,
+  unlinked from their session, and the Message-ID (`external_id`, which can name the
+  sender's domain) and `From` (`external_sender`) of a message that came by email
+  cleared; the channel stays. Inbound mail: the stored mails (rows and raw `.eml` files)
+  of those tickets, and those sent from the Contact's address to a mailbox or ticket of
+  its organization, ignored ones included, are deleted, and the address is cleared as
+  the `external_sender` of any message of the organization (a reply from a thread the
+  contact was copied on). Mail from that address to another organization stays. Files: the contact's attachments and recordings are deleted, rows and files.
   "The contact's" means uploaded with no user (as the widget does, or by an account since
   deleted) or by the ticket's requester. A requester who's an agent or admin of the
   organization filed the ticket for the contact: what they wrote or uploaded stays. Files
@@ -351,9 +373,9 @@ is a 400. A number as `name` becomes text and a long one is cut; any other unusa
 that gets a field wrong doesn't stop the widget.
 
 Tickets expose a read-only `sender_verified`: whether this ticket's sender proved
-being its Contact (HMAC-identified on that Contact, session email verified before the
-ticket was written, or the conversation link once the email channel adds it, and never
-on a ticket written before a login, rule 8). It relates to the Contact, not to the
+being its Contact (HMAC-identified on that Contact, or session email verified before
+the ticket was written, and never on a ticket written before a login, rule 8). The
+email channel's conversation link doesn't verify it (§8). It relates to the Contact, not to the
 ticket's `requester_email`. It's null when there's no outside
 sender to verify: an agent-created ticket (source `agent` or `api`, or no session, no
 inbound sender and no requester account).
@@ -374,9 +396,12 @@ string, cut to the column's length, and the metadata leaves out what `jsonb` ref
 
 `widget_submit` answers with `{id, reference}` only, the token being public.
 
-`Contact.is_unsubscribed` blocks every non-essential email to the contact
-(enforced by the email channel, so nothing reads it yet). A reply on the contact's own
-ticket is essential, whichever of these addresses it goes to.
+`Contact.is_unsubscribed` blocks every notification email to the contact (enforced by
+the email channel). Corrected by the email channel design §5.2, which wins (Decision B
+of the email channel implementation plan, 2026-11-03): an agent's
+reply is no exception, except on a ticket the contact opened by email, the channel they
+chose. An unsubscribed contact gets no email for a widget ticket, and finds the reply
+in the widget.
 
 ---
 
@@ -413,10 +438,12 @@ ticket is essential, whichever of these addresses it goes to.
 
 ## 8. Known limitations
 
-- An identified Contact with a blank `email` can't take a proven email currently
-  held by an email-only Contact, since there's no merge. No access is granted. To
-  resolve in the email channel PR, where history reunion needs it, by reassigning that
-  unverified Contact's tickets on proof, or with the planned manual merge.
+- An identified Contact with a blank `email` takes a proven email held by an
+  email-only Contact with its history (rule 1). One holding another email, or whose
+  proven email is held by another identified Contact, can't: no access is granted,
+  and only the planned manual merge reunites them. The reunion moves everything the
+  email-only Contact had, including tickets someone else may have filed under that
+  address before the proof: they stay unverified, as they were.
 - An unsigned payload can link a Contact without a Company to any existing Company by
   id. It's a claim shown to agents and grants no access.
 - A login moves the anonymous session's tickets to whoever logs in on that browser. On
@@ -437,6 +464,14 @@ ticket is essential, whichever of these addresses it goes to.
   A moved ticket with a blank `requester_email` gets no reply by email: a later `PATCH`
   doesn't fill it, and it doesn't fall back on its Contact's address (§5). Nothing marks the identified Contact as having
   that address, so it isn't found by it.
+- Anonymizing an email-only Contact that a reunion absorbed meanwhile answers 404: the
+  row is gone, and its tickets, sessions and notes are on the identified Contact that
+  proved the address. An admin anonymizes that Contact instead.
+- A message an anonymous session posts on a ticket it sees through its Contact's history
+  belongs to that session, and a login moves it with the session's other messages. One
+  committed after the login's move stays on the blanked anonymous session: agents see it
+  on its ticket, and nobody can delete it from the widget any more, since that session
+  no longer sees the ticket.
 - A tab still holding the anonymous session after a login, in another window or as a
   recording popup, gets a 404 on the tickets that moved, misses their replies, and a
   new conversation it starts stays with the anonymous session.
@@ -455,8 +490,13 @@ ticket is essential, whichever of these addresses it goes to.
   whoever kept it: only `POST` resume is gated by the hash (rule 8).
 - Pages with and without identity on one origin share the stored id, so each switch from
   a signed page to an unsigned one creates a new anonymous session. The same goes for a
-  session proven by `email_hash`, and for the email channel's later proof of ownership
-  when it adds one, unless that channel gives the widget something to sign with.
+  session proven by `email_hash`, but not for one proven by a code: that proof stays on
+  the browser's session until its email changes, logout or not.
+- A message posted through the email channel's conversation link doesn't make the
+  ticket's `sender_verified` true. The link proves who holds the mailbox now, not who
+  wrote the ticket: someone can file a ticket under another's address, and that
+  person's protest on the page would otherwise verify the forger's first message. A
+  ticket opened by email therefore stays unverified, whoever answers through its link.
 - Two messages sent before the first one answers both go without a ticket id, as the
   widget only learns it from that answer: the backend opens two tickets.
 - After a page change in MPA mode, the widget reattaches to a live recording popup without
@@ -493,7 +533,14 @@ ticket is essential, whichever of these addresses it goes to.
   anonymizing again repairs it. A video being processed at that moment can leave its
   thumbnail on the storage.
 - A ticket scrubbed while it had no Contact stays without one, so the upload endpoints that
-  take a ticket id and check for an anonymized Contact still accept files on it.
+  take a ticket id and check for an anonymized Contact still accept files on it, and a
+  mail can still continue it (by its reply address, or headers naming one of its
+  messages' ids that were kept).
+- Anonymization only deletes mail sent from the address the Contact holds when it runs.
+  Mail from an address it held before, a `declared_email`, or mail that no mailbox took
+  (stored rejected, with no organization) stays until the raw mail's retention, and the
+  row after it. A mail arriving from the address after the anonymization makes a new
+  email-only Contact.
 - A file that the storage failed to delete is only logged: nothing retries it, and its row
   is gone.
 - An export holds the metadata of files, not the files. Past 20 MB encoded it isn't sent at

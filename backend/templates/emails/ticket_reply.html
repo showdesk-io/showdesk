@@ -3,19 +3,21 @@
 {% block preheader %}{{ author_label }} replied on {{ ticket.reference }}{% endblock %}
 
 {% block content %}
-<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">New reply · {{ ticket.reference }}</div>
+{% if reply_marker %}<div class="sd-muted" style="margin:0 0 20px 0;font-size:12px;line-height:18px;color:{{ brand.muted_color }};">{{ reply_marker }}</div>
+{% endif %}<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">New repl{{ replies|length|pluralize:"y,ies" }} · {{ ticket.reference }}</div>
 <h1 class="sd-text sd-h1" style="margin:0 0 8px 0;font-size:22px;line-height:30px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">{{ ticket.title }}</h1>
 <p class="sd-muted" style="margin:0 0 20px 0;font-size:14px;line-height:22px;color:{{ brand.muted_color }};">{{ intro }}</p>
 
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:8px 0 4px 0;">
+{% for reply in replies %}
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:{% if forloop.first %}8px{% else %}24px{% endif %} 0 4px 0;">
   <tr>
     <td style="padding-bottom:8px;">
       <table role="presentation" cellpadding="0" cellspacing="0" border="0">
         <tr>
-          <td style="background:{{ brand.primary_color }};color:#FFFFFF;width:36px;height:36px;border-radius:18px;text-align:center;font-size:14px;font-weight:700;line-height:36px;">{{ author_initial }}</td>
+          <td style="background:{{ brand.primary_color }};color:#FFFFFF;width:36px;height:36px;border-radius:18px;text-align:center;font-size:14px;font-weight:700;line-height:36px;">{{ reply.author_initial }}</td>
           <td style="padding-left:12px;vertical-align:middle;">
-            <div class="sd-text" style="font-size:14px;font-weight:600;color:{{ brand.text_color }};line-height:18px;">{{ author_label }}</div>
-            <div class="sd-muted" style="font-size:12px;color:{{ brand.muted_color }};line-height:16px;">just replied</div>
+            <div class="sd-text" style="font-size:14px;font-weight:600;color:{{ brand.text_color }};line-height:18px;">{{ reply.author_label }}</div>
+            <div class="sd-muted" style="font-size:12px;color:{{ brand.muted_color }};line-height:16px;">replied</div>
           </td>
         </tr>
       </table>
@@ -23,23 +25,35 @@
   </tr>
 </table>
 
-<div class="sd-quote" style="margin:8px 0 4px 0;padding:14px 18px;background:#F8FAFC;border-left:3px solid {{ brand.primary_color }};border-radius:6px;font-size:14px;line-height:22px;color:{{ brand.text_color }};word-wrap:break-word;">{{ message_body|urlize|linebreaksbr }}</div>
+<div class="sd-quote" style="margin:8px 0 4px 0;padding:14px 18px;background:#F8FAFC;border-left:3px solid {{ brand.primary_color }};border-radius:6px;font-size:14px;line-height:22px;color:{{ brand.text_color }};word-wrap:break-word;">{{ reply.body|urlize|linebreaksbr }}</div>
 
-{% if attachments %}
-<div style="margin:16px 0 4px 0;font-size:12px;line-height:18px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;">{{ attachments|length }} attachment{{ attachments|length|pluralize }}</div>
+{% if reply.attachments %}
+<div style="margin:16px 0 4px 0;font-size:12px;line-height:18px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;">{{ reply.attachments|length }} attachment{{ reply.attachments|length|pluralize }}</div>
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 4px 0;border:1px solid #E2E8F0;border-radius:6px;background:#FFFFFF;">
-  {% for a in attachments %}
+  {% for a in reply.attachments %}
   <tr>
     <td style="padding:10px 14px;border-top:{% if not forloop.first %}1px solid #E2E8F0{% else %}0{% endif %};font-size:13px;line-height:18px;">
-      {% if a.url %}<a href="{{ a.url }}" style="color:{{ brand.primary_color }};text-decoration:none;font-weight:500;">{{ a.filename }}</a>{% else %}<span style="color:{{ brand.text_color }};font-weight:500;">{{ a.filename }}</span>{% endif %}
-      <span style="color:{{ brand.muted_color }};margin-left:6px;font-size:12px;">({{ a.size|filesizeformat }})</span>
+      <span style="color:{{ brand.text_color }};font-weight:500;">{{ a.filename }}</span>
+      <span style="color:{{ brand.muted_color }};margin-left:6px;font-size:12px;">({{ a.size|filesizeformat }}{% if a.status == "attached" %}, attached{% endif %})</span>
     </td>
   </tr>
   {% endfor %}
 </table>
 {% endif %}
+{% endfor %}
+
+{% if files_too_large or files_unavailable %}
+<div class="sd-muted" style="margin:12px 0 0 0;font-size:13px;line-height:20px;color:{{ brand.muted_color }};">{% if files_too_large %}Some files were too large to attach to this email. {% endif %}{% if files_unavailable %}Some files couldn't be attached to this email. {% endif %}{% if files_url %}<a href="{{ files_url }}" style="color:{{ brand.primary_color }};">Open the conversation</a> to get them.{% else %}Ask us for them.{% endif %}</div>
+{% endif %}
 
 <div style="margin-top:24px;">
   {% include "emails/_button.html" with url=ticket_url label=cta_label %}
 </div>
+
+{% if history %}
+<div style="margin:32px 0 8px 0;font-size:12px;line-height:18px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;">Earlier in this conversation</div>
+{% for earlier in history %}
+<div class="sd-muted" style="margin:0 0 12px 0;font-size:13px;line-height:20px;color:{{ brand.muted_color }};word-wrap:break-word;"><strong>{{ earlier.author_label }}</strong>{% if earlier.created_at %} · {{ earlier.created_at|date:"M j, H:i" }}{% endif %}<br>{{ earlier.body|truncatechars:600|linebreaksbr }}</div>
+{% endfor %}
+{% endif %}
 {% endblock %}

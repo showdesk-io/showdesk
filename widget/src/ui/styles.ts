@@ -1058,6 +1058,61 @@ export function injectStyles(primaryColor: string): void {
       background: color-mix(in srgb, var(--sd-primary) 5%, transparent);
     }
 
+    /* A conversation only read from the history */
+    .sd-read-only {
+      padding: 12px 16px;
+      border-top: 1px solid var(--sd-border);
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    .sd-read-only-text {
+      font-size: 13px;
+      color: var(--sd-text-light);
+    }
+
+    /* Email proof banner */
+    .sd-email-proof {
+      margin: 0 16px 12px;
+      padding: 10px 14px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+    }
+
+    .sd-email-proof-text {
+      font-size: 13px;
+      color: #1e40af;
+      overflow-wrap: anywhere;
+    }
+
+    .sd-email-proof-form {
+      display: flex;
+      gap: 6px;
+      width: 100%;
+    }
+
+    .sd-email-proof-code {
+      flex: 1;
+      letter-spacing: 0.2em;
+    }
+
+    .sd-email-proof-error {
+      font-size: 12px;
+      color: #b91c1c;
+    }
+
+    .sd-btn-small:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
     .sd-history-list {
       flex: 1;
       overflow-y: auto;

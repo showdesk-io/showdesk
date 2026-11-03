@@ -7,10 +7,12 @@ WidgetConsumer — widget chat users (token + session-authenticated).
 import logging
 from urllib.parse import parse_qs
 
+from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
 from apps.core.permissions import LOOKUP_ERRORS
+from apps.email_channel import presence
 
 logger = logging.getLogger(__name__)
 
@@ -129,20 +131,47 @@ class WidgetConsumer(AsyncJsonWebsocketConsumer):
         self.session_id = str(session.id)
         self.group_name = f"widget_session_{self.session_id}"
         await self.channel_layer.group_add(self.group_name, self.channel_name)
+        # Before accepting, so the session counts as present as soon as the
+        # widget sees its socket open.
+        await self._mark_present()
         await self.accept()
 
     async def disconnect(self, close_code: int) -> None:
         """Handle WebSocket disconnection."""
         if hasattr(self, "group_name"):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
+            marked = await sync_to_async(presence.mark_disconnected)(
+                self.session_id, self.channel_name
+            )
+            if not marked:
+                self._presence_failed()
 
     async def receive_json(self, content: dict) -> None:
         """Handle incoming messages.
 
-        Supports app-level heartbeat: {"type": "ping"} → {"type": "pong"}.
+        Supports app-level heartbeat: {"type": "ping"} → {"type": "pong"}. A ping
+        also tells the session still has the widget open.
         """
         if content.get("type") == "ping":
+            await self._mark_present()
             await self.send_json({"type": "pong"})
+
+    async def _mark_present(self) -> None:
+        marked = await sync_to_async(presence.mark_connected)(
+            self.session_id, self.channel_name
+        )
+        if not marked:
+            self._presence_failed()
+
+    def _presence_failed(self) -> None:
+        # Once per socket: it pings every 25 s, and so does every other one.
+        if not getattr(self, "_presence_failure_logged", False):
+            self._presence_failure_logged = True
+            logger.warning(
+                "Widget presence unavailable for session %s: its replies are "
+                "emailed at once.",
+                self.session_id,
+            )
 
     async def widget_message(self, event: dict) -> None:
         """Send a new message (agent reply) to the widget client."""

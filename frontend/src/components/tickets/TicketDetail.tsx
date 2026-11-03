@@ -6,9 +6,11 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { clsx } from "clsx";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
+import { isAxiosError } from "axios";
 import type {
+  MessageChannel,
   Ticket,
   TicketAttachment,
   TicketMessage as TicketMessageType,
@@ -18,6 +20,7 @@ import type {
 } from "@/types";
 import { fetchAgents, fetchTeams } from "@/api/users";
 import { uploadAttachment } from "@/api/attachments";
+import { fetchOriginalMail } from "@/api/tickets";
 import {
   useAssignTicket,
   useUpdateTicket,
@@ -43,7 +46,12 @@ import { CannedResponsePicker } from "./CannedResponsePicker";
 
 interface TicketDetailProps {
   ticket: Ticket;
-  onSendMessage: (body: string, messageType: string) => void;
+  /** ``attachmentIds``: files already uploaded to the ticket, for this message. */
+  onSendMessage: (
+    body: string,
+    messageType: string,
+    attachmentIds: string[],
+  ) => Promise<unknown> | void;
   isSending: boolean;
 }
 
@@ -69,13 +77,14 @@ export function TicketDetail({
   const [titleDraft, setTitleDraft] = useState(ticket.title);
   const [descDraft, setDescDraft] = useState(ticket.description);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Files of the reply being written already uploaded, by file: a retry skips them.
+  const uploadedFiles = useRef(new Map<File, string>());
   const threadRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const descInputRef = useRef<HTMLTextAreaElement>(null);
   const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
-  const queryClient = useQueryClient();
   const deleteMutation = useDeleteMessage(ticket.id);
   const updateTicketMutation = useUpdateTicket();
   const recordUseMutation = useRecordCannedResponseUse();
@@ -158,31 +167,43 @@ export function TicketDetail({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!messageBody.trim() && attachedFiles.length === 0) return;
+    if (isUploading) return;
 
-    if (messageBody.trim()) {
-      onSendMessage(messageBody, isInternalNote ? "internal_note" : "reply");
-      setMessageBody("");
-    }
-
+    // The files go up first, then the message naming them: it's announced and
+    // mailed with them. One already uploaded isn't sent again on a retry.
+    const attachmentIds: string[] = [];
     if (attachedFiles.length > 0) {
       setIsUploading(true);
       try {
         for (const file of attachedFiles) {
-          await uploadAttachment({ ticket: ticket.id, file });
+          let id = uploadedFiles.current.get(file);
+          if (!id) {
+            id = (await uploadAttachment({ ticket: ticket.id, file })).id;
+            uploadedFiles.current.set(file, id);
+          }
+          attachmentIds.push(id);
         }
-        toast.success(
-          `${attachedFiles.length} file${attachedFiles.length > 1 ? "s" : ""} uploaded.`,
-        );
-        setAttachedFiles([]);
-        void queryClient.invalidateQueries({
-          queryKey: ["ticket", ticket.id],
-        });
       } catch {
         toast.error("Failed to upload files.");
+        return;
       } finally {
         setIsUploading(false);
       }
     }
+
+    try {
+      await onSendMessage(
+        messageBody.trim() ? messageBody : "",
+        isInternalNote ? "internal_note" : "reply",
+        attachmentIds,
+      );
+    } catch {
+      // Kept as written, with its uploaded files: a retry names them again.
+      return;
+    }
+    setMessageBody("");
+    setAttachedFiles([]);
+    uploadedFiles.current.clear();
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -302,6 +323,14 @@ export function TicketDetail({
               isInternal={message.message_type === "internal_note"}
               attachments={message.attachments}
               videos={[]}
+              channel={message.channel}
+              externalSender={message.external_sender}
+              deliveryFailed={message.email_delivery_status === "failed"}
+              onViewOriginal={
+                message.channel === "email" && message.sender_type === "user"
+                  ? () => void viewOriginal(ticket.id, ticket.reference, message.id)
+                  : undefined
+              }
               onOpenLightbox={setLightbox}
               onDelete={(id) => {
                 deleteMutation.mutate(id, {
@@ -490,8 +519,52 @@ interface ChatBubbleProps {
   isInternal: boolean;
   attachments: TicketAttachment[];
   videos: VideoRecording[];
+  channel?: MessageChannel;
+  /** The From of the mail the message came from, when it did. */
+  externalSender?: string;
+  /** A reply whose email bounced. */
+  deliveryFailed?: boolean;
+  onViewOriginal?: () => void;
   onOpenLightbox: (state: LightboxState) => void;
   onDelete?: (messageId: string) => void;
+}
+
+const REVOKE_DOWNLOAD_AFTER_MS = 1000;
+
+const CHANNEL_LABELS: Record<MessageChannel, string> = {
+  widget: "Widget",
+  email: "Email",
+  agent: "Agent",
+  api: "API",
+  system: "System",
+};
+
+/**
+ * Saves the raw mail a message came from. Fetched with the agent's token: the raw mail
+ * has no URL of its own.
+ */
+async function viewOriginal(ticketId: string, reference: string, messageId: string) {
+  let blob: Blob;
+  try {
+    blob = await fetchOriginalMail(ticketId, messageId);
+  } catch (error) {
+    toast.error(
+      isAxiosError(error) && error.response?.status === 404
+        ? "The original mail is no longer available."
+        : "Could not download the original mail.",
+    );
+    return;
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${reference}-${messageId.slice(0, 8)}.eml`;
+  // In the document while clicked, and revoked later, as some browsers otherwise
+  // abort the download.
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DOWNLOAD_AFTER_MS);
 }
 
 function ChatBubble({
@@ -503,6 +576,10 @@ function ChatBubble({
   isInternal,
   attachments,
   videos,
+  channel,
+  externalSender,
+  deliveryFailed = false,
+  onViewOriginal,
   onOpenLightbox,
   onDelete,
 }: ChatBubbleProps) {
@@ -528,7 +605,10 @@ function ChatBubble({
     videos.length > 0;
 
   return (
-    <div className={clsx("group/bubble flex gap-3 py-2", isAgent && "flex-row-reverse")}>
+    <div
+      data-message={messageId ?? "initial"}
+      className={clsx("group/bubble flex gap-3 py-2", isAgent && "flex-row-reverse")}
+    >
       {/* Avatar */}
       <div
         className={clsx(
@@ -546,6 +626,16 @@ function ChatBubble({
           <span className="text-sm font-medium text-gray-900">
             {senderName}
           </span>
+          {externalSender && (
+            <span className="max-w-[240px] truncate text-xs text-gray-500" title={externalSender}>
+              {externalSender}
+            </span>
+          )}
+          {channel && (
+            <span className="rounded-sm bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+              {CHANNEL_LABELS[channel]}
+            </span>
+          )}
           {isInternal && (
             <span className="flex items-center gap-0.5 rounded-sm bg-yellow-200 px-1.5 py-0.5 text-[10px] font-medium text-yellow-800">
               <LockIcon /> Internal
@@ -680,6 +770,23 @@ function ChatBubble({
             </div>
           )}
         </div>
+
+        {(deliveryFailed || onViewOriginal) && (
+          <div className={clsx("mt-1 flex items-center gap-3 text-xs", isAgent && "flex-row-reverse")}>
+            {deliveryFailed && (
+              <span className="text-red-600">Not delivered by email</span>
+            )}
+            {onViewOriginal && (
+              <button
+                type="button"
+                onClick={onViewOriginal}
+                className="text-gray-500 underline hover:text-gray-700"
+              >
+                View original
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
