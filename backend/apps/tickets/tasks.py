@@ -11,6 +11,7 @@ import logging
 
 from celery import shared_task
 from django.conf import settings
+from redis.exceptions import RedisError
 
 from apps.core.email import send_branded_email
 from apps.tickets.models import requester_can_be_emailed, requester_reply_address
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 SITE_URL = getattr(settings, "SITE_URL", "http://localhost")
 # A reply mail finding its ticket's previous one still being sent waits this long.
 REPLY_LOCK_RETRY_SECONDS = 15
+# A reply mail that can't take its lock in a cache outage tries again, for an hour.
+REPLY_LOCK_OUTAGE_RETRY_SECONDS = 60
+REPLY_LOCK_OUTAGE_MAX_RETRIES = 60
 
 
 def _ticket_url(ticket) -> str:
@@ -177,7 +181,16 @@ def _email_requester(task, message, address: str) -> None:
     from apps.email_channel import outbound
 
     ticket = message.ticket
-    if not outbound.lock_replies(ticket):
+    try:
+        locked = outbound.lock_replies(ticket)
+    except RedisError as exc:
+        # Without the lock, two mails could carry the same replies: wait for the cache.
+        logger.warning("Reply lock unavailable for ticket %s: %s", ticket.pk, exc)
+        raise task.retry(
+            countdown=REPLY_LOCK_OUTAGE_RETRY_SECONDS,
+            max_retries=REPLY_LOCK_OUTAGE_MAX_RETRIES,
+        ) from exc
+    if not locked:
         raise task.retry(countdown=REPLY_LOCK_RETRY_SECONDS, max_retries=None)
     try:
         _send_requester_mail(task, message, address)

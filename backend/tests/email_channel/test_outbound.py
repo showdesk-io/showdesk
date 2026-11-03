@@ -8,6 +8,7 @@ from celery.exceptions import Retry
 from django.core import mail
 from django.core.cache import cache
 from django.utils import timezone
+from redis.exceptions import ConnectionError as RedisConnectionError
 from rest_framework.test import APIClient
 
 from apps.core.email import _format_from_email
@@ -490,6 +491,23 @@ def test_a_ticket_sends_one_reply_mail_at_a_time(ticket, agent):
     send_ticket_reply_email(message.id)
     assert len(mail.outbox) == 1
     assert cache.get(reply_lock_key(ticket)) is None
+
+
+def test_a_cache_outage_retries_the_reply_mail(ticket, agent):
+    message = _reply(ticket, agent)
+
+    with (
+        mock.patch(
+            "apps.email_channel.outbound.cache.add",
+            side_effect=RedisConnectionError("down"),
+        ),
+        pytest.raises(Retry),
+    ):
+        send_ticket_reply_email(message.id)
+    assert mail.outbox == []
+
+    send_ticket_reply_email(message.id)
+    assert len(mail.outbox) == 1
 
 
 def test_the_delay_stays_below_the_brokers_redelivery(ticket, agent, settings):
