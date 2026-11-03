@@ -16,6 +16,7 @@ from apps.organizations.models import RESERVED_EXTERNAL_ID_PREFIXES, Team, User
 from apps.organizations.serializers import UserSerializer
 
 from .models import (
+    BLOCKED_EXTENSIONS,
     CannedResponse,
     PriorityLevel,
     SavedView,
@@ -116,30 +117,6 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
     # Max 20 MB per file
     MAX_FILE_SIZE = 20 * 1024 * 1024
 
-    # Blocked extensions (executable, dangerous)
-    BLOCKED_EXTENSIONS = frozenset(
-        {
-            ".exe",
-            ".bat",
-            ".cmd",
-            ".com",
-            ".msi",
-            ".scr",
-            ".pif",
-            ".vbs",
-            ".vbe",
-            ".js",
-            ".jse",
-            ".wsf",
-            ".wsh",
-            ".ps1",
-            ".sh",
-            ".csh",
-            ".dll",
-            ".sys",
-        }
-    )
-
     class Meta:
         model = TicketAttachment
         fields = [
@@ -166,7 +143,7 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
         import os
 
         _, ext = os.path.splitext(value.name)
-        if ext.lower() in self.BLOCKED_EXTENSIONS:
+        if ext.lower() in BLOCKED_EXTENSIONS:
             raise serializers.ValidationError(f"File type '{ext}' is not allowed.")
 
         return value

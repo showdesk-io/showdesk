@@ -1,0 +1,21 @@
+From: Ann Customer <ann@example.org>
+To: Acme Support <reply+0f2a4c1e5b6d4e7f8a9b0c1d2e3f4a5b.0123456789abcdef@in.example.com>
+Subject: RE: [ACM-12] My invoice is wrong
+Date: Mon, 2 Nov 2026 11:00:00 +0000
+Message-ID: <AM0PR01-1@mail.example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="us-ascii"
+
+The invoice number is 4521.
+
+Ann
+
+________________________________
+From: Acme Support <reply+0f2a4c1e5b6d4e7f8a9b0c1d2e3f4a5b.0123456789abcdef@in.example.com>
+Sent: Monday, November 2, 2026 10:00 AM
+To: Ann Customer <ann@example.org>
+Subject: [ACM-12] My invoice is wrong
+
+-- Reply above this line --
+
+Could you send us the invoice number?

@@ -665,6 +665,31 @@ class CannedResponse(TimestampedModel):
         return f"{self.name} ({scope}, {self.organization})"
 
 
+# Never stored as attachments, whoever sends them: executable or scriptable.
+BLOCKED_EXTENSIONS = frozenset(
+    {
+        ".exe",
+        ".bat",
+        ".cmd",
+        ".com",
+        ".msi",
+        ".scr",
+        ".pif",
+        ".vbs",
+        ".vbe",
+        ".js",
+        ".jse",
+        ".wsf",
+        ".wsh",
+        ".ps1",
+        ".sh",
+        ".csh",
+        ".dll",
+        ".sys",
+    }
+)
+
+
 class TicketAttachment(TimestampedModel):
     """A file attached to a ticket or message.
 
