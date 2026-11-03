@@ -71,6 +71,14 @@
 	}
 
 	# -----------------------------------------------------------------------
+	# Conversation page: its URL holds its link's token, no Referer may carry it
+	# -----------------------------------------------------------------------
+	handle /c/* {
+		header Referrer-Policy no-referrer
+		reverse_proxy frontend:5173
+	}
+
+	# -----------------------------------------------------------------------
 	# Everything else → React frontend (Vite dev server)
 	# -----------------------------------------------------------------------
 	handle {

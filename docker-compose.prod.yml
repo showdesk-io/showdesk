@@ -159,6 +159,12 @@ configs:
           }
         }
 
+        # The conversation page's URL holds its link's token: no Referer may carry it.
+        handle /c/* {
+          header Referrer-Policy no-referrer
+          reverse_proxy frontend:80
+        }
+
         handle {
           reverse_proxy frontend:80
         }

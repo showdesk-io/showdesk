@@ -50,7 +50,7 @@ from apps.organizations.models import (
     User,
 )
 
-from .messages import create_user_message
+from .messages import MessageRefused, create_user_message
 from .models import (
     PRE_LOGIN_ANONYMOUS_KEY,
     CannedResponse,
@@ -1141,7 +1141,13 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = create_user_message(ticket, body=body, body_type=body_type)
+        try:
+            message = create_user_message(ticket, body=body, body_type=body_type)
+        except MessageRefused:
+            return Response(
+                {"error": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         try:
             notify_new_message(message)
@@ -1226,7 +1232,13 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = create_user_message(ticket, body=body, body_type=body_type)
+        try:
+            message = create_user_message(ticket, body=body, body_type=body_type)
+        except MessageRefused:
+            return Response(
+                {"error": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         # Validate and save attachment
         att_serializer = TicketAttachmentSerializer(

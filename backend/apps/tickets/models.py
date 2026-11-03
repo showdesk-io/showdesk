@@ -348,11 +348,6 @@ class Ticket(TimestampedModel):
         related_name="tickets",
         help_text="Mailbox the ticket was opened through, for tickets opened by email.",
     )
-    sender_verified_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="A message of the contact's came through the conversation link.",
-    )
     widget_last_read_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -395,9 +390,8 @@ class Ticket(TimestampedModel):
         session's date is about the address it had then. And only for what was written
         since: a proof says nothing of who wrote the session's earlier tickets.
 
-        A message posted through the conversation link, mailed to the address the
-        contact holds, is proof too (``sender_verified_at``). Moving the ticket to
-        another contact clears it.
+        A message posted through the conversation link isn't: it proves who holds
+        the mailbox now, not who wrote the ticket.
         """
         session = self.widget_session
         if self.source in (self.Source.AGENT, self.Source.API) or (
@@ -407,8 +401,6 @@ class Ticket(TimestampedModel):
         metadata = self.context_metadata
         if isinstance(metadata, dict) and metadata.get(PRE_LOGIN_ANONYMOUS_KEY) is True:
             return False
-        if self.sender_verified_at and self.contact_id:
-            return True
         if session is None or not self.contact_id:
             return False
         if session.contact_id != self.contact_id:

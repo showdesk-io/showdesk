@@ -358,9 +358,9 @@ is a 400. A number as `name` becomes text and a long one is cut; any other unusa
 that gets a field wrong doesn't stop the widget.
 
 Tickets expose a read-only `sender_verified`: whether this ticket's sender proved
-being its Contact (HMAC-identified on that Contact, session email verified before the
-ticket was written, or the conversation link once the email channel adds it, and never
-on a ticket written before a login, rule 8). It relates to the Contact, not to the
+being its Contact (HMAC-identified on that Contact, or session email verified before
+the ticket was written, and never on a ticket written before a login, rule 8). The
+email channel's conversation link doesn't verify it (§8). It relates to the Contact, not to the
 ticket's `requester_email`. It's null when there's no outside
 sender to verify: an agent-created ticket (source `agent` or `api`, or no session, no
 inbound sender and no requester account).
@@ -466,6 +466,11 @@ in the widget.
   a signed page to an unsigned one creates a new anonymous session. The same goes for a
   session proven by `email_hash`, and for the email channel's later proof of ownership
   when it adds one, unless that channel gives the widget something to sign with.
+- A message posted through the email channel's conversation link doesn't make the
+  ticket's `sender_verified` true. The link proves who holds the mailbox now, not who
+  wrote the ticket: someone can file a ticket under another's address, and that
+  person's protest on the page would otherwise verify the forger's first message. A
+  ticket opened by email therefore stays unverified, whoever answers through its link.
 - Two messages sent before the first one answers both go without a ticket id, as the
   widget only learns it from that answer: the backend opens two tickets.
 - After a page change in MPA mode, the widget reattaches to a live recording popup without

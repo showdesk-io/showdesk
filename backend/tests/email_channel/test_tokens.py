@@ -1,5 +1,6 @@
 """Signed reply addresses, conversation links and outbound Message-IDs."""
 
+import hashlib
 import time
 import uuid
 from datetime import timedelta
@@ -7,9 +8,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from django.core import signing
+from django.test import override_settings
 
 from apps.email_channel.tokens import (
     conversation_token,
+    email_hash,
     outbound_message_id,
     read_conversation_token,
     reply_address,
@@ -59,6 +62,11 @@ def test_a_conversation_token_carries_ticket_contact_and_a_hash_of_the_address()
     # A link is forwarded, pasted, logged: it doesn't spell the address out.
     payload = signing.loads(token, salt="showdesk.email_channel.conversation")
     assert "ann" not in str(payload).lower()
+    # Nor can a list of addresses be hashed to find it, without the secret key.
+    assert payload["h"] != hashlib.sha256(b"ann@example.org").hexdigest()[:16]
+    assert len(payload["h"]) == 16
+    with override_settings(SECRET_KEY="another-secret-key-" * 3):
+        assert payload["h"] != email_hash("ann@example.org")
     assert read_conversation_token(token[:-2] + "xx") is None
 
 

@@ -278,13 +278,22 @@ showing the channel.
 - Public frontend route `/c/:token`, branded with the organization's logo and
   colour, no account needed: full public thread (no internal notes), reply
   box, attachments. Messages posted there use `channel = widget`.
-- `token` = `django.core.signing` of `{ticket_id, contact_id, hash of the
-  address mailed}` (never the address in clear: a link is forwarded and logged)
-  with a dedicated salt and `max_age = CONVERSATION_LINK_MAX_AGE_DAYS` (default 30). Every email
-  carries a fresh link.
+- `token` = `django.core.signing` of `{ticket_id, contact_id, keyed hash of the
+  address mailed}` (never the address in clear: a link is forwarded and logged; keyed,
+  so a list of addresses can't be hashed to find it) with a dedicated salt and
+  `max_age = CONVERSATION_LINK_MAX_AGE_DAYS` (default 30). Every email carries a fresh
+  link. A link opens its conversation only while the ticket is still its contact's,
+  the contact still holds the address mailed and isn't anonymized, and no login moved
+  the ticket: once an agent corrects a contact's address, the previous address's
+  holder loses the conversation.
 - Expired link → "Send me a new link": the new link goes **only** to the
-  ticket contact's email; the requester never chooses the address.
-- Opening a valid link proves mailbox ownership → `Contact.email_verified_at`.
+  ticket contact's email; the requester never chooses the address. At most once per
+  ticket per hour and three times per contact per day, and only for a link up to 180
+  days old; past that the page says to contact support.
+- Opening a valid link proves mailbox ownership → `Contact.email_verified_at`. Neither
+  opening it nor posting through it makes the ticket's `sender_verified` true: that
+  proves who holds the mailbox now, not who wrote the ticket. The page shows no name or
+  address on the requester's side, and opening it counts as reading the replies.
 - API, scoped to the token's ticket and throttled:
   `GET /api/v1/conversations/{token}/`, `POST …/messages/`,
   `POST …/attachments/`, `POST /api/v1/conversations/renew/`.

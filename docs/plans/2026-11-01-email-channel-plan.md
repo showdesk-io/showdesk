@@ -25,8 +25,8 @@ The code showed these. Each one is pinned by a test in the task named.
 | 3 | `TicketMessage.external_sender` (display name and address of the mail's `From`). | `sender_name` comes from a widget session. A third party's reply on a thread must show who wrote it. Anonymization clears it. | 1, 9 |
 | 4 | The raw `.eml` never gets a URL. Agents open it through an authenticated endpoint. | The default storage builds URLs, and a mail holds personal data. | 3, 16 |
 | 5 | Anonymization deletes the contact's `InboundEmail` rows and raw files, those of its tickets and those sent from its address, and clears `external_id` and `external_sender` on its messages. | Otherwise the raw mail keeps everything the anonymization removes. | 9 |
-| 6 | The conversation token also carries a hash of the address the mail went to (16 hex characters of SHA-256 of the lowercased address), never the address in clear. Opening a link verifies the contact only if its current email has that hash. | An agent can change a contact's email: an old link must not prove the new one. | 6, 11 |
-| 7 | `sender_verified` becomes true from a message posted through the link, not from opening it. | Opening proves who holds the mailbox, not who wrote the ticket: someone can file a ticket under another's address, and that person then opens the link. | 11 |
+| 6 | The conversation token also carries a hash of the address the mail went to (16 hex characters of an HMAC-SHA256 of the lowercased address, keyed by `SECRET_KEY` with its own salt), never the address in clear. A link opens its conversation, and verifies the contact, only while the contact's current email has that hash. | An agent can change a contact's email, for instance to correct a typo: an old link must neither prove the new one nor keep the old address's holder in the conversation. Keyed, so a list of addresses can't be hashed to find the one a link names. | 6, 11 |
+| 7 | The link never makes a ticket's `sender_verified` true: neither opening it nor posting through it. | Both prove who holds the mailbox now, not who wrote the ticket: someone can file a ticket under another's address, and that person's protest on the page would verify the forger's first message. | 11 |
 | 8 | `OTPCode.purpose` (`login`, `widget_email`), with separate throttles. | Without it, a widget visitor spends the attempts of someone's login code, cancels it by asking for a new one, and uses up their hourly OTP quota. | 14 |
 | 9 | `WidgetSession.email_proof_source` (`signed`, `code`). The logout rule (Contacts §3 rule 8) only applies to `signed`. | A host page that never signs can't sign on resume: a code proof would be lost at the next page load. Contacts §8 announced this. | 14 |
 | 10 | Agents' own addresses never become contacts on inbound mail, as on API tickets. | Contacts §5: "an agent, admin or superuser never becomes a Contact". | 8 |
@@ -197,7 +197,6 @@ class InboundEmail(TimestampedModel):
 # backend/apps/tickets/models.py
 # Ticket
 mailbox = models.ForeignKey("email_channel.Mailbox", on_delete=models.SET_NULL, null=True, blank=True, related_name="tickets")
-sender_verified_at = models.DateTimeField(null=True, blank=True, help_text="A message of the contact's came through the conversation link.")
 
 # TicketMessage
 class Channel(models.TextChoices):
@@ -457,7 +456,7 @@ Commit: `feat(backend): turn inbound mail into tickets and messages`
 
 **Files:** Modify `backend/apps/contacts/gdpr.py`, `backend/apps/email_channel/tasks.py`, `backend/config/settings/base.py` (beat), `docs/plans/2026-10-29-contacts-design.md` §5 and §8; test `backend/tests/contacts/test_gdpr_email.py`, `backend/tests/email_channel/test_retention.py`.
 
-- `anonymize_contact` deletes `InboundEmail` rows on the scrubbed tickets, or whose `sender` is the contact's address in a mailbox of its organization, with their files after commit (`_delete_files_after_commit`). It clears `external_id` and `external_sender` on the scrubbed messages (an external id can name the sender's domain), and `sender_verified_at` stays since it's no personal data.
+- `anonymize_contact` deletes `InboundEmail` rows on the scrubbed tickets, or whose `sender` is the contact's address in a mailbox of its organization, with their files after commit (`_delete_files_after_commit`). It clears `external_id` and `external_sender` on the scrubbed messages (an external id can name the sender's domain).
 - `_exported_ticket` includes `channel`. The export holds neither raw mails nor `external_id`.
 - `purge_inbound_raw` (daily, beat) empties `raw` past `INBOUND_EMAIL_RAW_RETENTION_DAYS`, keeps the row, and doesn't touch `pending` or `failed`.
 
@@ -517,22 +516,22 @@ Commit: `feat(backend): send repliable replies, in the widget first when connect
 
 ### Task 11: Conversation API
 
-**Files:** Create `backend/apps/email_channel/{conversation_views,serializers}.py`; modify `backend/config/api_urls.py`, `backend/apps/tickets/models.py` (`sender_verified`), `backend/apps/core/throttling.py`; test `backend/tests/email_channel/test_conversation_api.py`.
+**Files:** Create `backend/apps/email_channel/{conversation_views,serializers}.py`; modify `backend/config/api_urls.py`, `backend/apps/tickets/messages.py` (`create_user_message`, extracted), `backend/apps/core/throttling.py`; test `backend/tests/email_channel/test_conversation_api.py`.
 
-`_resolve(token)`: reads the claim, loads the ticket with its organization and contact, and returns None unless `ticket.contact_id == claim.contact_id` and the contact isn't anonymized. Every failure is the same 404. An expired signature is a 410 carrying `{"renewable": true}`, so the page can offer a new link without learning anything else.
+`_resolve(token)`: reads the claim, loads the ticket with its organization and contact, and returns None unless `ticket.contact_id == claim.contact_id`, `claim.holds(contact.email)`, the contact isn't anonymized and no login moved the ticket. Every failure is the same 404. Any expired signature of ours is a 410, whatever the ticket's state, carrying only `{"renewable": bool}`: true up to 180 days, after which the page says to contact support.
 
 | Route | Behaviour |
 |---|---|
-| `GET /api/v1/conversations/{token}/` | Branding (`name`, `logo`, colour), status, reference, public messages through `WidgetMessageSerializer`. Marks the contact verified if `claim.holds(contact.email)`, under its row lock, with a service function `mark_email_proven(contact, email)`. |
-| `POST …/messages/` | `_create_user_message` extracted to a shared module, `channel=WIDGET`, sets `sender_verified_at`, notifies agents and sessions. A closed ticket follows §4.3's reopen rule. |
+| `GET /api/v1/conversations/{token}/` | Branding (`name`, `logo`, colour), status, reference, `can_reply`, public messages through a serializer that blanks `sender_name` on the requester's side (the session or a mail's sender may be someone else). Marks the contact verified, under its row lock, with `mark_email_proven(contact_id, claim.holds)`, unless it already is. Sets `widget_last_read_at`, without `updated_at`: the delayed reply mail stands down. |
+| `POST …/messages/` | `create_user_message` extracted to `tickets/messages.py`, `channel=WIDGET`, on the ticket's session only if that session is the contact's. It locks the contact, then the ticket, as `anonymize_contact` does, and refuses an anonymized contact (the widget too). Notifies agents and sessions. A resolved or closed ticket follows §4.3's reopen rule; past the window, 409 and `can_reply=false`, the page saying to write by email for a new request. Proves nothing about the ticket's sender. |
 | `POST …/attachments/` | `TicketAttachmentSerializer` with the same limits. |
-| `POST /api/v1/conversations/renew/` | Body `{token}`, read with `allow_expired=True`. Always 202. Mails a fresh link to `ticket.contact.email` and nothing else, at most once per ticket per hour, by a cache key. |
+| `POST /api/v1/conversations/renew/` | Body `{token}`, read up to 180 days old. Always 202. Mails a fresh link to `ticket.contact.email` and nothing else, at most once per ticket per hour and three times per contact per day, by cache keys. |
 
 Throttled per IP, with new scopes in `DEFAULT_THROTTLE_RATES`. `AllowAny`, no authentication classes.
 
-`Ticket.sender_verified` gains, after its existing None and pre-login checks: `if self.sender_verified_at and self.contact_id: return True`.
+`Ticket.sender_verified` is unchanged: the link proves who holds the mailbox now, not who wrote the ticket (choice 7).
 
-Security tests: a tampered token; a token from another salt; a ticket moved to another contact (404); anonymized contact (404); internal notes absent; renewal with a body naming another address changes nothing; renewal on a ticket with no contact email sends nothing; `email` changed on the contact (opening doesn't verify); a verified contact keeps its first date; an opened link alone leaves `sender_verified` false, and a posted message makes it true; an agent's email stays out of the payload for agents with a name, as the widget does today.
+Security tests: a tampered token; a token from another salt; a ticket moved to another contact (404); anonymized contact (404); a pre-login moved ticket (404); `email` changed on the contact (404, nothing verified); an expired link (410 and nothing else) and one too old to renew; internal notes absent; no requester-side name or email in the payload; renewal with a body naming another address changes nothing; renewal on a ticket with no contact email sends nothing; the hourly and daily renewal caps; a verified contact keeps its first date; neither opening nor posting makes `sender_verified` true; an agent's email stays out of the payload for agents with a name, as the widget does today; no message lands on an anonymized contact's ticket, from the page or the widget.
 
 Commit: `feat(backend): add the signed conversation API`
 

@@ -3,7 +3,6 @@
 Signed values are verifiable without a lookup, and unforgeable without SECRET_KEY.
 """
 
-import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -16,6 +15,9 @@ from django.utils.crypto import constant_time_compare, salted_hmac
 
 _REPLY_SALT = "showdesk.email_channel.reply"
 _CONVERSATION_SALT = "showdesk.email_channel.conversation"
+_EMAIL_HASH_SALT = "showdesk.email_channel.email_hash"
+# How old a link may be and still get a new one mailed. Past that, ask support.
+RENEWABLE_FOR = timedelta(days=180)
 
 
 def _reply_signature(ticket_hex: str) -> str:
@@ -49,8 +51,13 @@ def ticket_id_from_reply_address(address: str) -> uuid.UUID | None:
 
 
 def email_hash(email: str) -> str:
-    """A short hash of an address, so that a link doesn't spell it out."""
-    return hashlib.sha256(email.strip().lower().encode()).hexdigest()[:16]
+    """A short keyed hash of an address, so that a link doesn't spell it out.
+
+    Keyed, so that hashing a list of addresses doesn't find the one a link names.
+    """
+    return salted_hmac(
+        _EMAIL_HASH_SALT, email.strip().lower(), algorithm="sha256"
+    ).hexdigest()[:16]
 
 
 @dataclass(frozen=True)
@@ -80,17 +87,20 @@ def conversation_token(ticket, contact, email: str) -> str:
 
 
 def read_conversation_token(
-    token: str, *, allow_expired: bool = False
+    token: str, *, allow_expired: bool = False, renewable: bool = False
 ) -> ConversationClaim | None:
     """Return what a token claims, or None.
 
-    ``allow_expired`` is only for asking for a new link.
+    ``renewable`` reads a token young enough to get a new link (``RENEWABLE_FOR``),
+    and ``allow_expired`` one of any age, to tell an expired link from a forged one.
+    Neither opens a conversation.
     """
-    max_age = (
-        None
-        if allow_expired
-        else timedelta(days=settings.CONVERSATION_LINK_MAX_AGE_DAYS)
-    )
+    if allow_expired:
+        max_age = None
+    elif renewable:
+        max_age = RENEWABLE_FOR
+    else:
+        max_age = timedelta(days=settings.CONVERSATION_LINK_MAX_AGE_DAYS)
     try:
         data = signing.loads(token, salt=_CONVERSATION_SALT, max_age=max_age)
         return ConversationClaim(str(data["t"]), str(data["c"]), str(data["h"]))

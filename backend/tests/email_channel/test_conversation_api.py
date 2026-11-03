@@ -1,6 +1,7 @@
 """The conversation page's API, reached by a signed link (§6.1)."""
 
 import time
+from contextlib import contextmanager
 from datetime import timedelta
 from unittest import mock
 
@@ -12,7 +13,13 @@ from rest_framework.test import APIClient
 
 from apps.email_channel.conversation_views import ConversationWriteThrottle
 from apps.email_channel.tokens import conversation_token, read_conversation_token
-from apps.tickets.models import PRE_LOGIN_ANONYMOUS_KEY, Ticket, TicketMessage
+from apps.tickets.messages import MessageRefused, create_user_message
+from apps.tickets.models import (
+    PRE_LOGIN_ANONYMOUS_KEY,
+    Ticket,
+    TicketMessage,
+    WidgetSession,
+)
 from apps.tickets.serializers import TicketAttachmentSerializer
 from tests.factories import (
     ContactFactory,
@@ -25,6 +32,7 @@ from tests.factories import (
 pytestmark = pytest.mark.django_db
 
 ADDRESS = "ann@example.org"
+RENEW = "/api/v1/conversations/renew/"
 
 
 @pytest.fixture
@@ -67,16 +75,17 @@ def _url(token, route=""):
     return f"/api/v1/conversations/{token}/{route}"
 
 
-def _expired():
-    """Run the code under it a day after the links' lifetime."""
-    later = time.time() + timedelta(days=31).total_seconds()
-    clock = mock.patch("django.core.signing.time")
-    started = clock.start()
-    started.time.return_value = later
-    return clock
+@contextmanager
+def _days_later(days):
+    later = time.time() + timedelta(days=days).total_seconds()
+    with mock.patch("django.core.signing.time") as clock:
+        clock.time.return_value = later
+        yield
 
 
-def test_the_page_shows_the_public_thread_branded(client, ticket, token):
+def test_the_page_shows_the_public_thread_branded_and_marks_it_read(
+    client, ticket, token
+):
     agent = UserFactory(
         organization=ticket.organization,
         role="agent",
@@ -91,6 +100,18 @@ def test_the_page_shows_the_public_thread_branded(client, ticket, token):
         body="Customer is grumpy",
         message_type=TicketMessage.MessageType.INTERNAL_NOTE,
     )
+    # Someone else's session, its name and email, on the contact's ticket.
+    session = WidgetSession.objects.create(
+        organization=ticket.organization, name="Bob Other", email="bob@other.example"
+    )
+    TicketMessageFactory(
+        ticket=ticket,
+        author=None,
+        widget_session=session,
+        sender_type=TicketMessage.SenderType.USER,
+        body="Me too",
+    )
+    updated_at = Ticket.objects.get(pk=ticket.pk).updated_at
 
     response = client.get(_url(token))
 
@@ -101,10 +122,14 @@ def test_the_page_shows_the_public_thread_branded(client, ticket, token):
     assert data["reference"] == ticket.reference
     assert data["status"] == Ticket.Status.WAITING
     assert data["can_reply"] is True
-    assert [m["body"] for m in data["messages"]] == ["Have you tried X?"]
-    assert data["messages"][0]["sender_name"] == "Alice Martin"
-    assert "Customer is grumpy" not in response.content.decode()
-    assert "alice.private" not in response.content.decode()
+    assert [m["body"] for m in data["messages"]] == ["Have you tried X?", "Me too"]
+    assert [m["sender_name"] for m in data["messages"]] == ["Alice Martin", ""]
+    content = response.content.decode()
+    for hidden in ("Customer is grumpy", "alice.private", "Bob Other", "bob@"):
+        assert hidden not in content
+    ticket = Ticket.objects.get(pk=ticket.pk)
+    assert ticket.widget_last_read_at is not None
+    assert ticket.updated_at == updated_at
 
 
 def test_a_tampered_or_foreign_token_opens_nothing(client, ticket, contact, token):
@@ -140,17 +165,36 @@ def test_a_link_opens_nothing_once_the_ticket_isnt_its_contacts(
     assert client.post(_url(token, "messages/"), {"body": "Hi"}).status_code == 404
 
 
-def test_an_expired_link_only_says_it_can_be_renewed(client, token):
-    clock = _expired()
-    try:
+def test_a_link_opens_nothing_once_its_address_isnt_the_contacts(
+    client, ticket, contact, token
+):
+    # An agent corrected a mistyped address: its holder loses the conversation.
+    contact.email = "ann@new.example"
+    contact.save()
+
+    assert client.get(_url(token)).status_code == 404
+    assert client.post(_url(token, "messages/"), {"body": "Hi"}).status_code == 404
+    contact.refresh_from_db()
+    assert contact.email_verified_at is None
+    assert not ticket.messages.exists()
+
+
+def test_an_expired_link_only_says_whether_it_can_be_renewed(
+    client, ticket, contact, token
+):
+    ticket.contact = ContactFactory(organization=ticket.organization)
+    ticket.save()  # Whatever the ticket's state.
+
+    with _days_later(31):
         response = client.get(_url(token))
         posted = client.post(_url(token, "messages/"), {"body": "Hi"})
-    finally:
-        clock.stop()
+    with _days_later(181):
+        too_old = client.get(_url(token))
 
-    assert response.status_code == 410
+    assert response.status_code == posted.status_code == 410
     assert response.json() == {"renewable": True}
-    assert posted.status_code == 410
+    assert too_old.status_code == 410
+    assert too_old.json() == {"renewable": False}
 
 
 def test_opening_a_link_verifies_the_contact_but_not_the_ticket(
@@ -163,29 +207,29 @@ def test_opening_a_link_verifies_the_contact_but_not_the_ticket(
     assert first is not None
     assert Ticket.objects.get(pk=ticket.pk).sender_verified is False
 
-    client.get(_url(token))
+    with mock.patch(
+        "apps.email_channel.conversation_views.mark_email_proven"
+    ) as proven:
+        assert client.get(_url(token)).status_code == 200
+    proven.assert_not_called()  # A poll of a verified contact writes nothing.
     contact.refresh_from_db()
     assert contact.email_verified_at == first
 
 
-def test_an_old_link_proves_nothing_of_a_changed_address(
-    client, ticket, contact, token, notified
-):
-    contact.email = "ann@new.example"
-    contact.save()
-
-    assert client.get(_url(token)).status_code == 200
-    assert client.post(_url(token, "messages/"), {"body": "Hi"}).status_code == 201
-
-    contact.refresh_from_db()
-    assert contact.email_verified_at is None
-    assert Ticket.objects.get(pk=ticket.pk).sender_verified is False
-
-
-def test_a_posted_message_reaches_agents_and_verifies_the_sender(
-    client, ticket, token, notified, settings, django_capture_on_commit_callbacks
+def test_a_posted_message_reaches_agents_without_verifying_the_sender(
+    client,
+    ticket,
+    contact,
+    token,
+    notified,
+    settings,
+    django_capture_on_commit_callbacks,
 ):
     settings.INBOUND_EMAIL_DOMAIN = ""  # The page works without the inbound channel.
+    ticket.widget_session = WidgetSession.objects.create(
+        organization=ticket.organization, contact=contact
+    )
+    ticket.save()
     # An agent's credentials, left in the browser, are none of this API's business.
     client.credentials(HTTP_AUTHORIZATION="Bearer not-a-jwt")
 
@@ -199,28 +243,49 @@ def test_a_posted_message_reaches_agents_and_verifies_the_sender(
     assert message.body == "Still broken"
     assert message.sender_type == TicketMessage.SenderType.USER
     assert message.channel == TicketMessage.Channel.WIDGET
+    assert message.widget_session_id == ticket.widget_session_id
     notified.assert_called_once_with(message)
     ticket = Ticket.objects.get(pk=ticket.pk)
     assert ticket.status == Ticket.Status.WAITING
-    assert ticket.sender_verified_at is not None
-    assert ticket.sender_verified is True
+    # It proves who holds the mailbox now, not who wrote the ticket.
+    assert ticket.sender_verified is False
     assert client.post(_url(token, "messages/"), {"body": " "}).status_code == 400
 
 
-def test_an_agent_moving_the_ticket_drops_its_senders_proof(ticket):
-    ticket.sender_verified_at = timezone.now()
-    ticket.save()
-    agent = UserFactory(organization=ticket.organization, role="agent")
-    client = APIClient()
-    client.force_authenticate(agent)
-    other = ContactFactory(organization=ticket.organization)
-
-    response = client.patch(
-        f"/api/v1/tickets/{ticket.id}/", {"contact": str(other.id)}, format="json"
+def test_a_posted_message_stays_off_a_session_that_isnt_the_contacts(
+    client, ticket, token, notified
+):
+    ticket.widget_session = WidgetSession.objects.create(
+        organization=ticket.organization, name="Bob Other"
     )
+    ticket.save()
 
-    assert response.status_code == 200
-    assert Ticket.objects.get(pk=ticket.pk).sender_verified is False
+    response = client.post(_url(token, "messages/"), {"body": "Hi"})
+
+    assert response.status_code == 201
+    assert response.json()["sender_name"] == ""
+    assert TicketMessage.objects.get(pk=response.json()["id"]).widget_session is None
+
+
+def test_no_message_lands_on_an_anonymized_contacts_ticket(client, ticket, contact):
+    # Found before the anonymization committed, written after.
+    session = WidgetSession.objects.create(organization=ticket.organization)
+    ticket.widget_session = session
+    ticket.save()
+    contact.is_anonymized = True
+    contact.save()
+
+    with pytest.raises(MessageRefused):
+        create_user_message(ticket, body="Hi")
+    widget = client.post(
+        "/api/v1/tickets/widget_message/",
+        {"ticket_id": str(ticket.id), "body": "Hi"},
+        format="json",
+        HTTP_X_WIDGET_TOKEN=str(ticket.organization.api_token),
+        HTTP_X_WIDGET_SESSION=str(session.id),
+    )
+    assert widget.status_code == 404
+    assert not ticket.messages.exists()
 
 
 def test_a_message_reopens_a_recently_closed_ticket_only(
@@ -277,18 +342,11 @@ def test_renewal_mails_a_fresh_link_to_the_contact_once_an_hour(
     client, ticket, token, settings
 ):
     settings.CELERY_TASK_ALWAYS_EAGER = True
-    clock = _expired()
-    try:
+    with _days_later(31):
         first = client.post(
-            "/api/v1/conversations/renew/",
-            {"token": token, "email": "mallory@example.org"},
-            format="json",
+            RENEW, {"token": token, "email": "mallory@example.org"}, format="json"
         )
-        second = client.post(
-            "/api/v1/conversations/renew/", {"token": token}, format="json"
-        )
-    finally:
-        clock.stop()
+        second = client.post(RENEW, {"token": token}, format="json")
 
     assert first.status_code == second.status_code == 202
     assert len(mail.outbox) == 1
@@ -300,23 +358,57 @@ def test_renewal_mails_a_fresh_link_to_the_contact_once_an_hour(
     assert claim.holds(ADDRESS)
 
 
+def test_renewal_mails_a_contact_three_times_a_day_at_most(client, contact, settings):
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    tickets = [
+        TicketFactory(
+            organization=contact.organization, contact=contact, requester=None
+        )
+        for _ in range(4)
+    ]
+
+    for ticket in tickets:
+        token = conversation_token(ticket, contact, ADDRESS)
+        assert client.post(RENEW, {"token": token}, format="json").status_code == 202
+
+    assert len(mail.outbox) == 3
+
+
 def test_renewal_answers_the_same_and_mails_nothing_otherwise(
     client, ticket, contact, token, settings
 ):
     settings.CELERY_TASK_ALWAYS_EAGER = True
+    moved = TicketFactory(
+        organization=contact.organization,
+        contact=ContactFactory(organization=contact.organization),
+        requester=None,
+    )
     contact.email = ""
     contact.save()
-    renew = "/api/v1/conversations/renew/"
 
     answers = [
-        client.post(renew, {"token": token}, format="json"),
-        client.post(renew, {"token": token[:-2] + "xx"}, format="json"),
-        client.post(renew, {}, format="json"),
-        client.post(renew, "not json", content_type="application/json"),
-        client.post(renew, {"token": ["a", "list"]}, format="json"),
+        client.post(RENEW, {"token": token}, format="json"),
+        client.post(
+            RENEW,
+            {"token": conversation_token(moved, contact, ADDRESS)},
+            format="json",
+        ),
+        client.post(RENEW, {"token": token[:-2] + "xx"}, format="json"),
+        client.post(RENEW, {}, format="json"),
+        client.post(RENEW, "not json", content_type="application/json"),
+        client.post(RENEW, {"token": ["a", "list"]}, format="json"),
     ]
 
     assert {answer.status_code for answer in answers} == {202}
+    assert mail.outbox == []
+
+
+def test_a_link_too_old_to_renew_mails_nothing(client, ticket, token, settings):
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+
+    with _days_later(181):
+        assert client.post(RENEW, {"token": token}, format="json").status_code == 202
+
     assert mail.outbox == []
 
 

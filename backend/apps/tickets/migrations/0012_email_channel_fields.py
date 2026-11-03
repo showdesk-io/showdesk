@@ -24,15 +24,6 @@ class Migration(migrations.Migration):
             ),
         ),
         migrations.AddField(
-            model_name="ticket",
-            name="sender_verified_at",
-            field=models.DateTimeField(
-                blank=True,
-                help_text="A message of the contact's came through the conversation link.",
-                null=True,
-            ),
-        ),
-        migrations.AddField(
             model_name="ticketmessage",
             name="channel",
             field=models.CharField(
