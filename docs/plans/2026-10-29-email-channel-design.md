@@ -176,13 +176,21 @@ whose `context_metadata` references the previous one.
   `Le … a écrit :`, `>` blocks, Outlook separators) using
   `email-reply-parser`. Agents can always open the original email.
 - Attachments → `TicketAttachment` with the same extension blocklist as widget
-  uploads; total size capped by `INBOUND_EMAIL_MAX_SIZE_MB` (default 25);
-  oversize parts are dropped and noted in the message.
+  uploads; total size capped by `INBOUND_EMAIL_MAX_SIZE_MB` (default 25), and at
+  most 50 files; blocked, oversize and extra parts are dropped and named in a note
+  appended to the message. A file keeps its base name only.
+- HTML is reduced to its text by a parser (links as `text (url)`, quotes as `>`
+  lines): no markup reaches a message, whose body is always shown as text.
+- A forward (`Fwd:`, `Fw:`, `TR:`, `WG:` subject) keeps its quoted part: it is the
+  request. A mail that is only history keeps its full text.
 
 ### 4.5 Write
 
 - Resolve or create the Contact from `From` (declared, unverified email) via
-  `apps.contacts.services`.
+  `apps.contacts.services`, for a new ticket only: a mail on an existing ticket
+  keeps its Contact and shows its own sender (`external_sender`), as a colleague
+  in copy would. The address of an agent, admin or superuser of the organization
+  never becomes a Contact, and an anonymized Contact's address gets none.
 - New ticket: `source = email`, title = subject (fallback "(no subject)"),
   `mailbox`, `assigned_team = mailbox.default_team`, `contact`,
   `requester_email`/`requester_name`.
@@ -193,7 +201,14 @@ whose `context_metadata` references the previous one.
 
 Exceptions mark the row `failed` and the task retries with backoff; an admin
 action replays any `InboundEmail`. Idempotency relies on
-`(message_id, mailbox)`.
+`(message_id, mailbox)`, and the task does nothing unless the row is `pending`
+or `failed`, under its row lock: it can be queued twice.
+
+The raw `.eml` doesn't hold what the provider said about it: the row stores the
+envelope recipient and sender, and the provider's spam verdict and score (for
+Postal, its `X-Postal-Spam: yes` header). Processing rebuilds the recipient and
+the verdict from those columns, never from the headers when an envelope was
+stored.
 
 ---
 
@@ -349,7 +364,7 @@ All new variables are documented in `.env.example` with safe defaults.
 | `INBOUND_EMAIL_REOPEN_DAYS` | 7 | 2 | Reopen window for resolved/closed tickets. |
 | `INBOUND_EMAIL_MAX_SIZE_MB` | 25 | 2 | Attachment size cap. |
 | `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` | 20 | 2 | Per sender and mailbox. |
-| `INBOUND_EMAIL_RAW_RETENTION_DAYS` | 30 | 2 | Raw `.eml` retention. |
+| `INBOUND_EMAIL_RAW_RETENTION_DAYS` | 30 | 2 | Raw `.eml` retention, purged daily; the row stays, and pending or failed mail keeps its file. |
 | `WIDGET_UNREAD_EMAIL_DELAY_MINUTES` | 5 | 2 | Delay before emailing an unread widget reply. |
 | `CONVERSATION_LINK_MAX_AGE_DAYS` | 30 | 2 | Conversation link lifetime. |
 | `SENDING_DOMAIN_PROVIDER` | `none` | 3 | `none`, `manual`, `scaleway_tem`. |

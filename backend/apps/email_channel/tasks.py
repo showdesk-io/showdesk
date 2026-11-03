@@ -60,3 +60,44 @@ def requeue_stale_inbound() -> int:
         process_inbound_email.delay(str(inbound_id))
         count += 1
     return count
+
+
+@shared_task
+def purge_inbound_raw() -> int:
+    """Delete the raw mails older than ``INBOUND_EMAIL_RAW_RETENTION_DAYS``.
+
+    The rows stay, as a log. Pending and failed mails keep theirs: it's all a
+    replay has. Returns how many were deleted.
+    """
+    from django.conf import settings
+
+    from apps.email_channel.models import InboundEmail
+    from apps.email_channel.pipeline import PROCESSABLE
+
+    cutoff = timezone.now() - timedelta(days=settings.INBOUND_EMAIL_RAW_RETENTION_DAYS)
+    expired = (
+        InboundEmail.objects.filter(received_at__lt=cutoff)
+        .exclude(raw="")
+        .exclude(status__in=PROCESSABLE)
+    )
+    count = 0
+    for inbound in expired.only("id", "raw").iterator():
+        storage, name = inbound.raw.storage, inbound.raw.name
+        with transaction.atomic():
+            # Unless it was replayed in the meantime.
+            emptied = (
+                InboundEmail.objects.filter(pk=inbound.pk, raw=name)
+                .exclude(status__in=PROCESSABLE)
+                .update(raw="", updated_at=timezone.now())
+            )
+            if emptied:
+                transaction.on_commit(lambda s=storage, n=name: _delete_file(s, n))
+        count += emptied
+    return count
+
+
+def _delete_file(storage, name: str) -> None:
+    try:
+        storage.delete(name)
+    except Exception:
+        logger.exception("Couldn't delete the raw mail %s", name)

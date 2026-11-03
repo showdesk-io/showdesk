@@ -304,8 +304,8 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   ZIP attached (never a URL): `contact.json` (profile, attributes, the notes agents wrote
   about the contact), `tickets.json` (tickets, public messages, metadata of the files on
   public messages or with no message if the contact uploaded them, the contact's recordings
-  with their transcription; never internal ticket notes, nor who at the organization wrote
-  what) and `tickets.csv` (formula-like cells escaped). Beyond 20 MB once base64 encoded,
+  with their transcription, each message's channel; never internal ticket notes, nor who
+  at the organization wrote what, nor the raw mails or their Message-IDs) and `tickets.csv` (formula-like cells escaped). Beyond 20 MB once base64 encoded,
   as an email carries it, nothing is attached. That and a build or send still failing after
   its retries each send the requester one `contact_export_failed` email with the reason; if
   that email fails, it's only logged.
@@ -327,9 +327,15 @@ All endpoints are agent-authenticated and scoped to the agent's organization.
   (one who's staff stays), external_user_id, context_url and
   context_user_agent cleared, `context_metadata` reduced to a whitelist (which also removes
   the `pre_login_*` trace), where only strings of 100 characters at most without `@` stay,
-  `widget_session` unlinked. On those tickets, the contact's messages (sender type `user`,
-  or written by the requester): body replaced by a placeholder, unlinked from their
-  session. Files: the contact's attachments and recordings are deleted, rows and files.
+  plus `previous_ticket` when it's a ticket id (the closed ticket an inbound mail would
+  have continued), `widget_session` unlinked. On those tickets, the contact's messages
+  (sender type `user`, or written by the requester): body replaced by a placeholder,
+  unlinked from their session, and the Message-ID (`external_id`, which can name the
+  sender's domain) and `From` (`external_sender`) of a message that came by email
+  cleared; the channel stays. Inbound mail: the stored mails (rows and raw `.eml` files)
+  of those tickets, and those sent from the Contact's address to a mailbox or ticket of
+  its organization, ignored ones included, are deleted. Mail from that address to another
+  organization stays. Files: the contact's attachments and recordings are deleted, rows and files.
   "The contact's" means uploaded with no user (as the widget does, or by an account since
   deleted) or by the ticket's requester. A requester who's an agent or admin of the
   organization filed the ticket for the contact: what they wrote or uploaded stays. Files
@@ -374,9 +380,11 @@ string, cut to the column's length, and the metadata leaves out what `jsonb` ref
 
 `widget_submit` answers with `{id, reference}` only, the token being public.
 
-`Contact.is_unsubscribed` blocks every non-essential email to the contact
-(enforced by the email channel, so nothing reads it yet). A reply on the contact's own
-ticket is essential, whichever of these addresses it goes to.
+`Contact.is_unsubscribed` blocks every notification email to the contact (enforced by
+the email channel). Corrected by the email channel design §5.2, which wins: an agent's
+reply is no exception, except on a ticket the contact opened by email, the channel they
+chose. An unsubscribed contact gets no email for a widget ticket, and finds the reply
+in the widget.
 
 ---
 
@@ -494,6 +502,11 @@ ticket is essential, whichever of these addresses it goes to.
   thumbnail on the storage.
 - A ticket scrubbed while it had no Contact stays without one, so the upload endpoints that
   take a ticket id and check for an anonymized Contact still accept files on it.
+- Anonymization only deletes mail sent from the address the Contact holds when it runs.
+  Mail from an address it held before, a `declared_email`, or mail that no mailbox took
+  (stored rejected, with no organization) stays until the raw mail's retention, and the
+  row after it. A mail arriving from the address after the anonymization makes a new
+  email-only Contact.
 - A file that the storage failed to delete is only logged: nothing retries it, and its row
   is gone.
 - An export holds the metadata of files, not the files. Past 20 MB encoded it isn't sent at

@@ -236,6 +236,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.email_channel.tasks.requeue_stale_inbound",
         "schedule": 60 * 10,
     },
+    "purge-inbound-raw-emails": {
+        "task": "apps.email_channel.tasks.purge_inbound_raw",
+        "schedule": 60 * 60 * 24,
+    },
 }
 
 # =============================================================================

@@ -187,15 +187,42 @@ def _scrub_tickets(contact: Contact, tickets) -> None:
 
 def _scrub_messages(ticket_ids) -> None:
     body_type = TicketMessage.BodyType.TEXT
+    # A Message-ID can name the sender's domain, and the external sender is a From.
     TicketMessage.objects.filter(
         Q(sender_type=TicketMessage.SenderType.USER) | _the_requester("author"),
         ticket__in=ticket_ids,
-    ).exclude(body=REMOVED_BODY, body_type=body_type, widget_session=None).update(
+    ).exclude(
         body=REMOVED_BODY,
         body_type=body_type,
         widget_session=None,
+        external_id="",
+        external_sender="",
+    ).update(
+        body=REMOVED_BODY,
+        body_type=body_type,
+        widget_session=None,
+        external_id="",
+        external_sender="",
         updated_at=timezone.now(),
     )
+
+
+def _delete_inbound_mail(contact: Contact, email: str, ticket_ids) -> None:
+    """Delete the mail stored for the contact's tickets, or sent from its address.
+
+    Rows and raw files: the files go once the deletion is committed, by the
+    ``post_delete`` receiver of the email channel. Only in the contact's
+    organization: the same address may write to another one.
+    """
+    from apps.email_channel.models import InboundEmail
+
+    query = Q(ticket__in=ticket_ids)
+    if email:
+        query |= Q(sender=email) & (
+            Q(mailbox__organization_id=contact.organization_id)
+            | Q(ticket__organization_id=contact.organization_id)
+        )
+    InboundEmail.objects.filter(query).delete()
 
 
 def _tickets_of(contact: Contact, session_ids, external_id: str):
@@ -269,6 +296,7 @@ def anonymize_contact(contact: Contact) -> Contact | None:
         ).select_related("requester")
     )
     ticket_ids = [ticket.pk for ticket in tickets]
+    _delete_inbound_mail(contact, contact.email, ticket_ids)
     _scrub_contact(contact)
 
     # Free text written by agents, which can hold personal data about the contact.
@@ -352,6 +380,7 @@ def _exported_ticket(ticket: Ticket) -> dict:
         "messages": [
             {
                 "sender_type": message.sender_type,
+                "channel": message.channel,
                 "body": message.body,
                 "body_type": message.body_type,
                 "created_at": message.created_at,
