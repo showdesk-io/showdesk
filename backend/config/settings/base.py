@@ -373,6 +373,11 @@ INBOUND_EMAIL_MAX_SIZE_MB = config("INBOUND_EMAIL_MAX_SIZE_MB", default=25, cast
 INBOUND_EMAIL_RATE_LIMIT_PER_HOUR = config(
     "INBOUND_EMAIL_RATE_LIMIT_PER_HOUR", default=20, cast=int
 )
+# All mail to one mailbox, whoever sends it: a sender's own limit can be dodged
+# by changing the From, which costs nothing.
+INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR = config(
+    "INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR", default=200, cast=int
+)
 # How long received raw mails (.eml) are kept.
 INBOUND_EMAIL_RAW_RETENTION_DAYS = config(
     "INBOUND_EMAIL_RAW_RETENTION_DAYS", default=30, cast=int

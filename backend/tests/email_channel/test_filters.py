@@ -218,3 +218,86 @@ def test_rate_limit_counts_the_last_hour_for_the_sender_and_mailbox(mailbox, set
     inbound.refresh_from_db()
     message = parse(raw)
     assert classify(message, inbound, resolve(message)).reason == "rate_limited"
+
+
+def test_a_confirmation_link_with_a_disguised_host_is_dropped(mailbox):
+    for index, url in enumerate(
+        (
+            b"https://evil.example\\@mail.google.com/x",
+            b"https://user@mail.google.com/x",
+            b"https://mail.google.com:8443/x",
+        )
+    ):
+        raw = fixture_bytes("gmail_forwarding_confirmation.eml").replace(
+            b"https://mail-settings.google.com/mail/vf-%5BANGjdJ8example%5D-AbCdEfGh",
+            url,
+        )
+        message_id = b"<disguised-%d@google.com>" % index
+        raw = raw.replace(b"<confirmation-1@google.com>", message_id)
+
+        run(raw, envelope_recipient=mailbox.inbound_address)
+
+        mailbox.refresh_from_db()
+        assert mailbox.forwarding_confirmation["url"] == ""
+
+
+def test_confirmations_are_rate_limited_and_mailed_once_in_ten_minutes(
+    mailbox, settings, django_capture_on_commit_callbacks
+):
+    AdminFactory(organization=mailbox.organization)
+    raw = fixture_bytes("gmail_forwarding_confirmation.eml")
+
+    with django_capture_on_commit_callbacks(execute=True):
+        for index in range(3):
+            message_id = b"<confirmation-%d@google.com>" % index
+            verdict, _ = run(
+                raw.replace(b"<confirmation-1@google.com>", message_id),
+                envelope_recipient=mailbox.inbound_address,
+            )
+            assert verdict.reason == "forwarding_confirmation"
+    assert len(mail.outbox) == 1
+
+    settings.INBOUND_EMAIL_RATE_LIMIT_PER_HOUR = 3
+    mailbox.forwarding_confirmation = {}
+    mailbox.save()
+    verdict, _ = run(
+        raw.replace(b"<confirmation-1@google.com>", b"<confirmation-9@google.com>"),
+        envelope_recipient=mailbox.inbound_address,
+    )
+    assert verdict.reason == "rate_limited"
+    mailbox.refresh_from_db()
+    assert mailbox.forwarding_confirmation == {}
+
+
+def test_a_mailbox_takes_a_bounded_number_of_mails_an_hour(mailbox, settings):
+    settings.INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR = 2
+    InboundEmailFactory(mailbox=mailbox, sender="bob@example.org")
+    InboundEmailFactory(mailbox=MailboxFactory(), sender="carol@example.org")
+
+    verdict, _ = run(build())
+    assert verdict is None
+
+    verdict, _ = run(build(Message_ID="<2@mail.example.org>", From="d@example.net"))
+    assert verdict.reason == "mailbox_rate_limited"
+
+
+def test_mail_from_the_organizations_own_address_is_a_loop(mailbox):
+    verdict, _ = run(build(From="Acme <Support@Acme.example.com>"))
+
+    assert verdict.reason == "loop"
+
+
+def test_a_message_id_already_on_a_ticket_of_the_organization_is_a_duplicate(
+    mailbox,
+):
+    # Sent to the reply address and to the inbound address at once.
+    TicketMessageFactory(
+        ticket__organization=mailbox.organization, external_id="<1@mail.example.org>"
+    )
+    TicketMessageFactory(external_id="<2@mail.example.org>")
+
+    verdict, _ = run(build())
+    assert verdict.reason == "duplicate"
+
+    verdict, _ = run(build(Message_ID="<2@mail.example.org>"))
+    assert verdict is None

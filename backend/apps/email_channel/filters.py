@@ -9,9 +9,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 from email.parser import HeaderParser
 from email.utils import parseaddr
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
@@ -32,6 +33,8 @@ _CODE_IN_BODY = re.compile(
 )
 _URL = re.compile(r"https://[^\s<>\"']+")
 _URL_MAX_LENGTH = 2048
+# Seconds between two mails to admins about a mailbox's confirmations.
+CONFIRMATION_NOTICE_EVERY = 10 * 60
 # Enough for any real bounce, and a bound on what one mail makes us look up.
 _MAX_BOUNCED_IDS = 20
 
@@ -56,20 +59,26 @@ def classify(message, inbound: InboundEmail, recipient: Recipient) -> Verdict | 
     mailbox and mailed to the organization's admins once committed, and a bounce
     marks the message it reports as not delivered.
     """
+    organization = recipient.organization
+    if _is_duplicate(inbound, organization):
+        return _ignored("duplicate")
+    # Before anything a mail can make us do, such as mailing admins.
+    if _is_mailbox_rate_limited(inbound):
+        return _ignored("mailbox_rate_limited")
+    if _is_rate_limited(inbound):
+        return _ignored("rate_limited")
     if _is_forwarding_confirmation(message, recipient):
         _record_forwarding_confirmation(message, recipient.mailbox)
         return _ignored("forwarding_confirmation")
     if _is_bounce(message, inbound):
-        _mark_bounced_messages(message, recipient.organization)
+        _mark_bounced_messages(message, organization)
         return _ignored("bounce")
-    if _is_loop(inbound):
+    if _is_loop(inbound, organization):
         return _ignored("loop")
     if reason := _automatic_reason(message):
         return _ignored(reason)
     if getattr(message, "spam_detected", None) is True:
         return _ignored("spam")
-    if _is_rate_limited(inbound, recipient):
-        return _ignored("rate_limited")
     return None
 
 
@@ -97,17 +106,22 @@ def _is_forwarding_confirmation(message, recipient: Recipient) -> bool:
 
 
 def _confirmation_url(text: str) -> str:
+    """The first Google link of ``text``, rebuilt from parts checked one by one."""
     for match in _URL.finditer(text):
         url = match.group().rstrip(".,;:)]")
         if len(url) > _URL_MAX_LENGTH:
             continue
         try:
             parts = urlsplit(url)
-            host = parts.hostname
         except ValueError:
             continue
-        if parts.scheme == "https" and host in GMAIL_CONFIRMATION_HOSTS:
-            return url
+        # A user, a port or a backslash can make a browser go somewhere else
+        # than the host a parser reads.
+        if parts.scheme != "https" or parts.netloc not in GMAIL_CONFIRMATION_HOSTS:
+            continue
+        if "\\" in url:
+            continue
+        return urlunsplit(("https", parts.netloc, parts.path, parts.query, ""))
     return ""
 
 
@@ -127,6 +141,11 @@ def _record_forwarding_confirmation(message, mailbox: Mailbox) -> None:
 
 
 def _notify_admins_of_confirmation(mailbox: Mailbox, confirmation: dict) -> None:
+    # Once in a while at most: the mailbox keeps the latest one anyway.
+    if not cache.add(
+        f"email_channel:confirmation_notice:{mailbox.pk}", 1, CONFIRMATION_NOTICE_EVERY
+    ):
+        return
     organization = mailbox.organization
     admins = list(
         organization.users.filter(role=User.Role.ADMIN, is_active=True).values_list(
@@ -212,9 +231,17 @@ def _mark_bounced_messages(message, organization) -> None:
 # Loops, automatic and bulk mail
 
 
-def _is_loop(inbound: InboundEmail) -> bool:
+def _is_loop(inbound: InboundEmail, organization) -> bool:
+    """From our own domain, or from one of the organization's own addresses."""
     domain = settings.INBOUND_EMAIL_DOMAIN.lower()
-    return bool(domain) and inbound.sender.rpartition("@")[2] == domain
+    if domain and inbound.sender.rpartition("@")[2] == domain:
+        return True
+    return (
+        bool(inbound.sender)
+        and Mailbox.objects.filter(
+            organization=organization, public_address=inbound.sender
+        ).exists()
+    )
 
 
 def _automatic_reason(message) -> str | None:
@@ -234,18 +261,44 @@ def _automatic_reason(message) -> str | None:
 # Rate limit
 
 
-def _is_rate_limited(inbound: InboundEmail, recipient: Recipient) -> bool:
+def _is_duplicate(inbound: InboundEmail, organization) -> bool:
+    """Tell if the mail is already a message of the organization.
+
+    One mail sent to a ticket's reply address and to the inbound address arrives
+    twice, as two rows: it must land once.
+    """
+    return TicketMessage.objects.filter(
+        ticket__organization=organization, external_id=inbound.message_id
+    ).exists()
+
+
+def _last_hour(inbound: InboundEmail):
     # The hour before the mail arrived, so that a replay gives the same answer.
-    rows = InboundEmail.objects.filter(
-        sender=inbound.sender,
+    return InboundEmail.objects.filter(
         received_at__gt=inbound.received_at - timedelta(hours=1),
         received_at__lte=inbound.received_at,
     )
+
+
+def _is_rate_limited(inbound: InboundEmail) -> bool:
+    """More mail from this sender to this mailbox than allowed in an hour.
+
+    Without a mailbox (a reply address of a ticket that has none), counted over
+    every such mail of the sender.
+    """
+    rows = _last_hour(inbound).filter(sender=inbound.sender)
     if inbound.mailbox_id:
         rows = rows.filter(mailbox_id=inbound.mailbox_id)
     else:
-        # A reply address of a ticket without a mailbox.
-        rows = rows.filter(
-            mailbox__isnull=True, ticket__organization=recipient.organization
+        rows = rows.filter(mailbox__isnull=True).exclude(
+            status=InboundEmail.Status.REJECTED
         )
     return rows.count() > settings.INBOUND_EMAIL_RATE_LIMIT_PER_HOUR
+
+
+def _is_mailbox_rate_limited(inbound: InboundEmail) -> bool:
+    """More mail to this mailbox, from anyone, than allowed in an hour."""
+    if not inbound.mailbox_id:
+        return False
+    rows = _last_hour(inbound).filter(mailbox_id=inbound.mailbox_id)
+    return rows.count() > settings.INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR

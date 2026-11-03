@@ -151,7 +151,12 @@ to `ingest_eml` without `--recipient`.
 - **Loops**: sender on `INBOUND_EMAIL_DOMAIN`, already-known Message-ID.
 - **Spam**: provider verdict/score when available (`spam_detected`).
 - **Rate limit**: more than `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` (default 20)
-  emails from the same sender to the same mailbox.
+  emails from the same sender to the same mailbox, or more than
+  `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` (default 200) to the mailbox from
+  anyone. Checked before anything else a mail can make us do, such as mailing
+  the admins a forwarding confirmation (at most once per mailbox per 10 minutes).
+- **Duplicates**: a Message-ID already on a message of the organization (one
+  mail sent to a reply address and to the inbound address arrives twice).
 
 Ignored and rejected emails are listed in the Mailbox settings.
 
@@ -368,6 +373,7 @@ All new variables are documented in `.env.example` with safe defaults.
 | `INBOUND_EMAIL_REOPEN_DAYS` | 7 | 2 | Reopen window for resolved/closed tickets. |
 | `INBOUND_EMAIL_MAX_SIZE_MB` | 25 | 2 | Attachment size cap. |
 | `INBOUND_EMAIL_RATE_LIMIT_PER_HOUR` | 20 | 2 | Per sender and mailbox. |
+| `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` | 200 | 2 | Per mailbox, all senders. |
 | `INBOUND_EMAIL_RAW_RETENTION_DAYS` | 30 | 2 | Raw `.eml` retention, purged daily; the row stays, and pending or failed mail keeps its file. |
 | `WIDGET_UNREAD_EMAIL_DELAY_MINUTES` | 5 | 2 | Delay before emailing an unread widget reply. |
 | `CONVERSATION_LINK_MAX_AGE_DAYS` | 30 | 2 | Conversation link lifetime. |
@@ -380,6 +386,13 @@ service, since fallback mail is sent from that domain, and point its MX to the
 inbound provider.
 
 ### Known limitations
+
+- A mail's `From` is forgeable. Anyone can send mail under a real customer's
+  address and use up that address's quota (`INBOUND_EMAIL_RATE_LIMIT_PER_HOUR`
+  per mailbox): the customer's own mail is then ignored, as `rate_limited`, for
+  the rest of the hour. A forger changing the `From` at each mail is bounded by
+  `INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR` (200) per mailbox, which then also
+  ignores everyone's mail for the hour. Admins see both in the mailbox's log.
 
 - `Mailbox.public_address` is unique across organizations and unverified: an
   organization can claim `support@bigcorp.com` before BigCorp does. It receives
