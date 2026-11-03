@@ -5,17 +5,21 @@ from unittest import mock
 
 import pytest
 from django.core import mail
+from django.core.files.base import ContentFile
 from django.utils import timezone
 
 from apps.contacts.gdpr import PREVIOUS_TICKET_KEY
 from apps.email_channel.models import InboundEmail
 from apps.email_channel.tasks import process_inbound_email
+from apps.email_channel.thread_matching import Match
+from apps.email_channel.tokens import reply_address
 from apps.tickets.models import Ticket, TicketAttachment, TicketMessage
 from tests.email_channel.mails import build, fixture_bytes
 from tests.email_channel.postal import post_to_postal, postal_payload
 from tests.factories import (
     AdminFactory,
     ContactFactory,
+    InboundEmailFactory,
     MailboxFactory,
     TeamFactory,
     TicketFactory,
@@ -290,3 +294,132 @@ def test_the_providers_spam_verdict_is_read_from_the_stored_row(mailbox, deliver
     assert inbound.spam_detected is True
     assert (inbound.status, inbound.reason) == ("ignored", "spam")
     assert not Ticket.objects.exists()
+
+
+def _deep_mail(depth: int = 3000) -> bytes:
+    """A mail nested deeper than Python's parser can recurse."""
+    opening = b"".join(
+        b'Content-Type: multipart/mixed; boundary="b%d"\r\n\r\n--b%d\r\n' % (i, i)
+        for i in range(depth)
+    )
+    closing = b"".join(b"--b%d--\r\n" % i for i in reversed(range(depth)))
+    return (
+        b"From: ann@example.org\r\nMessage-ID: <deep@example.org>\r\n"
+        b"MIME-Version: 1.0\r\n"
+        + opening
+        + b"Content-Type: text/plain\r\n\r\nHi\r\n"
+        + closing
+    )
+
+
+def test_a_reply_address_is_read_from_the_stored_envelope(agent, mailbox, deliver):
+    # A widget ticket: no mailbox, so the row has none either.
+    ticket = TicketFactory(organization=mailbox.organization, reference="OLD-1")
+
+    inbound = deliver(build(body="By mail"), rcpt_to=reply_address(ticket))
+
+    assert inbound.mailbox is None
+    assert inbound.ticket == ticket
+    assert inbound.ticket_message.body == "By mail"
+
+
+def test_a_replayed_row_lands_once(mailbox, agent, deliver):
+    inbound = deliver(build())
+    InboundEmail.objects.filter(pk=inbound.pk).update(status=InboundEmail.Status.FAILED)
+
+    process_inbound_email.delay(str(inbound.id))
+
+    inbound.refresh_from_db()
+    assert (inbound.status, inbound.reason) == ("ignored", "duplicate")
+    assert TicketMessage.objects.count() == 1
+
+
+def test_the_ticket_a_row_landed_on_is_no_reply_address(mailbox, agent, deliver):
+    raw = fixture_bytes("gmail_forwarding_confirmation.eml").replace(
+        b"acme-fixture01", b"acme-abc"
+    )
+    with mock.patch("apps.email_channel.tasks.process_inbound_email.delay"):
+        inbound = deliver(raw)
+    InboundEmail.objects.filter(pk=inbound.pk).update(
+        ticket=TicketFactory(organization=mailbox.organization, reference="OLD-1")
+    )
+
+    process_inbound_email.delay(str(inbound.id))
+
+    inbound.refresh_from_db()
+    assert inbound.reason == "forwarding_confirmation"
+
+
+def test_a_missing_raw_mail_fails_without_retrying(mailbox, agent, deliver):
+    with mock.patch("apps.email_channel.tasks.process_inbound_email.delay"):
+        inbound = deliver(build())
+    inbound.raw.storage.delete(inbound.raw.name)
+
+    process_inbound_email.delay(str(inbound.id))
+
+    inbound.refresh_from_db()
+    # A retry would have made it "exception".
+    assert (inbound.status, inbound.reason) == ("failed", "raw_missing")
+
+
+def test_a_mail_too_deep_to_parse_is_kept_rejected(mailbox, postal_key):
+    response = post_to_postal(postal_payload(_deep_mail()), postal_key)
+
+    assert response.status_code == 200
+    inbound = InboundEmail.objects.get()
+    assert (inbound.status, inbound.reason) == ("rejected", "unparseable")
+    assert inbound.message_id.endswith("@hashed.invalid>")
+    assert inbound.raw.read() == _deep_mail()
+
+
+def test_a_stored_mail_too_deep_to_parse_fails_without_retrying(mailbox):
+    inbound = InboundEmailFactory(mailbox=mailbox)
+    inbound.raw.save("raw.eml", ContentFile(_deep_mail()))
+
+    process_inbound_email.delay(str(inbound.id))
+
+    inbound.refresh_from_db()
+    assert (inbound.status, inbound.reason) == ("failed", "unparseable")
+
+
+def test_files_are_stored_before_and_deleted_if_the_write_fails(
+    mailbox, agent, deliver, tmp_path
+):
+    with mock.patch(
+        "apps.email_channel.pipeline.Ticket.objects.create",
+        side_effect=RuntimeError("boom"),
+    ):
+        inbound = deliver(fixture_bytes("attachments.eml"))
+
+    inbound.refresh_from_db()
+    assert inbound.status == "failed"
+    # Uploads go to tmp_path (the local_media fixture): stored, then deleted.
+    assert (tmp_path / "attachments").is_dir()
+    assert not list((tmp_path / "attachments").rglob("*.*"))
+
+
+def test_a_ticket_anonymized_before_its_lock_is_no_match(mailbox, agent, deliver):
+    contact = ContactFactory(organization=mailbox.organization, is_anonymized=True)
+    ticket = TicketFactory(
+        organization=mailbox.organization, contact=contact, reference="OLD-1"
+    )
+
+    with mock.patch(
+        "apps.email_channel.pipeline.find_ticket", return_value=Match(ticket, "headers")
+    ):
+        inbound = deliver(build())
+
+    assert inbound.ticket != ticket
+    assert ticket.messages.count() == 0
+
+
+def test_a_lost_notification_is_logged_as_such(mailbox, agent, deliver, caplog):
+    with mock.patch(
+        "apps.tickets.tasks.send_ticket_created_email.delay",
+        side_effect=ConnectionError("broker down"),
+    ):
+        inbound = deliver(build())
+
+    assert inbound.status == InboundEmail.Status.PROCESSED
+    assert "Couldn't queue" in caplog.text
+    assert "Inbound mail" not in caplog.text

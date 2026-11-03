@@ -1,6 +1,7 @@
 """Storing what arrives, before anything else reads it (design §4)."""
 
 import hashlib
+import logging
 from email.utils import parseaddr
 
 from django.core.files.base import ContentFile
@@ -8,6 +9,8 @@ from django.db import transaction
 
 from apps.email_channel.models import InboundEmail
 from apps.email_channel.recipients import one_line, recipient_addresses, resolve
+
+logger = logging.getLogger(__name__)
 
 _MESSAGE_ID_MAX_LENGTH = InboundEmail._meta.get_field("message_id").max_length
 _SENDER_MAX_LENGTH = InboundEmail._meta.get_field("sender").max_length
@@ -68,8 +71,9 @@ def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
         recipient = resolve(message)
         mailbox = recipient.mailbox if recipient else None
         _, sender = parseaddr(one_line(message.get("From")))
+        # ``ticket`` is where the mail lands, once processed: the ticket of a reply
+        # address is found again from the envelope.
         defaults = {
-            "ticket": recipient.ticket if recipient else None,
             "sender": sender.lower()[:_SENDER_MAX_LENGTH],
             "recipients": recipient_addresses(message),
             "subject": one_line(message.get("Subject"))[:_SUBJECT_MAX_LENGTH],
@@ -99,8 +103,43 @@ def store(message, *, raw: bytes | None = None) -> InboundEmail | None:
     return inbound
 
 
+def store_unparseable(
+    raw: bytes, *, envelope_recipient=None, envelope_sender=None
+) -> InboundEmail | None:
+    """Keep a mail that can't be parsed, rejected, as a log. None for a duplicate.
+
+    Nested deeper than the parser can go, for instance. It's known by its
+    content's hash, so that a provider's retry is still a duplicate.
+    """
+    with transaction.atomic():
+        inbound, created = InboundEmail.objects.get_or_create(
+            message_id=_hashed_message_id(raw),
+            mailbox=None,
+            defaults={
+                "status": InboundEmail.Status.REJECTED,
+                "reason": "unparseable",
+                "envelope_recipient": _envelope_address(envelope_recipient),
+                "envelope_sender": _envelope_address(envelope_sender),
+            },
+        )
+        if not created:
+            return None
+        inbound.raw.save("raw.eml", ContentFile(raw), save=False)
+        inbound.save(update_fields=["raw", "updated_at"])
+    return inbound
+
+
 def _queue_after_commit(inbound: InboundEmail) -> None:
     from apps.email_channel.tasks import process_inbound_email
 
     inbound_id = str(inbound.id)
-    transaction.on_commit(lambda: process_inbound_email.delay(inbound_id))
+
+    def queue() -> None:
+        try:
+            process_inbound_email.delay(inbound_id)
+        except Exception:
+            # Stored: the provider's retry, or requeue_stale_inbound, queues it again.
+            logger.exception("Couldn't queue inbound mail %s", inbound_id)
+            raise
+
+    transaction.on_commit(queue)

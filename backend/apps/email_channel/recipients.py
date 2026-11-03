@@ -82,17 +82,9 @@ def resolve(message) -> Recipient | None:
         addresses = _addresses([str(message.envelope_recipient)])
     else:
         addresses = recipient_addresses(message)
-    for address in addresses:
-        ticket_id = ticket_id_from_reply_address(address)
-        if ticket_id is None:
-            continue
-        ticket = (
-            Ticket.objects.select_related("mailbox", "organization")
-            .filter(pk=ticket_id)
-            .first()
-        )
-        if ticket is not None:
-            return Recipient(mailbox=ticket.mailbox, ticket=ticket, address=address)
+    ticket, address = _reply_ticket(addresses)
+    if ticket is not None:
+        return Recipient(mailbox=ticket.mailbox, ticket=ticket, address=address)
 
     suffix = f"@{settings.INBOUND_EMAIL_DOMAIN.lower()}"
     local_parts = [
@@ -112,26 +104,43 @@ def resolve(message) -> Recipient | None:
     return None
 
 
+def _reply_ticket(addresses: list[str]) -> tuple[Ticket | None, str]:
+    for address in addresses:
+        ticket_id = ticket_id_from_reply_address(address)
+        if ticket_id is None:
+            continue
+        ticket = (
+            Ticket.objects.select_related("mailbox", "organization")
+            .filter(pk=ticket_id)
+            .first()
+        )
+        if ticket is not None:
+            return ticket, address
+    return None, ""
+
+
 def stored_recipient(inbound, message) -> Recipient | None:
     """What a stored mail was found to be for, rebuilt from its row.
 
-    The mailbox and ticket are those found on arrival. The address is the stored
-    envelope recipient. Only a mail stored without one, as ``ingest_eml`` without
-    ``--recipient`` stores it, takes it from the headers, and only one of the
-    mailbox's or ticket's own addresses. None when neither still exists.
+    From the stored envelope recipient: a reply address gives its ticket again,
+    and the row's mailbox is the one found on arrival. Only a mail stored without
+    an envelope, as ``ingest_eml`` without ``--recipient`` stores it, is read from
+    its headers, and for the mailbox only one of its own addresses counts. The
+    row's ``ticket`` is where the mail landed, never where it was sent. None when
+    neither the ticket nor the mailbox still exists.
     """
-    mailbox, ticket = inbound.mailbox, inbound.ticket
-    if mailbox is None and ticket is None:
+    mailbox = inbound.mailbox
+    if inbound.envelope_recipient:
+        addresses = _addresses([inbound.envelope_recipient])
+    else:
+        addresses = recipient_addresses(message)
+    ticket, address = _reply_ticket(addresses)
+    if ticket is not None:
+        return Recipient(mailbox, ticket, address)
+    if mailbox is None:
         return None
     if inbound.envelope_recipient:
-        return Recipient(mailbox, ticket, inbound.envelope_recipient.lower())
-    own = set()
-    if mailbox is not None:
-        own.update({mailbox.inbound_address.lower(), mailbox.public_address} - {""})
-    for address in recipient_addresses(message):
-        is_reply = ticket is not None and ticket_id_from_reply_address(address) == (
-            ticket.pk
-        )
-        if address in own or is_reply:
-            return Recipient(mailbox, ticket, address)
-    return Recipient(mailbox, ticket, "")
+        return Recipient(mailbox, None, addresses[0] if addresses else "")
+    own = {mailbox.inbound_address.lower(), mailbox.public_address} - {""}
+    address = next((address for address in addresses if address in own), "")
+    return Recipient(mailbox, None, address)

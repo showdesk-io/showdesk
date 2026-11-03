@@ -218,6 +218,15 @@ envelope recipient and sender, and the provider's spam verdict and score (for
 Postal, its `X-Postal-Spam: yes` header). Processing rebuilds the recipient and
 the verdict from those columns, never from the headers when an envelope was
 stored.
+The row's `ticket` is the ticket the mail landed on; a reply address's ticket
+is found again from the stored envelope.
+
+A mail nested deeper than the parser can go is stored `rejected` /
+`unparseable` (known by its content's hash) and the webhook answers 200, so
+the provider stops retrying. A stored mail that can't be parsed, or whose raw
+file is gone, is `failed` with `unparseable` or `raw_missing`, without retries.
+Attachment files are stored before the transaction that writes the ticket (and
+takes the organization's row lock for its reference), and deleted if it fails.
 
 ---
 

@@ -137,3 +137,21 @@ def test_a_ticket_closed_for_longer_stays_closed_for_a_new_one(ticket, settings)
         PREVIOUS_TICKET_KEY: str(ticket.id)
     }
     assert _kept_metadata({PREVIOUS_TICKET_KEY: "ann's old ticket"}) == {}
+
+
+def test_an_id_on_several_tickets_prefers_ours_then_the_oldest(mailbox, ticket):
+    other = TicketFactory(organization=mailbox.organization, reference="SD-0013")
+    third = TicketFactory(organization=mailbox.organization, reference="SD-0014")
+    # A customer quoting our id in their own Message-ID can't take the thread.
+    TicketMessageFactory(
+        ticket=other,
+        author=None,
+        sender_type="user",
+        external_id="<sent-1@in.example.com>",
+    )
+    TicketMessageFactory(ticket=ticket, external_id="<sent-1@in.example.com>")
+    TicketMessageFactory(ticket=third, external_id="<sent-1@in.example.com>")
+
+    match = _find(build(In_Reply_To="<sent-1@in.example.com>"), mailbox)
+
+    assert match.ticket == ticket

@@ -14,6 +14,8 @@ from django.http import HttpRequest, HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 
+from apps.email_channel.inbound import store_unparseable
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,7 +98,17 @@ class PostalInboundView(PostalInboundWebhookView):
         else:
             # JSON can only carry text: 8-bit bytes come back as lone surrogates.
             raw = raw.encode("utf-8", "surrogateescape")
-        message = AnymailInboundMessage.parse_raw_mime_bytes(raw)
+        try:
+            message = AnymailInboundMessage.parse_raw_mime_bytes(raw)
+        except RecursionError:
+            # Nested deeper than the parser goes: kept as a log, and a 200, so
+            # that the provider doesn't send it again and again.
+            store_unparseable(
+                raw,
+                envelope_recipient=esp_event.get("rcpt_to"),
+                envelope_sender=esp_event.get("mail_from"),
+            )
+            return []
         # What is stored: serializing the parsed message again could alter it.
         message.raw_bytes = raw
         message.envelope_sender = esp_event.get("mail_from")

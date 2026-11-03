@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from django.conf import settings
+from django.db.models import Case, Value, When
 from django.utils import timezone
 
 from apps.email_channel.recipients import Recipient, one_line
@@ -64,14 +65,30 @@ def _continuable(organization):
 
 
 def _by_headers(message, organization) -> Ticket | None:
+    """The ticket of the first id referenced, in the order of ``_referenced_ids``.
+
+    An id on several tickets (a customer can reuse one of ours as their own
+    Message-ID) goes to the ticket of our own message, then of the oldest.
+    """
     ids = _referenced_ids(message)
     if not ids:
         return None
-    found = dict(
+    candidates = (
         TicketMessage.objects.filter(
             external_id__in=ids, ticket__in=_continuable(organization)
-        ).values_list("external_id", "ticket_id")
+        )
+        .annotate(
+            from_user=Case(
+                When(sender_type=TicketMessage.SenderType.USER, then=Value(1)),
+                default=Value(0),
+            )
+        )
+        .order_by("from_user", "created_at", "id")
+        .values_list("external_id", "ticket_id")
     )
+    found = {}
+    for message_id, ticket_id in candidates:
+        found.setdefault(message_id, ticket_id)
     for message_id in ids:
         if message_id in found:
             return _continuable(organization).get(pk=found[message_id])
@@ -114,6 +131,20 @@ def find_ticket(
     if ticket := _by_subject(message, sender, organization):
         return Match(ticket, "subject")
     return None
+
+
+def lock_matched_ticket(match: Match, organization) -> Ticket | None:
+    """Lock the matched ticket, or None if it can't take the mail anymore.
+
+    Its contact may have been anonymized since it was found: under the lock, that
+    is current.
+    """
+    return (
+        _continuable(organization)
+        .select_for_update(of=("self",))
+        .filter(pk=match.ticket.pk)
+        .first()
+    )
 
 
 def apply_reopen_rule(ticket: Ticket) -> ReopenOutcome:
