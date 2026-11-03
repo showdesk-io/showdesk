@@ -75,7 +75,9 @@ def requeue_stale_inbound() -> int:
     """Queue again the mails still pending long after they arrived.
 
     Their queuing failed after they were stored (e.g. the broker was down), and
-    the provider may never send them again. Returns how many were queued.
+    the provider may never send them again. Each is queued at most once per
+    ``STALE_PENDING_AFTER``: queuing it marks it as just updated. Returns how many
+    were queued.
     """
     from apps.email_channel.models import InboundEmail
 
@@ -83,11 +85,13 @@ def requeue_stale_inbound() -> int:
     stale = InboundEmail.objects.filter(
         status=InboundEmail.Status.PENDING,
         updated_at__lt=timezone.now() - STALE_PENDING_AFTER,
-    ).values_list("id", flat=True)
+    )
     count = 0
-    for inbound_id in stale.iterator():
-        process_inbound_email.delay(str(inbound_id))
-        count += 1
+    for inbound_id in stale.values_list("id", flat=True).iterator():
+        # Unless processed or queued again meanwhile.
+        if stale.filter(pk=inbound_id).update(updated_at=timezone.now()):
+            process_inbound_email.delay(str(inbound_id))
+            count += 1
     return count
 
 

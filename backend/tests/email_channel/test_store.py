@@ -231,6 +231,10 @@ def test_stale_pending_mail_is_queued_again(delay, settings):
     requeue_stale_inbound()
 
     delay.assert_called_once_with(str(stale.id))
+    # Once per interval: the next run leaves it to the task just queued.
+    delay.reset_mock()
+    requeue_stale_inbound()
+    delay.assert_not_called()
     assert settings.CELERY_BEAT_SCHEDULE["requeue-stale-inbound-emails"] == {
         "task": "apps.email_channel.tasks.requeue_stale_inbound",
         "schedule": 60 * 10,
