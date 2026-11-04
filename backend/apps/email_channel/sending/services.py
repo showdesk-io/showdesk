@@ -106,16 +106,19 @@ def sendable_domains(organization_id) -> set[str]:
     """The organization's domains mail may go out from now (§7.1).
 
     Owned, and verified by the sending provider. None while it is `none`.
+    A webmail row verified before those were refused never counts.
     """
     if not sending_enabled():
         return set()
-    return set(
-        OrganizationDomain.objects.filter(
+    return {
+        domain
+        for domain in OrganizationDomain.objects.filter(
             organization_id=organization_id,
             status=Ownership.VERIFIED,
             sending_status=Sending.VERIFIED,
         ).values_list("domain", flat=True)
-    )
+        if not is_public_email_domain(domain)
+    }
 
 
 def sendable_address(mailbox, domains: set[str] | None = None) -> str | None:
@@ -129,6 +132,8 @@ def sendable_address(mailbox, domains: set[str] | None = None) -> str | None:
     if not (sending_enabled() and address):
         return None
     domain = address.rpartition("@")[2]
+    if is_public_email_domain(domain):
+        return None  # Nobody's, even if verified before that was refused.
     if domains is None:
         sendable = OrganizationDomain.objects.filter(
             organization_id=mailbox.organization_id,

@@ -10,12 +10,13 @@ from apps.core.permissions import is_org_admin
 from apps.core.serializers import OrgScopedPrimaryKeyRelatedField
 from apps.email_channel.models import InboundEmail, Mailbox
 from apps.email_channel.sending.services import sendable_address, sendable_domains
-from apps.organizations.models import OrganizationDomain, Team
+from apps.organizations.models import OrganizationDomain, Team, is_public_email_domain
 from apps.tickets.models import TicketMessage
 from apps.tickets.serializers import WidgetMessageSerializer
 
 PUBLIC_ADDRESS_TAKEN = "Another mailbox already uses this address."
 DOMAIN_NOT_VERIFIED = "Verify {domain} for your organization first."
+PUBLIC_DOMAIN = "Use an address on your own domain, not on a public webmail one."
 
 
 class MailboxSerializer(serializers.ModelSerializer):
@@ -96,7 +97,8 @@ class MailboxSerializer(serializers.ModelSerializer):
     def _check_domain_owned(self, candidate: Mailbox) -> None:
         """A new public address needs its domain verified by the organization.
 
-        Nobody may reserve an address on a domain they haven't proven theirs.
+        Nobody may reserve an address on a domain they haven't proven theirs,
+        nor on a public webmail domain.
         An address set before this rule, left unchanged, stays.
         """
         address = candidate.public_address
@@ -105,6 +107,9 @@ class MailboxSerializer(serializers.ModelSerializer):
         ):
             return
         domain = address.rpartition("@")[2]
+        if is_public_email_domain(domain):
+            # Nobody's, even with a row verified before that was refused.
+            raise serializers.ValidationError({"public_address": [PUBLIC_DOMAIN]})
         if not OrganizationDomain.objects.filter(
             organization_id=candidate.organization_id,
             domain=domain,

@@ -538,3 +538,36 @@ def test_the_migration_frees_addresses_on_another_organization_domain(organizati
     assert squatter.public_address == ""
     assert owner.public_address == "help@acme.com"
     assert unclaimed.public_address == "hello@nobody.com"
+
+
+def test_an_old_verified_webmail_row_never_counts_as_ownership(
+    provider, organization, admin_client
+):
+    """A `gmail.com` row verified before webmail domains were refused."""
+    import importlib
+
+    from django.apps import apps
+
+    migration = importlib.import_module(
+        "apps.email_channel.migrations.0005_free_squatted_public_addresses"
+    )
+    row = domain_row(organization, is_sending=True, sending_status=Sending.VERIFIED)
+    OrganizationDomain.objects.filter(pk=row.pk).update(domain="gmail.com")
+    someone = MailboxFactory(public_address="someone@gmail.com")
+    ours = MailboxFactory(organization=organization, public_address="us@gmail.com")
+
+    migration.free_squatted_public_addresses(apps, None)
+    response = admin_client.patch(
+        f"/api/v1/mailboxes/{ours.id}/",
+        {"public_address": "help@gmail.com"},
+        format="json",
+    )
+
+    someone.refresh_from_db()
+    assert someone.public_address == "someone@gmail.com"
+    assert response.status_code == 400
+    assert "public webmail" in response.data["public_address"][0]
+    assert services.sendable_address(ours) is None
+    assert services.sendable_domains(organization.id) == set()
+    row.refresh_from_db()
+    assert row.status == OrganizationDomain.Status.VERIFIED  # Left as it was.
