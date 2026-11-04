@@ -28,6 +28,7 @@ pytestmark = pytest.mark.django_db
 
 RECORDS = [{"type": "TXT", "name": "acme.com", "value": "v=spf1 include:x ~all"}]
 Sending = OrganizationDomain.SendingStatus
+TOKEN = "token"
 
 
 class FakeProvider:
@@ -64,8 +65,15 @@ class FakeProvider:
 def provider(settings):
     settings.SENDING_DOMAIN_PROVIDER = "manual"
     fake = FakeProvider()
-    with mock.patch(
-        "apps.email_channel.sending.services.get_provider", return_value=fake
+    with (
+        mock.patch(
+            "apps.email_channel.sending.services.get_provider", return_value=fake
+        ),
+        # The rows' own `_showdesk` TXT is published.
+        mock.patch(
+            "apps.organizations.dns_verification.lookup_txt",
+            return_value=[f"showdesk-verification={TOKEN}"],
+        ),
     ):
         yield fake
 
@@ -76,6 +84,7 @@ def domain_row(organization, **fields) -> OrganizationDomain:
         domain=fields.pop("domain", "acme.com"),
         is_branding=True,
         status=fields.pop("status", OrganizationDomain.Status.VERIFIED),
+        verification_token=fields.pop("verification_token", TOKEN),
         **fields,
     )
 
@@ -105,7 +114,7 @@ class TestEnable:
         assert row.is_sending is True
         assert row.sending_status == Sending.PENDING
         assert row.sending_provider_ref == "ref-acme.com"
-        assert row.sending_dns_records == RECORDS
+        assert row.sending_dns_records == [services.ownership_record(row), *RECORDS]
         assert row.sending_requested_at is not None
         assert row.sending_last_checked_at is not None
         assert row.sending_last_error == "SPF: add include:x."
@@ -309,7 +318,7 @@ class TestCheck:
         services.check_sending(row)
 
         row.refresh_from_db()
-        assert row.sending_dns_records == newer
+        assert row.sending_dns_records == [services.ownership_record(row), *newer]
 
     def test_only_a_registered_owned_domain_is_checked(
         self, provider, organization

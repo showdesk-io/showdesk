@@ -21,6 +21,7 @@ from tests.factories import AdminFactory, MailboxFactory, UserFactory
 pytestmark = pytest.mark.django_db
 
 Sending = OrganizationDomain.SendingStatus
+TOKEN = "token"
 
 
 class FakeProvider:
@@ -39,8 +40,15 @@ class FakeProvider:
 def provider(settings):
     settings.SENDING_DOMAIN_PROVIDER = "manual"
     fake = FakeProvider()
-    with mock.patch(
-        "apps.email_channel.sending.services.get_provider", return_value=fake
+    with (
+        mock.patch(
+            "apps.email_channel.sending.services.get_provider", return_value=fake
+        ),
+        # The rows' own `_showdesk` TXT is published.
+        mock.patch(
+            "apps.organizations.dns_verification.lookup_txt",
+            return_value=[f"showdesk-verification={TOKEN}"],
+        ),
     ):
         yield fake
 
@@ -61,6 +69,7 @@ def sending_row(organization, status, **fields) -> OrganizationDomain:
         domain=fields.pop("domain", "acme.com"),
         is_branding=True,
         status=OrganizationDomain.Status.VERIFIED,
+        verification_token=TOKEN,
         is_sending=True,
         sending_status=status,
         sending_provider_ref=fields.pop("ref", "ref-acme.com"),

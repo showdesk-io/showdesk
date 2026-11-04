@@ -10,6 +10,8 @@ import pytest
 from rest_framework.test import APIClient
 
 from apps.email_channel.models import SendingRemoval
+from apps.email_channel.sending.providers import CheckStatus
+from apps.email_channel.sending.services import check_sending
 from apps.organizations.models import OrganizationDomain
 from tests.email_channel.mails import INBOUND_DOMAIN
 from tests.factories import AdminFactory, OrganizationFactory
@@ -33,6 +35,13 @@ def published(records: dict[str, list[str]]):
         "apps.organizations.dns_verification.lookup_txt",
         side_effect=lambda name: records.get(name, []),
     )
+
+
+# What `manual` asks every organization to publish, whoever it is.
+MANUAL_RECORDS = {
+    "acme.com": ["v=spf1 include:spf.mail.example.net ~all"],
+    "showdesk._domainkey.acme.com": [OPERATOR_KEY],
+}
 
 
 def url(row: OrganizationDomain, action: str = "") -> str:
@@ -59,6 +68,7 @@ def test_enable_gives_the_records_and_the_first_check(admin_client, organization
     assert response.data["is_sending"] is True
     assert response.data["sending_status"] == "pending"
     assert [r["type"] for r in response.data["sending_dns_records"]] == [
+        "TXT",
         "TXT",
         "CNAME",
     ]
@@ -102,6 +112,43 @@ def test_a_misconfigured_provider_is_a_502(admin_client, organization, settings)
     assert "SENDING_DOMAIN" not in response.data["detail"]
 
 
+def test_sending_needs_the_organization_own_dns_proof(admin_client, organization):
+    """Proven by an admin's mailbox, a domain isn't proven in its DNS, and the
+    `manual` records are the same for every organization: the row's own
+    `_showdesk` TXT is asked for first, and checked at every check."""
+    row = owned(
+        organization,
+        is_email_routing=True,
+        verification_method=OrganizationDomain.VerificationMethod.ADMIN_EMAIL,
+    )
+
+    with published(MANUAL_RECORDS):
+        response = admin_client.post(url(row))
+
+    assert response.status_code == 200, response.data
+    assert response.data["sending_status"] == "pending"
+    assert "_showdesk TXT record" in response.data["sending_last_error"]
+    row.refresh_from_db()
+    assert row.status == OrganizationDomain.Status.VERIFIED
+    assert row.verification_method == OrganizationDomain.VerificationMethod.ADMIN_EMAIL
+    assert row.verification_token
+    assert response.data["sending_dns_records"][0] == {
+        "type": "TXT",
+        "name": "_showdesk.acme.com",
+        "value": f"showdesk-verification={row.verification_token}",
+    }
+
+    proven = {**MANUAL_RECORDS, "_showdesk.acme.com": [row.txt_record_value]}
+    with published(proven):
+        assert check_sending(row) == CheckStatus.VERIFIED
+    with published(MANUAL_RECORDS):
+        assert check_sending(row) == CheckStatus.PENDING
+    row.refresh_from_db()
+    assert row.sending_status == "pending"  # A regression.
+    with published({**proven, "_showdesk.acme.com": None}):
+        assert check_sending(row) == CheckStatus.UNKNOWN
+
+
 def test_check_now(admin_client, organization):
     row = owned(organization)
     response = admin_client.post(url(row, "check/"))
@@ -110,10 +157,8 @@ def test_check_now(admin_client, organization):
 
     with published({}):
         admin_client.post(url(row))
-    good = {
-        "acme.com": ["v=spf1 include:spf.mail.example.net ~all"],
-        "showdesk._domainkey.acme.com": [OPERATOR_KEY],
-    }
+    row.refresh_from_db()
+    good = {**MANUAL_RECORDS, "_showdesk.acme.com": [row.txt_record_value]}
     with published(good):
         first = admin_client.post(url(row, "check/"))
         second = admin_client.post(url(row, "check/"))

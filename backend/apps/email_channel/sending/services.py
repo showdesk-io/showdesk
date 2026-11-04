@@ -26,6 +26,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from apps.email_channel.models import SendingRemoval
+from apps.organizations import dns_verification
 from apps.organizations.models import (
     OrganizationDomain,
     User,
@@ -209,6 +210,7 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
             raise PublicDomainError("Mail can't be sent from a public webmail domain.")
         if row.status != Ownership.VERIFIED:
             raise NotOwnedError(f"Verify {row.domain} for your organization first.")
+        _ensure_ownership_token(row)
         if row.sending_status in (Sending.PENDING, Sending.VERIFIED):
             return row
         try:
@@ -251,6 +253,32 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
         return locked
     finally:
         _unlock_domain(row.domain, token)
+
+
+def _ensure_ownership_token(row: OrganizationDomain) -> None:
+    """Give the row the token of its `_showdesk` TXT, if it has none.
+
+    A row verified through an admin's email has none. Only the token is
+    written: the ownership status and method stay as they are.
+    """
+    if row.verification_token:
+        return
+    OrganizationDomain.objects.filter(pk=row.pk, verification_token="").update(
+        verification_token=OrganizationDomain.generate_token(),
+        updated_at=timezone.now(),
+    )
+    row.refresh_from_db(fields=["verification_token"])
+
+
+def ownership_record(row: OrganizationDomain) -> dict[str, str]:
+    """The row's `_showdesk` TXT: the organization's own proof in the DNS."""
+    return {"type": "TXT", "name": row.txt_record_name, "value": row.txt_record_value}
+
+
+def _with_ownership_record(row: OrganizationDomain, records) -> list[dict]:
+    """The records to publish: the row's `_showdesk` TXT, then the provider's."""
+    own = ownership_record(row)
+    return [own, *(r for r in records if r != own)]
 
 
 def _removal_pending(domain: str) -> RemovalPendingError:
@@ -297,7 +325,7 @@ def _store_registration(row, registered) -> OrganizationDomain | None:
         locked.is_sending = True
         locked.sending_status = Sending.PENDING
         locked.sending_provider_ref = registered.ref
-        locked.sending_dns_records = registered.records
+        locked.sending_dns_records = _with_ownership_record(locked, registered.records)
         locked.sending_requested_at = timezone.now()
         locked.sending_last_checked_at = None
         locked.sending_last_error = ""
@@ -344,8 +372,36 @@ def check_sending(
     except SendingProviderError as exc:
         logger.warning("Sending check of %s couldn't conclude: %s", row.domain, exc)
         result = DomainCheck(CheckStatus.UNKNOWN)
+    result = _with_ownership_check(row, result)
     apply_check(row, ref, result)
     return result.status
+
+
+OWNERSHIP_RECORD_MISSING = (
+    "The _showdesk TXT record proving your organization controls this domain "
+    "is missing."
+)
+
+
+def _with_ownership_check(row: OrganizationDomain, result: DomainCheck) -> DomainCheck:
+    """The provider's result, with the row's `_showdesk` TXT checked too.
+
+    Sending needs the organization's own proof in the domain's DNS, whatever
+    the provider and however ownership was verified: `manual`'s records are
+    the same for every organization, and an admin's mailbox doesn't prove
+    control of the DNS. A provider FAILED or UNKNOWN result stands; a TXT
+    lookup that can't conclude is UNKNOWN; a missing TXT is PENDING.
+    """
+    records = result.records and _with_ownership_record(row, result.records)
+    if result.status in (CheckStatus.FAILED, CheckStatus.UNKNOWN):
+        return DomainCheck(result.status, result.error, records or None)
+    found = dns_verification.lookup_txt(row.txt_record_name)
+    if found is None:
+        return DomainCheck(CheckStatus.UNKNOWN)
+    if row.verification_token and row.txt_record_value in found:
+        return DomainCheck(result.status, result.error, records or None)
+    error = f"{OWNERSHIP_RECORD_MISSING} {result.error}".strip()
+    return DomainCheck(CheckStatus.PENDING, error, records or None)
 
 
 def next_sending_status(

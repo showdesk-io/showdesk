@@ -612,6 +612,7 @@ these choices beyond this design. Each one is pinned by a test.
 | 11 | TEM records are shown with fully qualified names, in the order SPF, DKIM, DMARC, never TEM's MX. SPF records (TEM's and `manual`'s) and TEM's DMARC carry `merge: true`: the wizard says to add the value to an existing record rather than publish a second. | TEM's MX is a blackhole for send-only domains, and ours receive the support mail. Two SPF or DMARC records make receivers ignore both. |
 | 12 | A public webmail domain is never verified, for any purpose, and a webmail row verified before that rule never counts as ownership: no sending, no public address, no freeing of others' addresses. | Nobody owns `gmail.com`. |
 | 13 | The organization payload carries `sending_domains_enabled` (provider not `none`); a mailbox carries `sends_from_public_address`. | The wizard is hidden without a provider; the mailbox card says which From is used now. |
+| 14 | Sending needs the organization's own `_showdesk.<domain>` TXT (`showdesk-verification=<token>`), whatever the provider, at every check: it is the first record to publish (a row verified by admin email gets a token then, its ownership untouched), and a check without it is pending (a regression on a verified domain), one that can't read it inconclusive. | `manual`'s records are the same for every organization, so the real owner publishing them for itself would verify a squatter's row too; an admin's mailbox proves an address, not control of the DNS; and TEM's re-registration of a revoked name is unconfirmed. |
 
 What admins have:
 
