@@ -62,8 +62,8 @@ class MailboxSerializer(serializers.ModelSerializer):
         return mailbox.inbound_address if settings.INBOUND_EMAIL_DOMAIN else ""
 
     def get_sends_from_public_address(self, mailbox: Mailbox) -> bool:
-        # One query for a whole list: the domains are kept on the root serializer.
-        cache = self.root.__dict__.setdefault("_sendable_domains", {})
+        # One query for a whole list: the context is shared by its items.
+        cache = self.context.setdefault("_sendable_domains", {})
         if mailbox.organization_id not in cache:
             cache[mailbox.organization_id] = sendable_domains(mailbox.organization_id)
         return sendable_address(mailbox, cache[mailbox.organization_id]) is not None

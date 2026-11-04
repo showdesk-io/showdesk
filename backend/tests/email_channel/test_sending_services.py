@@ -515,3 +515,26 @@ class TestOwnershipVerified:
         assert sorted(c.args[0] for c in delay.call_args_list) == sorted(
             r.pk for r in removals
         )
+
+
+def test_the_migration_frees_addresses_on_another_organization_domain(organization):
+    """Squatted before public addresses needed their domain verified."""
+    import importlib
+
+    from django.apps import apps
+
+    migration = importlib.import_module(
+        "apps.email_channel.migrations.0005_free_squatted_public_addresses"
+    )
+    domain_row(organization)  # acme.com, verified by `organization`.
+    squatter = MailboxFactory(public_address="support@acme.com")
+    owner = MailboxFactory(organization=organization, public_address="help@acme.com")
+    unclaimed = MailboxFactory(public_address="hello@nobody.com")
+
+    migration.free_squatted_public_addresses(apps, None)
+
+    for mailbox in (squatter, owner, unclaimed):
+        mailbox.refresh_from_db()
+    assert squatter.public_address == ""
+    assert owner.public_address == "help@acme.com"
+    assert unclaimed.public_address == "hello@nobody.com"
