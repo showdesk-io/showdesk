@@ -1,0 +1,14 @@
+{% extends "emails/base.txt" %}
+{% block content %}{% autoescape off %}{% if state == "verified" %}You now send from {{ domain }}.
+
+The DNS records of {{ domain }} are in place. Replies from mailboxes with a public address on this domain now go out from that address.{% elif state == "regressed" %}Sending from {{ domain }} stopped.
+
+The DNS records of {{ domain }} are no longer all in place, so replies go out from your mailboxes' inbound addresses for now. We will keep checking for {{ pending_hours }} hours: once the records are back, sending from {{ domain }} resumes by itself.{% else %}Sending from {{ domain }} failed.
+
+{{ domain }} couldn't be set up for sending, so replies go out from your mailboxes' inbound addresses. Fix the DNS records, then set the domain up again from the Email settings.{% endif %}
+{% if error %}
+Last check: {{ error }}
+{% endif %}
+Email settings: {{ settings_url }}
+
+-- The Showdesk team{% endautoescape %}{% endblock %}

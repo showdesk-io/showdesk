@@ -17,6 +17,7 @@ from .models import (
     OrgJoinRequest,
     Team,
     User,
+    is_public_email_domain,
 )
 
 
@@ -28,6 +29,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
     # Instance settings, not the organization's: whether mail can reach a mailbox.
     inbound_email_enabled = serializers.SerializerMethodField()
     inbound_email_domain = serializers.SerializerMethodField()
+    # Whether a sending domain provider is configured: the wizard needs one.
+    sending_domains_enabled = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
@@ -54,6 +57,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "enabled_features",
             "inbound_email_enabled",
             "inbound_email_domain",
+            "sending_domains_enabled",
             "created_at",
             "updated_at",
         ]
@@ -85,6 +89,12 @@ class OrganizationSerializer(serializers.ModelSerializer):
 
     def get_inbound_email_domain(self, obj: Organization) -> str:
         return settings.INBOUND_EMAIL_DOMAIN
+
+    def get_sending_domains_enabled(self, obj: Organization) -> bool:
+        # Imported here: the email channel depends on this app, not the reverse.
+        from apps.email_channel.sending.providers import sending_enabled
+
+        return sending_enabled()
 
     def to_representation(self, instance: Organization) -> dict:
         """Keep the widget secret to admins: it signs end-user identities."""
@@ -251,7 +261,22 @@ class PlatformOrganizationCreateSerializer(serializers.ModelSerializer):
         ]
 
 
-_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,253}[a-z0-9])?\.[a-z]{2,}$")
+_DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+# Leaves room for the longest name built on a domain, the DKIM record's
+# `<selector>._domainkey.<domain>`, within DNS's 253 characters.
+_DOMAIN_MAX_LENGTH = 200
+
+
+def _is_valid_domain(name: str) -> bool:
+    """At least two labels of 1-63 `[a-z0-9-]`, no hyphen at either end."""
+    labels = name.split(".")
+    return (
+        len(name) <= _DOMAIN_MAX_LENGTH
+        and len(labels) >= 2
+        and all(_DOMAIN_LABEL_RE.match(label) for label in labels)
+        # An all-numeric last label is an IP address, not a domain.
+        and not labels[-1].isdigit()
+    )
 
 
 class OrganizationDomainSerializer(serializers.ModelSerializer):
@@ -260,6 +285,11 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
     `domain` is write-once: settable on create but immutable afterwards.
     Status, verification_method, token, and verified_at are entirely
     server-managed (set by the verify endpoint, not the client).
+
+    `is_sending` may only be asked for at creation, and only while a sending
+    provider is configured; afterwards sending is turned on and off through
+    its own endpoints. The sending state is the provider's: read-only, and
+    `sending_provider_ref` is never exposed.
     """
 
     txt_record_name = serializers.CharField(read_only=True)
@@ -277,6 +307,7 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             "domain",
             "is_branding",
             "is_email_routing",
+            "is_sending",
             "status",
             "verification_method",
             "verification_token",
@@ -284,6 +315,11 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             "last_check_at",
             "txt_record_name",
             "txt_record_value",
+            "sending_status",
+            "sending_dns_records",
+            "sending_requested_at",
+            "sending_last_checked_at",
+            "sending_last_error",
             "created_at",
             "updated_at",
         ]
@@ -296,6 +332,11 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             "last_check_at",
             "txt_record_name",
             "txt_record_value",
+            "sending_status",
+            "sending_dns_records",
+            "sending_requested_at",
+            "sending_last_checked_at",
+            "sending_last_error",
             "created_at",
             "updated_at",
         ]
@@ -313,9 +354,41 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "domain is immutable; create a new entry instead."
             )
-        if not _DOMAIN_RE.match(normalized):
+        if not _is_valid_domain(normalized):
             raise serializers.ValidationError("Enter a valid domain (e.g. acme.com).")
         return normalized
+
+    def get_fields(self) -> dict:
+        fields = super().get_fields()
+        if self.instance is not None:
+            fields["is_sending"].read_only = True
+        return fields
+
+    def to_representation(self, instance) -> dict:
+        """A row registered with another provider than the configured one is
+        shown as not set up (as the periodic check will reset it): its records
+        were the previous provider's.
+        """
+        data = super().to_representation(instance)
+        made_by = instance.sending_provider
+        if made_by and made_by != settings.SENDING_DOMAIN_PROVIDER:
+            data.update(
+                sending_status="",
+                sending_dns_records=[],
+                sending_requested_at=None,
+                sending_last_checked_at=None,
+                sending_last_error="",
+            )
+        return data
+
+    def validate_is_sending(self, value: bool) -> bool:
+        from apps.email_channel.sending.providers import sending_enabled
+
+        if value and not sending_enabled():
+            raise serializers.ValidationError(
+                "Sending from your own domain is not available on this server."
+            )
+        return value
 
     def validate(self, attrs: dict) -> dict:
         is_branding = attrs.get(
@@ -326,9 +399,18 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             "is_email_routing",
             getattr(self.instance, "is_email_routing", False),
         )
-        if not (is_branding or is_email_routing):
+        is_sending = attrs.get(
+            "is_sending",
+            getattr(self.instance, "is_sending", False),
+        )
+        if not (is_branding or is_email_routing or is_sending):
             raise serializers.ValidationError(
                 {"is_branding": "Choose at least one purpose."}
+            )
+        # Nobody owns a webmail domain: no purpose may claim one.
+        if self.instance is None and is_public_email_domain(attrs.get("domain", "")):
+            raise serializers.ValidationError(
+                {"domain": "A public webmail domain can't be verified."}
             )
         return attrs
 

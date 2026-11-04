@@ -2,7 +2,7 @@
 
 from django.contrib import admin, messages
 
-from .models import InboundEmail, Mailbox
+from .models import InboundEmail, Mailbox, SendingRemoval
 from .tasks import replay
 
 
@@ -65,3 +65,38 @@ class InboundEmailAdmin(admin.ModelAdmin):
                 f"{skipped} left as they were: only failed mails are replayed.",
                 messages.WARNING,
             )
+
+
+@admin.register(SendingRemoval)
+class SendingRemovalAdmin(admin.ModelAdmin):
+    """Sending registrations still to remove at the provider: to watch, not edit.
+
+    Removed by their task and the sweep. A record may be deleted by
+    hand once the registration was removed at the provider some other way.
+    """
+
+    list_display = [
+        "domain",
+        "ref",
+        "provider",
+        "attempts",
+        "last_attempt_at",
+        "last_error",
+        "created_at",
+    ]
+    search_fields = ["domain", "ref"]
+    readonly_fields = [
+        "domain",
+        "ref",
+        "provider",
+        "attempts",
+        "last_attempt_at",
+        "last_error",
+        "created_at",
+    ]
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False

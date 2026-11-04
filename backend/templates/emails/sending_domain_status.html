@@ -1,0 +1,32 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}{% if state == "verified" %}You now send from {{ domain }}{% elif state == "regressed" %}Sending from {{ domain }} stopped{% else %}Sending from {{ domain }} failed{% endif %}{% endblock %}
+
+{% block content %}
+<div class="sd-text" style="font-size:13px;line-height:20px;color:{{ brand.muted_color }};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;">Sending domain</div>
+{% if state == "verified" %}
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">You now send from {{ domain }}</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">
+  The DNS records of <strong>{{ domain }}</strong> are in place. Replies from mailboxes with a public address on this domain now go out from that address.
+</p>
+{% elif state == "regressed" %}
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">Sending from {{ domain }} stopped</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">
+  The DNS records of <strong>{{ domain }}</strong> are no longer all in place, so replies go out from your mailboxes' inbound addresses for now. We will keep checking for {{ pending_hours }} hours: once the records are back, sending from {{ domain }} resumes by itself.
+</p>
+{% else %}
+<h1 class="sd-text sd-h1" style="margin:0 0 12px 0;font-size:24px;line-height:32px;font-weight:700;color:{{ brand.text_color }};letter-spacing:-0.01em;">Sending from {{ domain }} failed</h1>
+<p class="sd-text" style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:{{ brand.text_color }};">
+  <strong>{{ domain }}</strong> couldn't be set up for sending, so replies go out from your mailboxes' inbound addresses. Fix the DNS records, then set the domain up again from the Email settings.
+</p>
+{% endif %}
+{% if error %}
+<p class="sd-text" style="margin:0 0 16px 0;font-size:14px;line-height:22px;color:{{ brand.muted_color }};">
+  Last check: {{ error }}
+</p>
+{% endif %}
+
+<div style="margin-top:8px;">
+  {% include "emails/_button.html" with url=settings_url label="Open the Email settings" %}
+</div>
+{% endblock %}

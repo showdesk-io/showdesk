@@ -25,6 +25,7 @@ from apps.email_channel.tokens import (
     read_conversation_token,
     reply_address,
 )
+from apps.organizations.models import OrganizationDomain
 from apps.tickets.models import Ticket, TicketMessage, WidgetSession
 from apps.tickets.tasks import (
     REPLY_LOCK_OUTAGE_MAX_RETRIES,
@@ -128,6 +129,61 @@ def test_without_a_mailbox_of_its_own_a_ticket_takes_the_first_active_one(
     send_ticket_reply_email(_reply(ticket, agent).id)
 
     assert mail.outbox[0].from_email == f"Acme <{active.inbound_address}>"
+
+
+def _sending_domain(organization, **fields) -> OrganizationDomain:
+    return OrganizationDomain.objects.create(
+        organization=organization,
+        domain="acme.com",
+        is_sending=True,
+        status=fields.pop("status", OrganizationDomain.Status.VERIFIED),
+        sending_status=fields.pop(
+            "sending_status", OrganizationDomain.SendingStatus.VERIFIED
+        ),
+        sending_provider_ref="acme.com",
+        sending_provider="manual",
+        **fields,
+    )
+
+
+def test_a_reply_mail_comes_from_the_public_address_once_sendable(
+    ticket, agent, settings
+):
+    settings.SENDING_DOMAIN_PROVIDER = "manual"
+    ticket.mailbox = MailboxFactory(
+        organization=ticket.organization, public_address="support@acme.com"
+    )
+    ticket.save()
+    row = _sending_domain(ticket.organization)
+
+    send_ticket_reply_email(_reply(ticket, agent).id)
+    row.sending_status = OrganizationDomain.SendingStatus.PENDING
+    row.save()
+    send_ticket_reply_email(_reply(ticket, agent).id)
+
+    sendable, pending = mail.outbox
+    assert sendable.from_email == "Acme <support@acme.com>"
+    assert sendable.reply_to == [reply_address(ticket)]
+    assert pending.from_email == f"Acme <{ticket.mailbox.inbound_address}>"
+
+
+def test_the_inbound_address_is_used_without_ownership_or_provider(
+    ticket, agent, settings
+):
+    from apps.email_channel.sending.services import sendable_address
+
+    mailbox = MailboxFactory(
+        organization=ticket.organization, public_address="support@acme.com"
+    )
+    row = _sending_domain(ticket.organization, status=OrganizationDomain.Status.FAILED)
+    settings.SENDING_DOMAIN_PROVIDER = "manual"
+    assert sendable_address(mailbox) is None
+
+    row.status = OrganizationDomain.Status.VERIFIED
+    row.save()
+    assert sendable_address(mailbox) == "support@acme.com"
+    settings.SENDING_DOMAIN_PROVIDER = "none"
+    assert sendable_address(mailbox) is None
 
 
 def test_a_reply_mail_threads_on_the_tickets_mails_and_keeps_twenty_ids(ticket, agent):

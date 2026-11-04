@@ -261,7 +261,21 @@ class Command(BaseCommand):
         )
         if created:
             self.stdout.write(f"  Created mailbox: {mailbox.inbound_address}")
+        self._set_domain_to_send(org, "acme.example.com")
         return mailbox
+
+    def _set_domain_to_send(self, org: Organization, domain: str) -> None:
+        """Mark the org's verified domain for sending, without registering it.
+
+        Its ``sending_status`` stays empty: replies keep going out from the
+        inbound address until an admin sets it up with a provider.
+        """
+        OrganizationDomain.objects.filter(
+            organization=org,
+            domain=domain,
+            status=OrganizationDomain.Status.VERIFIED,
+            is_sending=False,
+        ).update(is_sending=True)
 
     def _create_tags(self, org: Organization) -> list[Tag]:
         """Create demo tags."""

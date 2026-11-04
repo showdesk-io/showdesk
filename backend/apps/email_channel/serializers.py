@@ -9,11 +9,14 @@ from rest_framework import serializers
 from apps.core.permissions import is_org_admin
 from apps.core.serializers import OrgScopedPrimaryKeyRelatedField
 from apps.email_channel.models import InboundEmail, Mailbox
-from apps.organizations.models import Team
+from apps.email_channel.sending.services import sendable_address, sendable_domains
+from apps.organizations.models import OrganizationDomain, Team, is_public_email_domain
 from apps.tickets.models import TicketMessage
 from apps.tickets.serializers import WidgetMessageSerializer
 
 PUBLIC_ADDRESS_TAKEN = "Another mailbox already uses this address."
+DOMAIN_NOT_VERIFIED = "Verify {domain} for your organization first."
+PUBLIC_DOMAIN = "Use an address on your own domain, not on a public webmail one."
 
 
 class MailboxSerializer(serializers.ModelSerializer):
@@ -28,6 +31,8 @@ class MailboxSerializer(serializers.ModelSerializer):
         queryset=Team.objects.all(), required=False, allow_null=True
     )
     inbound_address = serializers.SerializerMethodField()
+    # Whether replies go out from the public address now (§7.1).
+    sends_from_public_address = serializers.SerializerMethodField()
 
     class Meta:
         model = Mailbox
@@ -37,6 +42,7 @@ class MailboxSerializer(serializers.ModelSerializer):
             "local_part",
             "inbound_address",
             "public_address",
+            "sends_from_public_address",
             "default_team",
             "is_active",
             "forwarding_confirmation",
@@ -56,6 +62,13 @@ class MailboxSerializer(serializers.ModelSerializer):
     def get_inbound_address(self, mailbox: Mailbox) -> str:
         return mailbox.inbound_address if settings.INBOUND_EMAIL_DOMAIN else ""
 
+    def get_sends_from_public_address(self, mailbox: Mailbox) -> bool:
+        # One query for a whole list: the context is shared by its items.
+        cache = self.context.setdefault("_sendable_domains", {})
+        if mailbox.organization_id not in cache:
+            cache[mailbox.organization_id] = sendable_domains(mailbox.organization_id)
+        return sendable_address(mailbox, cache[mailbox.organization_id]) is not None
+
     def validate(self, attrs: dict) -> dict:
         if self.instance is not None:
             candidate = copy.copy(self.instance)
@@ -70,6 +83,7 @@ class MailboxSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(exc.message_dict) from exc
         if "public_address" in attrs:
             attrs["public_address"] = candidate.public_address
+            self._check_domain_owned(candidate)
             if candidate.public_address and (
                 Mailbox.objects.filter(public_address=candidate.public_address)
                 .exclude(pk=candidate.pk)
@@ -79,6 +93,31 @@ class MailboxSerializer(serializers.ModelSerializer):
                     {"public_address": [PUBLIC_ADDRESS_TAKEN]}
                 )
         return attrs
+
+    def _check_domain_owned(self, candidate: Mailbox) -> None:
+        """A new public address needs its domain verified by the organization.
+
+        Nobody may reserve an address on a domain they haven't proven theirs,
+        nor on a public webmail domain.
+        An address set before this rule, left unchanged, stays.
+        """
+        address = candidate.public_address
+        if not address or (
+            self.instance is not None and address == self.instance.public_address
+        ):
+            return
+        domain = address.rpartition("@")[2]
+        if is_public_email_domain(domain):
+            # Nobody's, even with a row verified before that was refused.
+            raise serializers.ValidationError({"public_address": [PUBLIC_DOMAIN]})
+        if not OrganizationDomain.objects.filter(
+            organization_id=candidate.organization_id,
+            domain=domain,
+            status=OrganizationDomain.Status.VERIFIED,
+        ).exists():
+            raise serializers.ValidationError(
+                {"public_address": [DOMAIN_NOT_VERIFIED.format(domain=domain)]}
+            )
 
     def to_representation(self, instance: Mailbox) -> dict:
         data = super().to_representation(instance)

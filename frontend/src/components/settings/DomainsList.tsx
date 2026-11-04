@@ -20,16 +20,19 @@ import { formatDistanceToNow } from "date-fns";
 import {
   createOrganizationDomain,
   deleteOrganizationDomain,
-  fetchOrganizationDomains,
   regenerateOrganizationDomainToken,
   updateOrganizationDomain,
   verifyOrganizationDomain,
 } from "@/api/organizationDomains";
+import { fetchOrganization } from "@/api/users";
 import type {
   DomainStatus,
   DomainVerificationMethod,
   OrganizationDomain,
 } from "@/types";
+import { MAILBOXES } from "@/hooks/useMailboxes";
+import { ORGANIZATION_DOMAINS, useOrganizationDomains } from "@/hooks/useOrganizationDomains";
+import { SendingStatusBadge } from "./SendingDomainWizard";
 
 interface DomainsListProps {
   isAdmin: boolean;
@@ -37,14 +40,20 @@ interface DomainsListProps {
 
 export function DomainsList({ isAdmin }: DomainsListProps) {
   const queryClient = useQueryClient();
-  const { data: domains = [], isLoading } = useQuery({
-    queryKey: ["organization-domains"],
-    queryFn: fetchOrganizationDomains,
+  const { data: domains = [], isLoading } = useOrganizationDomains();
+  // The app's organization query: sending is only shown while the server can send.
+  const { data: organization } = useQuery({
+    queryKey: ["organization"],
+    queryFn: fetchOrganization,
   });
+  const sendingEnabled = organization?.sending_domains_enabled === true;
   const [showAddModal, setShowAddModal] = useState(false);
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ["organization-domains"] });
+  // A domain removed or verified can change which address a mailbox's replies go out from.
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ORGANIZATION_DOMAINS });
+    void queryClient.invalidateQueries({ queryKey: MAILBOXES });
+  };
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-6">
@@ -83,6 +92,7 @@ export function DomainsList({ isAdmin }: DomainsListProps) {
               key={d.id}
               domain={d}
               isAdmin={isAdmin}
+              sendingEnabled={sendingEnabled}
               onChange={invalidate}
             />
           ))}
@@ -93,7 +103,7 @@ export function DomainsList({ isAdmin }: DomainsListProps) {
         <AddDomainModal
           onClose={() => setShowAddModal(false)}
           onCreated={() => {
-            void invalidate();
+            invalidate();
             setShowAddModal(false);
           }}
         />
@@ -107,10 +117,12 @@ export function DomainsList({ isAdmin }: DomainsListProps) {
 function DomainRow({
   domain,
   isAdmin,
+  sendingEnabled,
   onChange,
 }: {
   domain: OrganizationDomain;
   isAdmin: boolean;
+  sendingEnabled: boolean;
   onChange: () => void;
 }) {
   const [showDns, setShowDns] = useState(false);
@@ -138,14 +150,14 @@ function DomainRow({
   });
 
   const isPendingDns =
-    domain.status === "pending" && domain.verification_method === "dns_txt";
-  // Legacy branding rows backfilled from the old scalar `domain` field
-  // sit at status=pending with no method or token yet. Surface a way to
-  // promote them into a real DNS challenge.
-  const needsDnsKickoff =
     domain.status === "pending" &&
-    domain.verification_method !== "dns_txt" &&
-    !domain.verification_token;
+    domain.verification_method === "dns_txt" &&
+    Boolean(domain.verification_token);
+  // Legacy branding rows backfilled from the old scalar `domain` field sit at
+  // status=pending with no method or token yet, and another organization's
+  // verification clears the token of a pending challenge. Surface a way to
+  // start a real DNS challenge.
+  const needsDnsKickoff = domain.status === "pending" && !domain.verification_token;
 
   const startDns = useMutation({
     mutationFn: () => regenerateOrganizationDomainToken(domain.id),
@@ -169,6 +181,13 @@ function DomainRow({
         {domain.verification_method === "admin_email" && (
           <PurposeChip label="Admin email" subtle />
         )}
+        {sendingEnabled &&
+          domain.is_sending &&
+          (domain.sending_status === "" ? (
+            <PurposeChip label="Sending" />
+          ) : (
+            <SendingStatusBadge status={domain.sending_status} prefix="Sending: " />
+          ))}
         {isAdmin ? (
           <div className="ml-auto flex items-center gap-2">
             {isPendingDns && (

@@ -178,3 +178,148 @@ def send_conversation_link(self, ticket_id: str) -> None:
     except Exception as exc:
         logger.exception("Failed to send a conversation link for %s", ticket.reference)
         raise self.retry(exc=exc)
+
+
+@shared_task(bind=True, max_retries=None)
+def remove_sending_registration(self, removal_id: int) -> None:
+    """Remove a recorded sending registration at the provider.
+
+    Retried with a growing delay while the provider fails, up to
+    MAX_REMOVAL_ATTEMPTS tries of the record; then left to the sweep.
+    Without a provider, or under another than the one that made the
+    registration, the record waits as it is.
+    """
+    from apps.email_channel.models import SendingRemoval
+    from apps.email_channel.sending.providers import (
+        ProviderUnavailableError,
+        SendingProviderError,
+    )
+    from apps.email_channel.sending.services import MAX_REMOVAL_ATTEMPTS, run_removal
+
+    try:
+        run_removal(removal_id)
+    except ProviderUnavailableError as exc:
+        logger.warning("Sending registration removal %s waits: %s", removal_id, exc)
+    except SendingProviderError as exc:
+        removal = SendingRemoval.objects.filter(pk=removal_id).first()
+        if removal is None:
+            return
+        if removal.attempts >= MAX_REMOVAL_ATTEMPTS:
+            logger.error(
+                "Gave up removing sending registration %s of %s after %d tries: %s",
+                removal.ref,
+                removal.domain,
+                removal.attempts,
+                exc,
+            )
+            return
+        logger.warning("Removing sending registration %s failed: %s", removal.ref, exc)
+        raise self.retry(exc=exc, countdown=60 * 2**self.request.retries) from exc
+
+
+# A recorded removal not tried for this long (its task lost before it ran,
+# given up, or waiting for its provider) is queued again by the hourly sweep.
+# Longer than the task's longest retry delay, so a removal still retrying
+# isn't queued twice.
+REMOVAL_SWEEP_AFTER = timedelta(hours=3)
+
+
+@shared_task
+def requeue_sending_removals() -> int:
+    """Queue again the removals not tried for REMOVAL_SWEEP_AFTER.
+
+    Whatever their attempts: one given up is logged as an error each time,
+    for an operator to look at.
+    """
+    from django.db.models.functions import Coalesce
+
+    from apps.email_channel.models import SendingRemoval
+    from apps.email_channel.sending.services import (
+        MAX_REMOVAL_ATTEMPTS,
+        enqueue_removal,
+    )
+
+    stale = SendingRemoval.objects.annotate(
+        last_try=Coalesce("last_attempt_at", "created_at")
+    ).filter(last_try__lt=timezone.now() - REMOVAL_SWEEP_AFTER)
+    count = 0
+    for removal in stale:
+        if removal.attempts >= MAX_REMOVAL_ATTEMPTS:
+            logger.error(
+                "Sending registration %s of %s still not removed after %d tries: %s",
+                removal.ref,
+                removal.domain,
+                removal.attempts,
+                removal.last_error,
+            )
+        enqueue_removal(removal.pk)
+        count += 1
+    return count
+
+
+@shared_task
+def check_sending_domains() -> int:
+    """Check the sending domains due for it, each on its own (§7.3).
+
+    Pending ones every run; verified ones once a day, to notice a regression;
+    failed ones only when an admin asks. Ones set up under another provider
+    are reset first. Nothing without a provider. Returns how many were
+    checked.
+    """
+    from django.conf import settings
+    from django.db.models import Q
+
+    from apps.email_channel.sending.providers import (
+        SendingProviderError,
+        sending_enabled,
+    )
+    from apps.email_channel.sending.services import (
+        SENDING_RECHECK_HOURS,
+        check_sending,
+        drop_switched_registration,
+        provider,
+    )
+    from apps.organizations.models import OrganizationDomain
+
+    if not sending_enabled():
+        return 0
+    try:
+        sender = provider()
+    except SendingProviderError:
+        return 0  # Logged by `provider()`.
+    # Set up under another provider: they fall back, to be set up again.
+    switched = (
+        OrganizationDomain.objects.exclude(sending_provider_ref="")
+        .exclude(sending_provider="")
+        .exclude(sending_provider=settings.SENDING_DOMAIN_PROVIDER)
+    )
+    for row in list(switched):
+        try:
+            drop_switched_registration(row)
+        except Exception:
+            logger.exception("Resetting sending domain %s failed", row.domain)
+    Sending = OrganizationDomain.SendingStatus
+    recheck_before = timezone.now() - timedelta(hours=SENDING_RECHECK_HOURS)
+    due = (
+        OrganizationDomain.objects.filter(status=OrganizationDomain.Status.VERIFIED)
+        .exclude(sending_provider_ref="")
+        .filter(
+            Q(sending_status=Sending.PENDING)
+            | (
+                Q(sending_status=Sending.VERIFIED)
+                & (
+                    Q(sending_last_checked_at__isnull=True)
+                    | Q(sending_last_checked_at__lt=recheck_before)
+                )
+            )
+        )
+    )
+    count = 0
+    for row in list(due):
+        try:
+            check_sending(row, sender=sender)
+        except Exception:
+            logger.exception("Sending check of %s failed", row.domain)
+            continue
+        count += 1
+    return count

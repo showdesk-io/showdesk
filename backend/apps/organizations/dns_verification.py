@@ -23,15 +23,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
 
-def query_txt_records(
+def lookup_txt(
     name: str, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
-) -> list[str]:
-    """Return TXT record values for `name`, joined per record.
+) -> list[str] | None:
+    """Return TXT record values for `name`, joined per record, or None if unsure.
 
-    Returns [] on NXDOMAIN, NoAnswer, timeout, or any resolver exception
-    — we never raise to the caller. Each TXT record is decoded from its
-    chunked binary representation into a single string (per RFC 1035 a
-    TXT record can hold multiple <=255-byte strings concatenated).
+    [] means the name has no TXT record (NXDOMAIN, NoAnswer). None means the
+    lookup couldn't conclude (timeout, no nameserver answering, any other
+    resolver error): callers that would undo something on a missing record
+    must change nothing then. Each TXT record is decoded from its chunked
+    binary representation into a single string (per RFC 1035 a TXT record
+    can hold multiple <=255-byte strings concatenated). CNAMEs are followed.
     """
     resolver = dns.resolver.Resolver()
     resolver.timeout = timeout
@@ -42,16 +44,27 @@ def query_txt_records(
         return []
     except (dns.exception.Timeout, dns.resolver.NoNameservers) as exc:
         logger.warning("DNS lookup failed for %s: %s", name, exc)
-        return []
+        return None
     except dns.exception.DNSException as exc:  # pragma: no cover - defensive
         logger.warning("DNS lookup error for %s: %s", name, exc)
-        return []
+        return None
 
     records: list[str] = []
     for rdata in answer:
         # rdata.strings is a tuple of bytes objects.
         records.append(b"".join(rdata.strings).decode("utf-8", errors="replace"))
     return records
+
+
+def query_txt_records(
+    name: str, *, timeout: float = DEFAULT_TIMEOUT_SECONDS
+) -> list[str]:
+    """Return TXT record values for `name`; [] whenever none could be read.
+
+    For the ownership challenge, where an inconclusive lookup is simply
+    "not found yet". We never raise to the caller.
+    """
+    return lookup_txt(name, timeout=timeout) or []
 
 
 def verify_domain_dns(domain_obj) -> bool:

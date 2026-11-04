@@ -195,3 +195,34 @@ class InboundEmail(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.message_id} ({self.status})"
+
+
+class SendingRemoval(models.Model):
+    """A sending registration still to remove at the provider (§7).
+
+    Recorded in the transaction that takes the ref off its domain row, so a
+    removal outlives the row (deleted, or registered again by its new owner)
+    and its retries can be seen. While one exists for a domain, nobody may
+    register that domain again.
+    """
+
+    domain = models.CharField(max_length=255, db_index=True)
+    ref = models.CharField(max_length=255, unique=True)
+    provider = models.CharField(
+        max_length=32,
+        blank=True,
+        help_text=(
+            "The provider that made the registration: only it removes it. "
+            'Blank if unknown (recorded while the provider was "none").'
+        ),
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+    attempts = models.PositiveIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.domain} ({self.ref})"

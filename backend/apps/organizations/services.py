@@ -84,19 +84,21 @@ def try_admin_email_autoverify(
     domain: str,
     is_branding: bool = False,
     is_email_routing: bool = True,
+    is_sending: bool = False,
 ) -> OrganizationDomain:
     """Create or upgrade a row to verified via admin_email.
 
-    Refuses for public webmail providers, when no eligible admin exists,
+    Refuses for public webmail providers (whatever the purpose: nobody owns
+    them), when no eligible admin exists,
     or when another org has already claimed the domain. The caller is
     expected to surface those refusals to the user with the structured
     `code` from the raised exception.
     """
     domain = domain.lower().strip()
 
-    if is_email_routing and is_public_email_domain(domain):
+    if is_public_email_domain(domain):
         raise CannotAutoVerifyError(
-            "Public webmail providers cannot be used for email routing."
+            "A public webmail domain can't be verified for an organization."
         )
 
     if not has_eligible_admin(organization, domain):
@@ -104,11 +106,27 @@ def try_admin_email_autoverify(
             "No admin in this organization has a verified email on this domain."
         )
 
+    # Every row of the domain, as the DNS path does: a concurrent verification
+    # elsewhere waits, and the freeing below sees settled rows.
+    list(OrganizationDomain.objects.select_for_update().filter(domain=domain))
+
     if is_domain_taken_elsewhere(domain, exclude_org=organization):
         raise DomainAlreadyClaimedError(
             "This domain is already verified by another organization. "
             "Use DNS verification to claim ownership."
         )
+
+    # Verifying adds purposes to an existing row, never removes one, and
+    # leaves its sending state alone.
+    existing = (
+        OrganizationDomain.objects.select_for_update()
+        .filter(organization=organization, domain=domain)
+        .first()
+    )
+    if existing is not None:
+        is_branding = is_branding or existing.is_branding
+        is_email_routing = is_email_routing or existing.is_email_routing
+        is_sending = is_sending or existing.is_sending
 
     row, _created = OrganizationDomain.objects.update_or_create(
         organization=organization,
@@ -116,12 +134,14 @@ def try_admin_email_autoverify(
         defaults={
             "is_branding": is_branding,
             "is_email_routing": is_email_routing,
+            "is_sending": is_sending,
             "status": OrganizationDomain.Status.VERIFIED,
             "verification_method": OrganizationDomain.VerificationMethod.ADMIN_EMAIL,
             "verified_at": timezone.now(),
             "last_check_at": timezone.now(),
         },
     )
+    _after_ownership_verified(row)
     logger.info(
         "Domain %s auto-verified for org %s via admin_email",
         domain,
@@ -141,6 +161,7 @@ def start_dns_challenge(
     domain: str,
     is_branding: bool = False,
     is_email_routing: bool = False,
+    is_sending: bool = False,
 ) -> OrganizationDomain:
     """Create or reset a row in pending state with a fresh DNS token."""
     domain = domain.lower().strip()
@@ -150,6 +171,7 @@ def start_dns_challenge(
         defaults={
             "is_branding": is_branding,
             "is_email_routing": is_email_routing,
+            "is_sending": is_sending,
             "status": OrganizationDomain.Status.PENDING,
             "verification_method": OrganizationDomain.VerificationMethod.DNS_TXT,
             "verification_token": OrganizationDomain.generate_token(),
@@ -219,9 +241,11 @@ def apply_dns_verification_success(domain_obj: OrganizationDomain) -> None:
         None,
     )
     if loser is not None:
+        # Its TXT may stay published: winning back needs a new token.
         loser.status = OrganizationDomain.Status.FAILED
+        loser.verification_token = ""
         loser.last_check_at = timezone.now()
-        loser.save(update_fields=["status", "last_check_at"])
+        loser.save(update_fields=["status", "verification_token", "last_check_at"])
         _notify_ownership_transferred(loser, new_owner=domain_obj.organization)
         logger.info(
             "Domain %s ownership transferred from %s to %s",
@@ -243,12 +267,26 @@ def apply_dns_verification_success(domain_obj: OrganizationDomain) -> None:
             "verification_method",
         ]
     )
+    _after_ownership_verified(domain_obj)
     _notify_domain_verified(domain_obj)
     logger.info(
         "Domain %s verified for %s via DNS",
         domain_obj.domain,
         domain_obj.organization.slug,
     )
+
+
+def _after_ownership_verified(row: OrganizationDomain) -> None:
+    """Free the domain in other organizations (§7.1), in the same transaction.
+
+    Their public addresses on it and their sending state go with the
+    verification, or neither does. The caller holds every row of the domain
+    locked; provider removals are deferred to the commit.
+    """
+    # Imported here: the email channel depends on this app, not the reverse.
+    from apps.email_channel.sending.services import on_ownership_verified
+
+    on_ownership_verified(row)
 
 
 # ---------------------------------------------------------------------------

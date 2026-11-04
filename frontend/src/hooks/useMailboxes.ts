@@ -14,7 +14,8 @@ import {
   type MailboxUpdate,
 } from "@/api/mailboxes";
 
-const MAILBOXES = ["mailboxes"] as const;
+/** Shared with the domains' hooks: a change to a domain can change the mailboxes. */
+export const MAILBOXES = ["mailboxes"] as const;
 
 export function useMailboxes() {
   return useQuery({ queryKey: MAILBOXES, queryFn: fetchMailboxes });

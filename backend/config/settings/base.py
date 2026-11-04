@@ -271,6 +271,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.organizations.tasks.purge_expired_otp_codes",
         "schedule": 60 * 60 * 24,
     },
+    "check-sending-domains": {
+        "task": "apps.email_channel.tasks.check_sending_domains",
+        "schedule": 60 * 15,
+    },
+    "requeue-sending-removals": {
+        "task": "apps.email_channel.tasks.requeue_sending_removals",
+        "schedule": 60 * 60,
+    },
     "purge-orphan-agent-uploads": {
         "task": "apps.tickets.tasks.purge_orphan_agent_uploads",
         "schedule": 60 * 60 * 24,
@@ -434,6 +442,25 @@ REPLY_EMAIL_ATTACHMENTS_MAX_MB = config(
 CONVERSATION_LINK_MAX_AGE_DAYS = config(
     "CONVERSATION_LINK_MAX_AGE_DAYS", default=30, cast=int
 )
+
+# =============================================================================
+# Sending domains: mail from an organization's own verified domain
+# =============================================================================
+# Who sets up a customer domain for sending: none (feature off), manual or
+# scaleway_tem. See apps.email_channel.sending.
+SENDING_DOMAIN_PROVIDER = (
+    config("SENDING_DOMAIN_PROVIDER", default="none").strip().lower()
+)
+# manual: the SPF include of the sending service, and the DKIM selector of the
+# one key it signs every customer domain with, published by the operator at
+# <selector>._domainkey.<INBOUND_EMAIL_DOMAIN>.
+SENDING_DOMAIN_SPF_INCLUDE = config("SENDING_DOMAIN_SPF_INCLUDE", default="")
+SENDING_DOMAIN_DKIM_SELECTOR = config("SENDING_DOMAIN_DKIM_SELECTOR", default="")
+# scaleway_tem: an API secret key allowed to manage Transactional Email in the
+# project the domains are registered in, and that project's region.
+SCW_TEM_SECRET_KEY = config("SCW_TEM_SECRET_KEY", default="")
+SCW_TEM_PROJECT_ID = config("SCW_TEM_PROJECT_ID", default="")
+SCW_TEM_REGION = config("SCW_TEM_REGION", default="fr-par")
 
 # Frontend URL for links in emails
 SITE_URL = config("SITE_URL", default="http://localhost")

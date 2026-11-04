@@ -2,6 +2,7 @@
 
 > Date: 2026-10-29
 > Status: Validated. PR 2 built on `feat/email-channel` (2026-11-03), see §10.
+> PR 3 built on `feat/sending-domains` (2026-11-04), see §11.
 > Phase: 3.5 (Channels & Integrations)
 > Research input: `docs/brainstorm/multi-channel-communication.md` (§1, §6)
 > Depends on: `docs/plans/2026-10-29-contacts-design.md`
@@ -397,9 +398,13 @@ class SendingDomainProvider(Protocol):
 Selected by `SENDING_DOMAIN_PROVIDER`:
 
 - `none` (default): feature hidden, always fallback.
-- `manual`: the operator registers domains with their sending service;
-  Showdesk shows the expected records built from `SENDING_DOMAIN_SPF_INCLUDE`
-  and `SENDING_DOMAIN_DKIM_SELECTOR` and checks them itself with `dnspython`.
+- `manual`: the operator's sending service relays for any domain and signs
+  every one with a single DKIM key, published once at
+  `<selector>._domainkey.<INBOUND_EMAIL_DOMAIN>`. Showdesk shows the expected
+  records built from `SENDING_DOMAIN_SPF_INCLUDE` and
+  `SENDING_DOMAIN_DKIM_SELECTOR` (an SPF include, and a DKIM CNAME
+  `<selector>._domainkey.<domain>` to the operator's key) and checks them
+  itself with `dnspython`: following the CNAME must give the operator's key.
 - `scaleway_tem`: Scaleway Transactional Email API (create domain → DKIM
   config + SPF include, trigger check, read status). Settings
   `SCW_TEM_SECRET_KEY`, `SCW_TEM_PROJECT_ID`, `SCW_TEM_REGION` (default
@@ -446,7 +451,7 @@ All new variables are documented in `.env.example` with safe defaults.
 | `WIDGET_UNREAD_EMAIL_DELAY_MINUTES` | 5 | 2 | Delay before emailing an unread widget reply. |
 | `CONVERSATION_LINK_MAX_AGE_DAYS` | 30 | 2 | Conversation link lifetime. |
 | `SENDING_DOMAIN_PROVIDER` | `none` | 3 | `none`, `manual`, `scaleway_tem`. |
-| `SENDING_DOMAIN_SPF_INCLUDE`, `SENDING_DOMAIN_DKIM_SELECTOR` | empty | 3 | `manual` adapter. |
+| `SENDING_DOMAIN_SPF_INCLUDE`, `SENDING_DOMAIN_DKIM_SELECTOR` | empty | 3 | `manual` adapter: the SPF include customers add, and the selector of the operator's DKIM key, published at `<selector>._domainkey.<INBOUND_EMAIL_DOMAIN>`, which customers point to with a CNAME. |
 | `SCW_TEM_SECRET_KEY`, `SCW_TEM_PROJECT_ID`, `SCW_TEM_REGION` | empty / `fr-par` | 3 | `scaleway_tem` adapter. |
 
 Operators must publish SPF/DKIM for `INBOUND_EMAIL_DOMAIN` with their sending
@@ -466,11 +471,36 @@ inbound provider.
   closing one deletes the key until the other's next ping, 25 s at most: an
   agent's reply in that window is emailed at once instead of waiting.
 
-- `Mailbox.public_address` is unique across organizations and unverified: an
-  organization can claim `support@bigcorp.com` before BigCorp does. It receives
-  none of BigCorp's mail (the envelope, BigCorp's own inbound address, decides),
-  but BigCorp can't register the address until it is freed. To be tied to a
-  verified sending domain in PR 3.
+- `Mailbox.public_address` is unique across organizations, and a new or
+  changed one needs its domain verified by the mailbox's organization. A
+  later verification of that domain by another organization frees it (and
+  drops the previous owner's sending setup). Webmail addresses
+  (`support.acme@gmail.com`) can't be public addresses: such a mailbox is
+  reached through its inbound address, and replies come from it.
+
+- A Scaleway TEM domain revoked by a disable or a transfer is assumed to be
+  registrable again under the same name; that is not confirmed until tested
+  with a real key. If TEM refused, enabling would answer 409
+  `provider_conflict` and an operator would have to clear the name.
+
+- A public address saved while its domain changes hands: the address is
+  validated against the domain's owner, then saved, and a verification by
+  another organization in between frees the addresses saved before it only.
+  The loser keeps the address until it edits it, but can't send from it (its
+  row isn't verified); the new owner gets "already used" for it. An operator
+  can clear it in the Django admin.
+
+- A webmail provider missing from `PUBLIC_EMAIL_DOMAINS` (in code; the
+  `SHOWDESK_PUBLIC_EMAIL_DOMAINS` variable its comment mentions is not read)
+  is an ordinary domain: its first user can verify it by admin email, which
+  frees the public addresses other organizations had on it. Sending from it
+  still needs its DNS (the `_showdesk` TXT), which nobody but the provider
+  has. Add such providers to the list.
+
+- Two checks of the same domain (the periodic one and a "Check now") may
+  finish out of order, the older result written last. That is rare (checks
+  take seconds, "Check now" is rate-limited) and bounded: the next check, at
+  most 15 minutes away for a pending domain, writes the current state.
 
 - The widget code task's broker message carries the widget session's id, a bearer
   token for that session, and the address. The code itself never does: the task
@@ -573,3 +603,77 @@ Without `INBOUND_EMAIL_DOMAIN` (an instance that receives no mail):
 - The conversation link, its page and its API stay available: reply mails still
   carry the link, a useful way back to the conversation on its own.
 - The reopen window still applies to widget and conversation page writes.
+
+---
+
+## 11. As built (PR 3)
+
+The implementation plan (`docs/plans/2026-11-04-sending-domains-plan.md`) made
+these choices beyond this design. Each one is pinned by a test.
+
+| # | Choice | Why |
+|---|---|---|
+| 1 | `is_sending` is a third purpose of a domain row (at least one of branding, routing, sending). `sending_status` (`""`, `pending`, `verified`, `failed`) is the provider's state. Turning sending off removes the registration and resets the status to `""`, keeping the purpose. | A domain proven only to send from it needs a row; the purpose is the admin's intent, the status the provider's. |
+| 2 | `sending_requested_at`: when the current pending cycle started. | The 72 h window of §7.3 needs a start no other date gives. |
+| 3 | A new or changed public address needs its domain verified by the mailbox's organization; an unchanged legacy one is left alone. | Reserving `support@bigcorp.com` now needs `bigcorp.com`'s proof. |
+| 4 | When an organization's ownership of a domain is verified (DNS or admin email), inside that transaction, other organizations' mailboxes lose their public address on it and their rows of it lose their sending state. A data migration freed the addresses already squatted. | A squatter or a previous owner must not keep the address, nor send from it. |
+| 5 | A registration a row lets go of (turned off, replaced, lost with the domain, deleted with the row or its organization, made but never stored) becomes a `SendingRemoval` in the transaction that clears the row's ref, kept until the provider that made it confirms. Its task retries 8 times with a growing delay; an hourly sweep queues again any not tried for 3 h. While one exists for a domain (one left to another provider aside: choice 15), enabling sending on it is a 409 `removal_pending`. `manual` has nothing to remove and records none. | A removal outlives its row and must not race the new owner's registration of the same name. Nothing stays stuck; retries show in the Django admin (read-only). |
+| 6 | `manual` asks for an SPF include and a DKIM **CNAME** `<selector>._domainkey.<domain>` → `<selector>._domainkey.<INBOUND_EMAIL_DOMAIN>`, and checks that the key found through it is the operator's. | Showdesk can't know a per-domain key it didn't create; one key the operator publishes is checkable, and any self-hosted signer can use it for every domain. |
+| 7 | A check that can't conclude (DNS timeout, provider HTTP error, operator key missing) changes nothing; a verified row stays due for the next periodic check. | A resolver hiccup must not flip every domain to the fallback and mail every admin. |
+| 8 | Transitions: pending → verified; verified → pending on records gone (a new 72 h window); a provider FAILED result (TEM `locked`, `revoked`) → failed from pending or verified; 72 h of pending → failed. Each mails the organization's active admins once (`sending_domain_status`). `failed` rows are only checked by "Check now", and set up again by enabling, which replaces the registration. | Records removed by mistake heal when restored; a failure doesn't heal, so waiting would only delay the admins. |
+| 9 | "Check now" at most once per 30 s per domain. | Each call hits DNS or the provider's API. |
+| 10 | The From is decided at send time, never stored: `sendable_address(mailbox)` for the reply, unread-reply, conversation-link and resolved mails. Reply-To and threading are unchanged. | A transfer or a regression takes effect on the next mail. |
+| 11 | TEM records are shown with fully qualified names, in the order SPF, DKIM, DMARC, never TEM's MX. SPF records (TEM's and `manual`'s) and TEM's DMARC carry `merge: true`: the wizard says to add the value to an existing record rather than publish a second. | TEM's MX is a blackhole for send-only domains, and ours receive the support mail. Two SPF or DMARC records make receivers ignore both. |
+| 12 | A public webmail domain is never verified, for any purpose, and a webmail row verified before that rule never counts as ownership: no sending, no public address, no freeing of others' addresses. | Nobody owns `gmail.com`. |
+| 13 | The organization payload carries `sending_domains_enabled` (provider not `none`); a mailbox carries `sends_from_public_address`. | The wizard is hidden without a provider; the mailbox card says which From is used now. |
+| 14 | Sending needs the organization's own `_showdesk.<domain>` TXT (`showdesk-verification=<token>`), whatever the provider, at every check: it is the first record to publish, refreshed first in the stored records at every check (a row verified by admin email gets a token on enabling, even if already set up, its ownership untouched), and a check without it is pending (a regression on a verified domain), one that can't read it inconclusive. | `manual`'s records are the same for every organization, so the real owner publishing them for itself would verify a squatter's row too; an admin's mailbox proves an address, not control of the DNS; and TEM's re-registration of a revoked name is unconfirmed. |
+| 15 | A row remembers the provider it was registered with (`sending_provider`); only one of the configured provider is sendable. Changing `SENDING_DOMAIN_PROVIDER` makes every domain set up under the previous one fall back: the next check resets it (no mail) and its admins set it up again. Until then the domain is shown as not set up. Its registration is recorded for removal by the provider that made it, unless that one has nothing to remove (`manual`), and waits until that provider is configured again (the sweep logs a warning for it every 3 h); it doesn't block setting the domain up again under the configured provider. | The published records were the previous provider's; the new one never checked them. The old registration is held at the old provider, so it can't clash with the new one. |
+| 16 | A domain is validated more strictly on create: at least two labels of 1-63 `[a-z0-9-]` with no hyphen at either end, a non-numeric last label, 200 characters at most. | Room for `<selector>._domainkey.<domain>` within DNS's 253 characters, and no IP address taken for a domain. |
+| 17 | A public webmail domain is refused on create for every purpose (branding, routing, sending), by DNS or admin email alike. | Nobody owns `gmail.com`, whatever the row is for. |
+| 18 | An admin-email verification of a domain the organization already has adds the asked purposes to the row and keeps the others, and leaves its sending state alone. | Verifying again must not drop a purpose, nor stop sending. |
+| 19 | A DNS win clears the token of the other organizations' rows of the domain (the previous owner's and any pending one): their admins regenerate a token to claim it again. | The previous owner's TXT, left published, would otherwise win the domain straight back. |
+
+What admins have:
+
+- `POST /api/v1/organization-domains/{id}/sending/`: registers the domain and
+  checks it once; 200 with the row, 400 `not_owned` (ownership not verified)
+  or `public_domain`, 409 `removal_pending`, `provider_conflict` (the
+  provider already holds the name with no removal of ours: logged as an
+  error) or `in_progress` (a setup of the domain is running), 502
+  `provider_error`.
+- `POST …/sending/check/`: 200 with the row, 400 `not_owned` or
+  `not_registered`, 429 `too_soon`. `DELETE …/sending/`: stop sending, 200
+  with the row (409 `in_progress` while a setup of the domain runs).
+- Refusals are `{detail, code}`.
+- All three are 404 while `SENDING_DOMAIN_PROVIDER=none`, and 403 for agents.
+  A domain can be created with `is_sending` (DNS or admin email) only while a
+  provider is configured; the sending state is read-only and the provider's
+  ref is never exposed.
+- Settings → Email: each mailbox card says "Replies are sent from" its public
+  or inbound address, and admins get a "Send from your domain" wizard:
+  (1) address and ownership (DNS TXT or the admin's own email), saving the
+  address once its domain is verified; (2) the records to publish, the
+  domain's own `_showdesk` TXT first ("The first record proves your
+  organization controls the domain."), with copy buttons and merge notes; (3) status, last check and error, "Check now",
+  "Stop sending from this domain". Settings → General shows the "Sending"
+  purpose and status on the domain while a provider is configured.
+- `manage.py seed` marks the demo mailbox's domain for sending, unregistered,
+  when `INBOUND_EMAIL_DOMAIN` is set.
+
+What operators set (§8):
+
+- `SENDING_DOMAIN_PROVIDER`: `none` (default, feature hidden), `manual` or
+  `scaleway_tem`. A misconfigured provider is logged, and admins only see
+  that sending from their domain is unavailable; so are a provider's own
+  error messages (admins see "The sending service answered 503."). Changing
+  it makes every domain set up under the previous one fall back, to be set
+  up again (choice 15).
+- `manual`: `SENDING_DOMAIN_SPF_INCLUDE` and `SENDING_DOMAIN_DKIM_SELECTOR`,
+  with `INBOUND_EMAIL_DOMAIN`. The operator publishes the DKIM key at
+  `<selector>._domainkey.<INBOUND_EMAIL_DOMAIN>` and has the sending service
+  relay for, and sign with that key, every customer domain.
+- `scaleway_tem`: `SCW_TEM_SECRET_KEY` (a key restricted to Transactional
+  Email), `SCW_TEM_PROJECT_ID` (the project the domains are registered in),
+  `SCW_TEM_REGION` (`fr-par`).
+- Celery beat runs `check-sending-domains` every 15 min and
+  `requeue-sending-removals` hourly, on the `default` queue.

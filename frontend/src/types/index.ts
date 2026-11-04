@@ -31,6 +31,8 @@ export interface Organization {
   /** Whether this instance receives mail, i.e. it has an inbound domain. */
   inbound_email_enabled: boolean;
   inbound_email_domain: string;
+  /** Whether a sending domain provider is configured: mail can go out from the org's domains. */
+  sending_domains_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -53,6 +55,8 @@ export interface Mailbox {
   /** Where the organization forwards its support mail. */
   inbound_address: string;
   public_address: string;
+  /** Whether replies go out from the public address now, rather than the inbound one. */
+  sends_from_public_address: boolean;
   default_team: string | null;
   is_active: boolean;
   /** Only sent to admins; empty until Gmail sends one. */
@@ -76,12 +80,26 @@ export interface InboundLogEntry {
 
 export type DomainStatus = "pending" | "verified" | "failed";
 export type DomainVerificationMethod = "admin_email" | "dns_txt";
+/** Where the sending provider stands on a domain; "" while it isn't registered. */
+export type SendingStatus = "" | "pending" | "verified" | "failed";
+
+/** A DNS record to publish so mail can be sent from a domain. */
+export interface SendingRecord {
+  type: string;
+  /** Fully qualified. */
+  name: string;
+  value: string;
+  /** A domain has at most one such record: merge into an existing one. */
+  merge?: boolean;
+}
 
 export interface OrganizationDomain {
   id: string;
   domain: string;
   is_branding: boolean;
   is_email_routing: boolean;
+  /** Mail is to be sent from it. Only set at creation; sending is then turned on and off. */
+  is_sending: boolean;
   status: DomainStatus;
   verification_method: DomainVerificationMethod | null;
   verification_token: string;
@@ -89,6 +107,12 @@ export interface OrganizationDomain {
   last_check_at: string | null;
   txt_record_name: string;
   txt_record_value: string;
+  sending_status: SendingStatus;
+  sending_dns_records: SendingRecord[];
+  /** When the current pending cycle started. */
+  sending_requested_at: string | null;
+  sending_last_checked_at: string | null;
+  sending_last_error: string;
   created_at: string;
   updated_at: string;
 }

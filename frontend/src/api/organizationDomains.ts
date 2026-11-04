@@ -4,6 +4,10 @@
  * Verification is server-managed: status / token / verified_at are read-
  * only, set by the create endpoint (admin_email auto-verify), the verify
  * action (DNS challenge), or the regenerate-token action.
+ *
+ * Sending from a verified domain is turned on and off by its own actions, which
+ * answer the row, or `{detail, code}` when they refuse. They are 404 when the
+ * server has no sending provider.
  */
 
 import { apiClient } from "./client";
@@ -17,6 +21,8 @@ export interface CreateDomainPayload {
   domain: string;
   is_branding?: boolean;
   is_email_routing?: boolean;
+  /** Only while the server has a sending provider. */
+  is_sending?: boolean;
   verification_method?: DomainVerificationMethod;
 }
 
@@ -88,6 +94,30 @@ export async function regenerateOrganizationDomainToken(
 ): Promise<OrganizationDomain> {
   const response = await apiClient.post<OrganizationDomain>(
     `/organization-domains/${id}/regenerate-token/`,
+  );
+  return response.data;
+}
+
+/** Registers the domain with the sending provider, and answers its DNS records. */
+export async function enableSending(id: string): Promise<OrganizationDomain> {
+  const response = await apiClient.post<OrganizationDomain>(
+    `/organization-domains/${id}/sending/`,
+  );
+  return response.data;
+}
+
+/** Checks the domain's sending records now; refused (429) twice in 30 s. */
+export async function checkSending(id: string): Promise<OrganizationDomain> {
+  const response = await apiClient.post<OrganizationDomain>(
+    `/organization-domains/${id}/sending/check/`,
+  );
+  return response.data;
+}
+
+/** Stops sending from the domain: replies go out from the inbound address again. */
+export async function disableSending(id: string): Promise<OrganizationDomain> {
+  const response = await apiClient.delete<OrganizationDomain>(
+    `/organization-domains/${id}/sending/`,
   );
   return response.data;
 }
