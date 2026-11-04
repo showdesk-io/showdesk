@@ -56,6 +56,29 @@ function refusalMessage(error: unknown, fallback: string): string {
   return message ?? Object.values(fields).flat()[0] ?? fallback;
 }
 
+/** Where the address typed for a mailbox waits until it is saved on it. */
+function addressKey(mailboxId: string): string {
+  return `showdesk:sending-address:${mailboxId}`;
+}
+
+/** The address typed for a mailbox and not saved yet, if any; storage may be unavailable. */
+function typedAddress(mailboxId: string): string | null {
+  try {
+    return window.sessionStorage.getItem(addressKey(mailboxId));
+  } catch {
+    return null;
+  }
+}
+
+function rememberTypedAddress(mailboxId: string, address: string | null) {
+  try {
+    if (address === null) window.sessionStorage.removeItem(addressKey(mailboxId));
+    else window.sessionStorage.setItem(addressKey(mailboxId), address);
+  } catch {
+    // Not remembered across openings, then.
+  }
+}
+
 function ago(date: string): string {
   return formatDistanceToNow(new Date(date), { addSuffix: true });
 }
@@ -71,12 +94,25 @@ export function SendingDomainWizard({
   onClose: () => void;
 }) {
   const headingId = useId();
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const { data: domains, isLoading, isError } = useOrganizationDomains();
-  const [address, setAddress] = useState(mailbox.public_address);
+  // What was typed before closing it, so that the domain being verified is still there.
+  const [address, setAddress] = useState(
+    () => typedAddress(mailbox.id) ?? mailbox.public_address,
+  );
   const domain = domainOf(address);
   const row = domains?.find((candidate) => candidate.domain === domain) ?? null;
   const addressSaved =
     address.trim().toLowerCase() === mailbox.public_address.toLowerCase();
+
+  useEffect(() => {
+    rememberTypedAddress(mailbox.id, addressSaved ? null : address);
+  }, [mailbox.id, address, addressSaved]);
+
+  // Keyboard and screen reader users land in it.
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
   const ownedRow = row?.status === "verified" && addressSaved ? row : null;
   const step = !ownedRow ? 1 : ownedRow.sending_status === "" ? 2 : 3;
 
@@ -132,7 +168,12 @@ export function SendingDomainWizard({
     >
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h4 id={headingId} className="text-sm font-semibold text-gray-900">
+          <h4
+            id={headingId}
+            ref={headingRef}
+            tabIndex={-1}
+            className="text-sm font-semibold text-gray-900 outline-none"
+          >
             Send from your domain
           </h4>
           <p className="mt-1 text-sm text-gray-500">
@@ -470,9 +511,9 @@ function RecordField({
   copyLabel: string;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <dt className="w-14 shrink-0 text-xs font-medium uppercase text-gray-500">{label}</dt>
-      <dd className="flex min-w-0 flex-1 items-center gap-2">
+    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+      <dt className="shrink-0 text-xs font-medium uppercase text-gray-500 sm:w-14">{label}</dt>
+      <dd className="flex min-w-0 flex-1 items-start gap-2 sm:items-center">
         <code className="min-w-0 flex-1 break-all rounded-sm border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-xs text-gray-800">
           {value}
         </code>
@@ -549,41 +590,63 @@ function mergeNote(record: SendingRecord): string {
   return `Already have ${article} ${record.type} record at ${record.name}? Merge this into it rather than adding a second record.`;
 }
 
+/**
+ * A table from `sm` up; below, each record is a block (type, name, value) so that long
+ * names and values keep the full width. One markup for both: the roles keep it a table.
+ */
 function RecordsTable({ records }: { records: SendingRecord[] }) {
+  const headerClass = "px-3 py-2 text-left text-xs font-medium uppercase text-gray-500";
+  const mobileLabelClass = "text-xs font-medium uppercase text-gray-500 sm:hidden";
   return (
-    <div className="overflow-x-auto rounded-lg border border-gray-200">
-      <table className="min-w-full divide-y divide-gray-200 text-sm">
-        <thead className="bg-gray-50">
-          <tr>
-            <th scope="col" className="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">
+    <div className="rounded-lg border border-gray-200 sm:overflow-x-auto">
+      <table role="table" className="block w-full text-sm sm:table sm:min-w-full">
+        <thead role="rowgroup" className="hidden bg-gray-50 sm:table-header-group">
+          <tr role="row">
+            <th role="columnheader" scope="col" className={headerClass}>
               Type
             </th>
-            <th scope="col" className="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">
+            <th role="columnheader" scope="col" className={headerClass}>
               Name
             </th>
-            <th scope="col" className="px-3 py-2 text-left text-xs font-medium uppercase text-gray-500">
+            <th role="columnheader" scope="col" className={headerClass}>
               Value
             </th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
+        <tbody
+          role="rowgroup"
+          className="block divide-y divide-gray-100 sm:table-row-group sm:border-t sm:border-gray-200"
+        >
           {records.map((record) => (
-            <tr key={`${record.type} ${record.name}`} className="align-top">
-              <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-gray-800">
+            <tr
+              key={`${record.type} ${record.name}`}
+              role="row"
+              className="block space-y-2 px-3 py-3 align-top sm:table-row sm:space-y-0 sm:p-0"
+            >
+              <td
+                role="cell"
+                className="block font-mono text-xs font-semibold text-gray-800 sm:table-cell sm:whitespace-nowrap sm:px-3 sm:py-2 sm:font-normal"
+              >
                 {record.type}
               </td>
-              <td className="px-3 py-2">
+              <td role="cell" className="block sm:table-cell sm:px-3 sm:py-2">
+                <span className={mobileLabelClass}>Name</span>
                 <div className="flex items-start gap-2">
-                  <code className="break-all font-mono text-xs text-gray-800">{record.name}</code>
+                  <code className="min-w-0 flex-1 break-all font-mono text-xs text-gray-800">
+                    {record.name}
+                  </code>
                   <CopyButton
                     value={record.name}
                     label={`Copy the name of the ${record.type} record ${record.name}`}
                   />
                 </div>
               </td>
-              <td className="px-3 py-2">
+              <td role="cell" className="block sm:table-cell sm:px-3 sm:py-2">
+                <span className={mobileLabelClass}>Value</span>
                 <div className="flex items-start gap-2">
-                  <code className="break-all font-mono text-xs text-gray-800">{record.value}</code>
+                  <code className="min-w-0 flex-1 break-all font-mono text-xs text-gray-800">
+                    {record.value}
+                  </code>
                   <CopyButton
                     value={record.value}
                     label={`Copy the value of the ${record.type} record ${record.name}`}
@@ -638,6 +701,9 @@ function StatusStep({ row, mailbox }: { row: OrganizationDomain; mailbox: Mailbo
   const enable = useEnableSending();
   const disable = useDisableSending();
   const [error, setError] = useState<string | null>(null);
+  // What the last check found, while the status is still the one it found.
+  const [checked, setChecked] = useState<{ status: SendingStatus; note: string } | null>(null);
+  const checkedNote = checked?.status === row.sending_status ? checked.note : null;
   const isPending = check.isPending || enable.isPending || disable.isPending;
 
   const failed = (fallback: string) => (err: unknown) => {
@@ -646,7 +712,26 @@ function StatusStep({ row, mailbox }: { row: OrganizationDomain; mailbox: Mailbo
 
   const checkNow = () => {
     setError(null);
-    check.mutate(row.id, { onError: failed("The check failed.") });
+    setChecked(null);
+    const before = row.sending_status;
+    check.mutate(row.id, {
+      onSuccess: (checkedRow) => {
+        const status = checkedRow.sending_status;
+        // A change shows by itself.
+        if (status !== before) return;
+        if (status === "pending") {
+          setChecked({
+            status,
+            note: checkedRow.sending_last_error
+              ? "Checked: still pending."
+              : "Checked: still pending. We couldn't reach the DNS or the sending service this time; we'll keep trying.",
+          });
+        } else if (status === "verified") {
+          setChecked({ status, note: "Checked: still verified." });
+        }
+      },
+      onError: failed("The check failed."),
+    });
   };
 
   const setUpAgain = () => {
@@ -671,8 +756,9 @@ function StatusStep({ row, mailbox }: { row: OrganizationDomain; mailbox: Mailbo
 
   return (
     <>
-      <p role="status" className="flex items-center gap-2 text-sm text-gray-700">
+      <p role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-700">
         Sending from {row.domain}: <SendingStatusBadge status={row.sending_status} />
+        {checkedNote && <span className="w-full text-gray-600">{checkedNote}</span>}
       </p>
       {row.sending_status === "pending" && (
         <p className="text-sm text-gray-700">

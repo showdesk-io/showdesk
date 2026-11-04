@@ -4,7 +4,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AxiosError, type AxiosResponse } from "axios";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -93,6 +93,10 @@ async function renderWizard(mailbox: Mailbox | "listed" = MAILBOX) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  return renderWizardWith(queryClient, mailbox);
+}
+
+async function renderWizardWith(queryClient: QueryClient, mailbox: Mailbox | "listed") {
   render(
     <QueryClientProvider client={queryClient}>
       {mailbox === "listed" ? (
@@ -114,6 +118,7 @@ function currentStep(): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
   useAuthStore.setState({ isAuthenticated: true });
   domains = [];
   mailboxes = [MAILBOX];
@@ -142,6 +147,40 @@ describe("SendingDomainWizard", () => {
       is_email_routing: false,
       verification_method: "dns_txt",
     });
+  });
+
+  it("lands keyboard users in the wizard when it opens", async () => {
+    await renderWizard();
+
+    expect(screen.getByRole("heading", { name: "Send from your domain" })).toHaveFocus();
+  });
+
+  it("keeps the address typed until it is saved, when opened again", async () => {
+    domains = [domain({ domain: "acme.org", id: "d2", status: "pending", verified_at: null })];
+    const user = await renderWizard();
+    const field = screen.getByLabelText("Address to send from");
+    await user.clear(field);
+    await user.type(field, "help@acme.org");
+    cleanup();
+
+    // Opened again: the typed address, and so the pending domain's TXT record.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await renderWizardWith(queryClient, "listed");
+    expect(screen.getByLabelText("Address to send from")).toHaveValue("help@acme.org");
+    expect(await screen.findByText("_showdesk-verify.acme.com")).toBeInTheDocument();
+    cleanup();
+
+    // Once the mailbox has it, it is the mailbox's address that opens.
+    sessionStorage.setItem("showdesk:sending-address:m1", "help@acme.org");
+    mailboxes = [{ ...MAILBOX, public_address: "help@acme.org" }];
+    await renderWizardWith(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+      "listed",
+    );
+    expect(screen.getByLabelText("Address to send from")).toHaveValue("help@acme.org");
+    await waitFor(() =>
+      expect(sessionStorage.getItem("showdesk:sending-address:m1")).toBeNull(),
+    );
   });
 
   it("doesn't offer email verification to an admin whose address is elsewhere", async () => {
@@ -313,6 +352,51 @@ describe("SendingDomainWizard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "acme.com's previous sending setup is still being removed.",
     );
+  });
+
+  it.each([
+    [
+      "pending, without an error",
+      domain({ sending_status: "pending", sending_dns_records: RECORDS }),
+      "Checked: still pending. We couldn't reach the DNS or the sending service this time; we'll keep trying.",
+    ],
+    [
+      "pending, with an error",
+      domain({
+        sending_status: "pending",
+        sending_dns_records: RECORDS,
+        sending_last_error: "DKIM record not found.",
+      }),
+      "Checked: still pending.",
+    ],
+    [
+      "verified",
+      domain({ sending_status: "verified", sending_dns_records: RECORDS }),
+      "Checked: still verified.",
+    ],
+  ])("says what a check found when it changed nothing: %s", async (_, row, note) => {
+    domains = [row];
+    const user = await renderWizard();
+    client.post.mockResolvedValueOnce({ data: row });
+
+    await user.click(screen.getByRole("button", { name: "Check now" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(note));
+    if (note === "Checked: still pending.") {
+      expect(screen.getByRole("status")).not.toHaveTextContent("couldn't reach");
+    }
+  });
+
+  it("says nothing more when a check changed the status", async () => {
+    domains = [domain({ sending_status: "pending", sending_dns_records: RECORDS })];
+    const user = await renderWizard();
+    domains = [domain({ sending_status: "verified", sending_dns_records: RECORDS })];
+    client.post.mockResolvedValueOnce({ data: domains[0] });
+
+    await user.click(screen.getByRole("button", { name: "Check now" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Verified"));
+    expect(screen.getByRole("status")).not.toHaveTextContent("Checked");
   });
 
   it("shows why sending failed, and sets it up again", async () => {

@@ -200,7 +200,7 @@ function MailboxCard({
         !mailbox.is_active && "bg-gray-50",
       )}
     >
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="flex items-baseline gap-3">
           <h3 className="text-base font-semibold text-gray-900">{mailbox.name}</h3>
           <span
@@ -213,7 +213,7 @@ function MailboxCard({
           </span>
         </div>
         {isAdmin && (
-          <div className="flex shrink-0 gap-1">
+          <div className="flex min-w-0 flex-wrap justify-end gap-1">
             <button type="button" onClick={onEdit} className={SMALL_BUTTON_CLASS}>
               Edit
             </button>
