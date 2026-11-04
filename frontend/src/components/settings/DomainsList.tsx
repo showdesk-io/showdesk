@@ -12,7 +12,7 @@
  */
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import toast from "react-hot-toast";
 import { clsx } from "clsx";
@@ -24,6 +24,7 @@ import {
   updateOrganizationDomain,
   verifyOrganizationDomain,
 } from "@/api/organizationDomains";
+import { fetchOrganization } from "@/api/users";
 import type {
   DomainStatus,
   DomainVerificationMethod,
@@ -40,6 +41,12 @@ interface DomainsListProps {
 export function DomainsList({ isAdmin }: DomainsListProps) {
   const queryClient = useQueryClient();
   const { data: domains = [], isLoading } = useOrganizationDomains();
+  // The app's organization query: sending is only shown while the server can send.
+  const { data: organization } = useQuery({
+    queryKey: ["organization"],
+    queryFn: fetchOrganization,
+  });
+  const sendingEnabled = organization?.sending_domains_enabled === true;
   const [showAddModal, setShowAddModal] = useState(false);
 
   // A domain removed or verified can change which address a mailbox's replies go out from.
@@ -85,6 +92,7 @@ export function DomainsList({ isAdmin }: DomainsListProps) {
               key={d.id}
               domain={d}
               isAdmin={isAdmin}
+              sendingEnabled={sendingEnabled}
               onChange={invalidate}
             />
           ))}
@@ -109,10 +117,12 @@ export function DomainsList({ isAdmin }: DomainsListProps) {
 function DomainRow({
   domain,
   isAdmin,
+  sendingEnabled,
   onChange,
 }: {
   domain: OrganizationDomain;
   isAdmin: boolean;
+  sendingEnabled: boolean;
   onChange: () => void;
 }) {
   const [showDns, setShowDns] = useState(false);
@@ -171,7 +181,8 @@ function DomainRow({
         {domain.verification_method === "admin_email" && (
           <PurposeChip label="Admin email" subtle />
         )}
-        {domain.is_sending &&
+        {sendingEnabled &&
+          domain.is_sending &&
           (domain.sending_status === "" ? (
             <PurposeChip label="Sending" />
           ) : (

@@ -522,6 +522,9 @@ function RecordsStep({ row }: { row: OrganizationDomain }) {
       <p className="text-sm text-gray-700">
         Publish these records where {row.domain}'s DNS is managed.
       </p>
+      <p className="text-sm text-gray-700">
+        The first record proves your organization controls the domain.
+      </p>
       {row.sending_dns_records.length > 0 ? (
         <RecordsTable records={row.sending_dns_records} />
       ) : (

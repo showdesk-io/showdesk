@@ -37,6 +37,8 @@ const MAILBOX: Mailbox = {
 };
 
 const RECORDS = [
+  // The organization's own proof, first whatever the provider.
+  { type: "TXT", name: "_showdesk.acme.com", value: "showdesk-verification=tok" },
   { type: "TXT", name: "acme.com", value: "v=spf1 include:_spf.example.net ~all", merge: true },
   {
     type: "CNAME",
@@ -274,6 +276,15 @@ describe("SendingDomainWizard", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getAllByText(/^Already have/)).toHaveLength(1);
+    expect(
+      screen.getByText("The first record proves your organization controls the domain."),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Copy the value of the TXT record _showdesk.acme.com",
+      }),
+    );
+    expect(writeText).toHaveBeenCalledWith("showdesk-verification=tok");
     await user.click(
       screen.getByRole("button", {
         name: "Copy the value of the CNAME record sd._domainkey.acme.com",
