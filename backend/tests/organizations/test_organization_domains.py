@@ -307,17 +307,16 @@ class TestSendingPurposeAPI:
         assert response.data["is_sending"] is True
         assert response.data["is_email_routing"] is False
 
-    def test_public_webmail_can_never_be_a_sending_domain(
-        self, admin_client, settings
-    ) -> None:
-        settings.SENDING_DOMAIN_PROVIDER = "manual"
+    def test_public_webmail_can_never_be_claimed(self, admin_client) -> None:
+        """Whatever the purpose: a webmail domain is everybody's."""
         response = admin_client.post(
             "/api/v1/organization-domains/",
-            {"domain": "gmail.com", "is_sending": True},
+            {"domain": "gmail.com", "is_branding": True},
             format="json",
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "is_sending" in response.data
+        assert "domain" in response.data
+        assert not OrganizationDomain.objects.filter(domain="gmail.com").exists()
 
     def test_sending_state_is_read_only(self, admin_client, organization) -> None:
         """Sending is set up through its own endpoints, never by a PATCH."""
@@ -489,7 +488,9 @@ class TestAdminEmailAutoVerify:
         assert row.sending_status == OrganizationDomain.SendingStatus.VERIFIED
         assert row.sending_provider_ref == "tem-123"
 
-    def test_admin_email_refuses_public_webmail_for_sending(self, organization) -> None:
+    def test_admin_email_refuses_public_webmail_for_any_purpose(
+        self, organization
+    ) -> None:
         AdminFactory(
             organization=organization, email="founder@gmail.com", is_verified=True
         )
@@ -497,9 +498,10 @@ class TestAdminEmailAutoVerify:
             services.try_admin_email_autoverify(
                 organization=organization,
                 domain="gmail.com",
+                is_branding=True,
                 is_email_routing=False,
-                is_sending=True,
             )
+        assert not OrganizationDomain.objects.filter(domain="gmail.com").exists()
 
     def test_admin_email_refused_for_public_webmail(self, organization) -> None:
         admin = AdminFactory(
@@ -519,7 +521,7 @@ class TestAdminEmailAutoVerify:
             format="json",
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data["code"] == "cannot_autoverify"
+        assert "domain" in response.data
 
 
 @pytest.mark.django_db

@@ -85,6 +85,17 @@ def test_enable_refusals(admin_client, organization):
     assert response.data["code"] == "removal_pending"
 
 
+def test_a_public_webmail_domain_is_refused(admin_client, organization):
+    """A webmail row verified before the rule: never registered for sending."""
+    row = owned(organization)
+    OrganizationDomain.objects.filter(pk=row.pk).update(domain="gmail.com")
+
+    response = admin_client.post(url(row))
+
+    assert response.status_code == 400
+    assert response.data["code"] == "public_domain"
+
+
 def test_a_misconfigured_provider_is_a_502(admin_client, organization, settings):
     settings.SENDING_DOMAIN_SPF_INCLUDE = ""
     row = owned(organization)

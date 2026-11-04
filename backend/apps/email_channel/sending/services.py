@@ -18,7 +18,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
 
-from apps.organizations.models import OrganizationDomain
+from apps.organizations.models import OrganizationDomain, is_public_email_domain
 
 from .providers import (
     CheckStatus,
@@ -51,6 +51,11 @@ class SendingError(Exception):
 
 class NotOwnedError(SendingError):
     code = "not_owned"
+    http_status = 400
+
+
+class PublicDomainError(SendingError):
+    code = "public_domain"
     http_status = 400
 
 
@@ -158,6 +163,8 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
     _lock_domain(row.domain)
     try:
         row.refresh_from_db()
+        if is_public_email_domain(row.domain):
+            raise PublicDomainError("Mail can't be sent from a public webmail domain.")
         if row.status != Ownership.VERIFIED:
             raise NotOwnedError(f"Verify {row.domain} for your organization first.")
         if row.sending_status in (Sending.PENDING, Sending.VERIFIED):
@@ -359,6 +366,8 @@ def on_ownership_verified(row: OrganizationDomain) -> None:
     """
     from apps.email_channel.models import Mailbox
 
+    if is_public_email_domain(row.domain):
+        return  # Nobody owns it: nothing to take from anybody.
     with transaction.atomic():
         freed = (
             Mailbox.objects.filter(public_address__endswith=f"@{row.domain}")

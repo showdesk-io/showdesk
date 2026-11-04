@@ -88,19 +88,18 @@ def try_admin_email_autoverify(
 ) -> OrganizationDomain:
     """Create or upgrade a row to verified via admin_email.
 
-    Refuses for public webmail providers, when no eligible admin exists,
+    Refuses for public webmail providers (whatever the purpose: nobody owns
+    them), when no eligible admin exists,
     or when another org has already claimed the domain. The caller is
     expected to surface those refusals to the user with the structured
     `code` from the raised exception.
     """
     domain = domain.lower().strip()
 
-    if is_email_routing and is_public_email_domain(domain):
+    if is_public_email_domain(domain):
         raise CannotAutoVerifyError(
-            "Public webmail providers cannot be used for email routing."
+            "A public webmail domain can't be verified for an organization."
         )
-    if is_sending and is_public_email_domain(domain):
-        raise CannotAutoVerifyError("Mail can't be sent from a public webmail domain.")
 
     if not has_eligible_admin(organization, domain):
         raise CannotAutoVerifyError(

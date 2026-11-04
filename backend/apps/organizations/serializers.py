@@ -386,10 +386,10 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"is_branding": "Choose at least one purpose."}
             )
-        domain = attrs.get("domain", getattr(self.instance, "domain", ""))
-        if is_sending and is_public_email_domain(domain):
+        # Nobody owns a webmail domain: no purpose may claim one.
+        if self.instance is None and is_public_email_domain(attrs.get("domain", "")):
             raise serializers.ValidationError(
-                {"is_sending": "Mail can't be sent from a public webmail domain."}
+                {"domain": "A public webmail domain can't be verified."}
             )
         return attrs
 
