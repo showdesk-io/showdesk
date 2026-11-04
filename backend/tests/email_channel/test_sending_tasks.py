@@ -81,6 +81,13 @@ def test_a_pending_domain_once_verified_mails_once_and_sends_from_it(
 ) -> None:
     UserFactory(organization=organization, role="agent", email="agent@acme.com")
     row = sending_row(organization, Sending.PENDING)
+    sending_row(  # Checked an hour ago: not due.
+        organization,
+        Sending.VERIFIED,
+        domain="acme.org",
+        ref="ref-acme.org",
+        sending_last_checked_at=timezone.now() - timedelta(hours=1),
+    )
     assert sendable_address(mailbox) is None
 
     assert run_task(django_capture_on_commit_callbacks) == 1
@@ -92,7 +99,8 @@ def test_a_pending_domain_once_verified_mails_once_and_sends_from_it(
     assert sent.subject == "You now send from acme.com"
 
     run_task(django_capture_on_commit_callbacks)
-    assert len(mail.outbox) == 1  # Checked again tomorrow, not now.
+    assert provider.checked == ["ref-acme.com"]  # Checked again tomorrow.
+    assert len(mail.outbox) == 1
 
 
 def test_a_verified_domain_whose_records_went_is_pending_again(

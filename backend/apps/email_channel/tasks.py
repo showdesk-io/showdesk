@@ -291,10 +291,12 @@ def check_sending_domains() -> int:
         .exclude(sending_provider_ref="")
         .filter(
             Q(sending_status=Sending.PENDING)
-            | Q(sending_status=Sending.VERIFIED)
-            & (
-                Q(sending_last_checked_at__isnull=True)
-                | Q(sending_last_checked_at__lt=recheck_before)
+            | (
+                Q(sending_status=Sending.VERIFIED)
+                & (
+                    Q(sending_last_checked_at__isnull=True)
+                    | Q(sending_last_checked_at__lt=recheck_before)
+                )
             )
         )
     )

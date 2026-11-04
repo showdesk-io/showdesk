@@ -266,7 +266,12 @@ class TestCheck:
     def test_a_check_that_cannot_conclude_changes_nothing(
         self, provider, organization
     ) -> None:
-        row = registered_row(organization, sending_status=Sending.VERIFIED)
+        checked = timezone.now() - timedelta(hours=25)
+        row = registered_row(
+            organization,
+            sending_status=Sending.VERIFIED,
+            sending_last_checked_at=checked,
+        )
         provider.fail = {"check"}
 
         assert services.check_sending(row) == CheckStatus.UNKNOWN
@@ -274,7 +279,25 @@ class TestCheck:
         row.refresh_from_db()
         assert row.sending_status == Sending.VERIFIED
         assert row.sending_last_error == ""
-        assert row.sending_last_checked_at is not None
+        # Still due: the next periodic check tries again.
+        assert row.sending_last_checked_at == checked
+
+    def test_check_now_on_a_failed_domain_still_pending_keeps_its_error(
+        self, provider, organization
+    ) -> None:
+        row = registered_row(
+            organization,
+            sending_status=Sending.FAILED,
+            sending_last_error="Not verified within 72 hours. SPF missing.",
+        )
+        cache.delete(services.check_lock_key(row))
+        provider.result = DomainCheck(CheckStatus.PENDING, "DKIM missing.")
+
+        services.check_now(row)
+
+        row.refresh_from_db()
+        assert row.sending_status == Sending.FAILED
+        assert row.sending_last_error == "Not verified within 72 hours. SPF missing."
 
     def test_newer_records_replace_the_stored_ones(
         self, provider, organization

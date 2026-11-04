@@ -212,6 +212,22 @@ SAMPLES: dict[str, Callable[[], tuple[str, dict[str, Any]]]] = {
             "reason": "error",
         },
     ),
+    # One state of three ("verified", "regressed", "failed"): the one with
+    # the most to show.
+    "sending_domain_status": lambda: (
+        "Sending from acme.com failed",
+        {
+            "state": "failed",
+            "domain": "acme.com",
+            "org_name": "Acme",
+            "error": (
+                "Not verified within 72 hours. SPF: add include:spf.example.net "
+                "to the SPF record of acme.com."
+            ),
+            "pending_hours": 72,
+            "settings_url": "https://app.showdesk.io/settings",
+        },
+    ),
     "domain_ownership_transferred": lambda: (
         "acme.com no longer belongs to your organization",
         {

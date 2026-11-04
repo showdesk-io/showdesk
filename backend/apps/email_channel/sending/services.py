@@ -334,7 +334,8 @@ def check_sending(
 
     Only an owned and registered domain is checked. A check that can't
     conclude (UNKNOWN, or a provider error) changes nothing but
-    `sending_last_checked_at`.
+    `sending_last_checked_at`, and not even that on a verified row: it stays
+    due, so the next periodic check tries again.
     """
     _require_checkable(row)
     ref = row.sending_provider_ref
@@ -436,6 +437,11 @@ def apply_check(
     `row` is updated in place. Transitions go through `next_sending_status`;
     a regression starts a new pending cycle, and each transition mails the
     admins once committed.
+
+    Two checks of the same ref (the beat's and a "Check now") may finish out
+    of order, the older result written last. That is rare (checks are
+    seconds apart at most, "Check now" is rate-limited) and bounded: the next
+    check, at most a beat away for a pending row, writes the current state.
     """
     now = timezone.now()
     with transaction.atomic():
@@ -450,8 +456,12 @@ def apply_check(
         ):
             return None
         previous = locked.sending_status
-        locked.sending_last_checked_at = now
-        fields = ["sending_last_checked_at"]
+        fields = []
+        if result.status != CheckStatus.UNKNOWN or previous != Sending.VERIFIED:
+            # An inconclusive check of a verified row leaves it due, so that
+            # the next periodic check tries again rather than in a day.
+            locked.sending_last_checked_at = now
+            fields.append("sending_last_checked_at")
         if result.status != CheckStatus.UNKNOWN:
             expired = _pending_expired(locked, now)
             locked.sending_status = next_sending_status(
@@ -463,18 +473,24 @@ def apply_check(
             ):
                 locked.sending_requested_at = now
             error = result.error
-            if result.status == CheckStatus.PENDING and (
-                locked.sending_status == Sending.FAILED
-            ):
-                error = (
-                    f"Not verified within {SENDING_DOMAIN_PENDING_HOURS} hours. {error}"
-                ).strip()
+            if result.status == CheckStatus.PENDING:
+                if previous == Sending.PENDING and locked.sending_status == (
+                    Sending.FAILED
+                ):
+                    error = (
+                        f"Not verified within {SENDING_DOMAIN_PENDING_HOURS} "
+                        f"hours. {error}"
+                    ).strip()
+                elif previous == Sending.FAILED:
+                    # Still failed: the error that failed it stays.
+                    error = locked.sending_last_error
             locked.sending_last_error = error[:MAX_ERROR_LENGTH]
             fields += ["sending_status", "sending_requested_at", "sending_last_error"]
             if result.records:
                 locked.sending_dns_records = result.records
                 fields.append("sending_dns_records")
-        locked.save(update_fields=[*fields, "updated_at"])
+        if fields:
+            locked.save(update_fields=[*fields, "updated_at"])
         if previous != locked.sending_status:
             logger.info(
                 "Sending domain %s: %s -> %s",
