@@ -12,7 +12,7 @@
  */
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import toast from "react-hot-toast";
 import { clsx } from "clsx";
@@ -20,7 +20,6 @@ import { formatDistanceToNow } from "date-fns";
 import {
   createOrganizationDomain,
   deleteOrganizationDomain,
-  fetchOrganizationDomains,
   regenerateOrganizationDomainToken,
   updateOrganizationDomain,
   verifyOrganizationDomain,
@@ -30,6 +29,8 @@ import type {
   DomainVerificationMethod,
   OrganizationDomain,
 } from "@/types";
+import { ORGANIZATION_DOMAINS, useOrganizationDomains } from "@/hooks/useOrganizationDomains";
+import { SendingStatusBadge } from "./SendingDomainWizard";
 
 interface DomainsListProps {
   isAdmin: boolean;
@@ -37,14 +38,11 @@ interface DomainsListProps {
 
 export function DomainsList({ isAdmin }: DomainsListProps) {
   const queryClient = useQueryClient();
-  const { data: domains = [], isLoading } = useQuery({
-    queryKey: ["organization-domains"],
-    queryFn: fetchOrganizationDomains,
-  });
+  const { data: domains = [], isLoading } = useOrganizationDomains();
   const [showAddModal, setShowAddModal] = useState(false);
 
   const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ["organization-domains"] });
+    queryClient.invalidateQueries({ queryKey: ORGANIZATION_DOMAINS });
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-6">
@@ -169,6 +167,12 @@ function DomainRow({
         {domain.verification_method === "admin_email" && (
           <PurposeChip label="Admin email" subtle />
         )}
+        {domain.is_sending &&
+          (domain.sending_status === "" ? (
+            <PurposeChip label="Sending" />
+          ) : (
+            <SendingStatusBadge status={domain.sending_status} prefix="Sending: " />
+          ))}
         {isAdmin ? (
           <div className="ml-auto flex items-center gap-2">
             {isPendingDns && (

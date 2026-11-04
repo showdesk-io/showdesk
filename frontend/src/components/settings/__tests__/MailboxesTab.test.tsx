@@ -59,6 +59,7 @@ function refusal(data: unknown, status = 400): AxiosError {
 }
 
 let mailboxes: Mailbox[];
+let sendingDomainsEnabled: boolean;
 let log: InboundLogEntry[];
 type LogPage = { next: string | null; previous: string | null; results: InboundLogEntry[] };
 /** Pages of the log by number, when a test pages it; a missing one is a 404. */
@@ -80,10 +81,16 @@ async function renderTab({ isAdmin = true }: { isAdmin?: boolean } = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   mailboxes = [mailbox()];
+  sendingDomainsEnabled = false;
   log = [];
   pages = null;
   client.get.mockImplementation((url: string, config?: unknown) => {
     if (url === "/mailboxes/") return Promise.resolve({ data: mailboxes });
+    if (url === "/organizations/")
+      return Promise.resolve({
+        data: { results: [{ id: "o1", sending_domains_enabled: sendingDomainsEnabled }] },
+      });
+    if (url === "/organization-domains/") return Promise.resolve({ data: { results: [] } });
     if (url === "/teams/")
       return Promise.resolve({ data: { results: [{ id: "team1", name: "Billing" }] } });
     if (url.endsWith("/inbound/")) {
@@ -130,7 +137,9 @@ describe("MailboxesTab", () => {
     // userEvent's own clipboard, set up with it.
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
 
-    expect(screen.getByText("acme-x7k2m9abcd@in.example.com")).toBeInTheDocument();
+    expect(
+      screen.getByText("acme-x7k2m9abcd@in.example.com", { selector: "code" }),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Copy inbound address" }));
     expect(writeText).toHaveBeenCalledWith(
       "acme-x7k2m9abcd@in.example.com",
@@ -272,13 +281,48 @@ describe("MailboxesTab", () => {
     await screen.findByText("Out of office", { selector: "td" });
   });
 
+  it("says which address replies are sent from", async () => {
+    mailboxes = [
+      mailbox(),
+      mailbox({ id: "m2", name: "Billing", public_address: "billing@acme.com", sends_from_public_address: true }),
+    ];
+    await renderTab();
+
+    expect(screen.getByRole("region", { name: "Support" })).toHaveTextContent(
+      "Replies are sent from acme-x7k2m9abcd@in.example.com",
+    );
+    expect(screen.getByRole("region", { name: "Billing" })).toHaveTextContent(
+      "Replies are sent from billing@acme.com",
+    );
+  });
+
+  it("opens the send-from-your-domain wizard when the server can send from it", async () => {
+    sendingDomainsEnabled = true;
+    const user = await renderTab();
+
+    await user.click(await screen.findByRole("button", { name: "Send from your domain" }));
+
+    expect(
+      await screen.findByRole("region", { name: "Send from your domain" }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the wizard without a sending provider", async () => {
+    await renderTab();
+    await waitFor(() => expect(client.get).toHaveBeenCalledWith("/organizations/"));
+    expect(screen.queryByRole("button", { name: "Send from your domain" })).not.toBeInTheDocument();
+  });
+
   it("is read-only for agents", async () => {
+    sendingDomainsEnabled = true;
     log = [logEntry({ status: "failed" })];
     const user = await renderTab({ isAdmin: false });
 
     expect(screen.queryByRole("button", { name: /New mailbox/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "New inbound address" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Deactivate" })).not.toBeInTheDocument();
+    await waitFor(() => expect(client.get).toHaveBeenCalledWith("/organizations/"));
+    expect(screen.queryByRole("button", { name: "Send from your domain" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Show received mail log" }));
     await screen.findByText("Out of office", { selector: "td" });
     expect(screen.queryByRole("button", { name: "Replay" })).not.toBeInTheDocument();

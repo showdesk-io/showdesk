@@ -10,7 +10,7 @@ import { clsx } from "clsx";
 import { formatDistanceToNow } from "date-fns";
 import toast from "react-hot-toast";
 import type { MailboxUpdate } from "@/api/mailboxes";
-import { fetchTeams } from "@/api/users";
+import { fetchOrganization, fetchTeams } from "@/api/users";
 import { FormField } from "@/components/contacts/FormModal";
 import {
   fieldErrors,
@@ -29,6 +29,7 @@ import {
 } from "@/hooks/useMailboxes";
 import type { ForwardingConfirmation, Mailbox, Team } from "@/types";
 import { safeConfirmationUrl } from "./forwarding";
+import { SendingDomainWizard } from "./SendingDomainWizard";
 
 const FORM_FIELDS = ["name", "public_address", "default_team"];
 const CONTROL_CLASS =
@@ -67,6 +68,12 @@ type FormTarget = { mode: "create" } | { mode: "edit"; mailbox: Mailbox } | null
 export function MailboxesTab({ isAdmin }: { isAdmin: boolean }) {
   const { data: mailboxes, isLoading, isError } = useMailboxes();
   const { data: teams = [] } = useQuery({ queryKey: ["teams"], queryFn: fetchTeams });
+  // The app's organization query: whether mail can go out from the org's own domains.
+  const { data: organization } = useQuery({
+    queryKey: ["organization"],
+    queryFn: fetchOrganization,
+  });
+  const canSendFromDomain = isAdmin && organization?.sending_domains_enabled === true;
   const [formTarget, setFormTarget] = useState<FormTarget>(null);
 
   if (isLoading) {
@@ -125,6 +132,7 @@ export function MailboxesTab({ isAdmin }: { isAdmin: boolean }) {
             mailbox={mailbox}
             teamName={teams.find((team) => team.id === mailbox.default_team)?.name ?? ""}
             isAdmin={isAdmin}
+            canSendFromDomain={canSendFromDomain}
             onEdit={() => setFormTarget({ mode: "edit", mailbox })}
           />
         ))
@@ -139,16 +147,20 @@ function MailboxCard({
   mailbox,
   teamName,
   isAdmin,
+  canSendFromDomain,
   onEdit,
 }: {
   mailbox: Mailbox;
   teamName: string;
   isAdmin: boolean;
+  /** An admin, on a server with a sending provider. */
+  canSendFromDomain: boolean;
   onEdit: () => void;
 }) {
   const update = useUpdateMailbox();
   const regenerate = useRegenerateMailboxAddress();
   const [showLog, setShowLog] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
   const confirmation = mailbox.forwarding_confirmation;
 
   const copyAddress = () => {
@@ -219,6 +231,16 @@ function MailboxCard({
             >
               New inbound address
             </button>
+            {canSendFromDomain && (
+              <button
+                type="button"
+                onClick={() => setShowWizard(!showWizard)}
+                aria-expanded={showWizard}
+                className={SMALL_BUTTON_CLASS}
+              >
+                Send from your domain
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -249,6 +271,17 @@ function MailboxCard({
           <dd className="mt-1 text-gray-800">{teamName || "None"}</dd>
         </div>
       </dl>
+
+      <p className="mt-4 text-sm text-gray-600">
+        Replies are sent from{" "}
+        <span className="font-medium text-gray-800">
+          {mailbox.sends_from_public_address ? mailbox.public_address : mailbox.inbound_address}
+        </span>
+      </p>
+
+      {canSendFromDomain && showWizard && (
+        <SendingDomainWizard mailbox={mailbox} onClose={() => setShowWizard(false)} />
+      )}
 
       {(confirmation?.code || confirmation?.url) && (
         <GmailConfirmation confirmation={confirmation} />
