@@ -18,6 +18,7 @@ from .models import (
     OrgJoinRequest,
     Team,
     User,
+    is_public_email_domain,
 )
 
 
@@ -252,7 +253,22 @@ class PlatformOrganizationCreateSerializer(serializers.ModelSerializer):
         ]
 
 
-_DOMAIN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,253}[a-z0-9])?\.[a-z]{2,}$")
+_DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+# Leaves room for the longest name built on a domain, the DKIM record's
+# `<selector>._domainkey.<domain>`, within DNS's 253 characters.
+_DOMAIN_MAX_LENGTH = 200
+
+
+def _is_valid_domain(name: str) -> bool:
+    """At least two labels of 1-63 `[a-z0-9-]`, no hyphen at either end."""
+    labels = name.split(".")
+    return (
+        len(name) <= _DOMAIN_MAX_LENGTH
+        and len(labels) >= 2
+        and all(_DOMAIN_LABEL_RE.match(label) for label in labels)
+        # An all-numeric last label is an IP address, not a domain.
+        and not labels[-1].isdigit()
+    )
 
 
 class OrganizationDomainSerializer(serializers.ModelSerializer):
@@ -330,7 +346,7 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 "domain is immutable; create a new entry instead."
             )
-        if not _DOMAIN_RE.match(normalized):
+        if not _is_valid_domain(normalized):
             raise serializers.ValidationError("Enter a valid domain (e.g. acme.com).")
         return normalized
 
@@ -363,6 +379,11 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
         if not (is_branding or is_email_routing or is_sending):
             raise serializers.ValidationError(
                 {"is_branding": "Choose at least one purpose."}
+            )
+        domain = attrs.get("domain", getattr(self.instance, "domain", ""))
+        if is_sending and is_public_email_domain(domain):
+            raise serializers.ValidationError(
+                {"is_sending": "Mail can't be sent from a public webmail domain."}
             )
         return attrs
 

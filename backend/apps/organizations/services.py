@@ -99,6 +99,8 @@ def try_admin_email_autoverify(
         raise CannotAutoVerifyError(
             "Public webmail providers cannot be used for email routing."
         )
+    if is_sending and is_public_email_domain(domain):
+        raise CannotAutoVerifyError("Mail can't be sent from a public webmail domain.")
 
     if not has_eligible_admin(organization, domain):
         raise CannotAutoVerifyError(
@@ -110,6 +112,18 @@ def try_admin_email_autoverify(
             "This domain is already verified by another organization. "
             "Use DNS verification to claim ownership."
         )
+
+    # Verifying adds purposes to an existing row, never removes one, and
+    # leaves its sending state alone.
+    existing = (
+        OrganizationDomain.objects.select_for_update()
+        .filter(organization=organization, domain=domain)
+        .first()
+    )
+    if existing is not None:
+        is_branding = is_branding or existing.is_branding
+        is_email_routing = is_email_routing or existing.is_email_routing
+        is_sending = is_sending or existing.is_sending
 
     row, _created = OrganizationDomain.objects.update_or_create(
         organization=organization,

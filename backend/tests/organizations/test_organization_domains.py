@@ -164,6 +164,16 @@ class TestOrganizationDomainAPI:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "domain" in response.data
 
+        # A label may not start with a hyphen, nor exceed 63 characters.
+        for invalid in ("support.-acme.com", f"{'a' * 64}.com"):
+            response = admin_client.post(
+                "/api/v1/organization-domains/",
+                {"domain": invalid, "is_branding": True},
+                format="json",
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST, invalid
+            assert "domain" in response.data
+
     def test_agent_cannot_create(self, authenticated_client, organization) -> None:
         response = authenticated_client.post(
             "/api/v1/organization-domains/",
@@ -296,6 +306,18 @@ class TestSendingPurposeAPI:
         assert response.data["status"] == "verified"
         assert response.data["is_sending"] is True
         assert response.data["is_email_routing"] is False
+
+    def test_public_webmail_can_never_be_a_sending_domain(
+        self, admin_client, settings
+    ) -> None:
+        settings.SENDING_DOMAIN_PROVIDER = "manual"
+        response = admin_client.post(
+            "/api/v1/organization-domains/",
+            {"domain": "gmail.com", "is_sending": True},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "is_sending" in response.data
 
     def test_sending_state_is_read_only(self, admin_client, organization) -> None:
         """Sending is set up through its own endpoints, never by a PATCH."""
@@ -438,6 +460,46 @@ class TestAdminEmailAutoVerify:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST, response.data
         assert response.data.get("code") == "use_dns_instead", response.data
+
+    def test_admin_email_adds_purposes_and_keeps_sending_state(
+        self, organization
+    ) -> None:
+        """Re-verifying for routing doesn't drop branding nor sending."""
+        AdminFactory(
+            organization=organization, email="founder@acme.com", is_verified=True
+        )
+        OrganizationDomain.objects.create(
+            organization=organization,
+            domain="acme.com",
+            is_branding=True,
+            is_sending=True,
+            sending_status=OrganizationDomain.SendingStatus.VERIFIED,
+            sending_provider_ref="tem-123",
+        )
+        row = services.try_admin_email_autoverify(
+            organization=organization, domain="acme.com", is_email_routing=True
+        )
+        row.refresh_from_db()
+        assert row.status == OrganizationDomain.Status.VERIFIED
+        assert (row.is_branding, row.is_email_routing, row.is_sending) == (
+            True,
+            True,
+            True,
+        )
+        assert row.sending_status == OrganizationDomain.SendingStatus.VERIFIED
+        assert row.sending_provider_ref == "tem-123"
+
+    def test_admin_email_refuses_public_webmail_for_sending(self, organization) -> None:
+        AdminFactory(
+            organization=organization, email="founder@gmail.com", is_verified=True
+        )
+        with pytest.raises(services.CannotAutoVerifyError):
+            services.try_admin_email_autoverify(
+                organization=organization,
+                domain="gmail.com",
+                is_email_routing=False,
+                is_sending=True,
+            )
 
     def test_admin_email_refused_for_public_webmail(self, organization) -> None:
         admin = AdminFactory(
