@@ -150,14 +150,14 @@ function DomainRow({
   });
 
   const isPendingDns =
-    domain.status === "pending" && domain.verification_method === "dns_txt";
-  // Legacy branding rows backfilled from the old scalar `domain` field
-  // sit at status=pending with no method or token yet. Surface a way to
-  // promote them into a real DNS challenge.
-  const needsDnsKickoff =
     domain.status === "pending" &&
-    domain.verification_method !== "dns_txt" &&
-    !domain.verification_token;
+    domain.verification_method === "dns_txt" &&
+    Boolean(domain.verification_token);
+  // Legacy branding rows backfilled from the old scalar `domain` field sit at
+  // status=pending with no method or token yet, and another organization's
+  // verification clears the token of a pending challenge. Surface a way to
+  // start a real DNS challenge.
+  const needsDnsKickoff = domain.status === "pending" && !domain.verification_token;
 
   const startDns = useMutation({
     mutationFn: () => regenerateOrganizationDomainToken(domain.id),

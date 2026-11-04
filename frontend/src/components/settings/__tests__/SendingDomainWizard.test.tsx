@@ -195,6 +195,7 @@ describe("SendingDomainWizard", () => {
   it.each([
     ["a failed domain", domain({ status: "failed", verified_at: null })],
     ["a pending domain without a DNS challenge", domain({ status: "pending", verification_method: null, verification_token: "" })],
+    ["a pending challenge whose token was cleared", domain({ status: "pending", verified_at: null, verification_token: "" })],
   ])("restarts the DNS challenge of %s rather than adding it again", async (_, row) => {
     domains = [row];
     const user = await renderWizard();

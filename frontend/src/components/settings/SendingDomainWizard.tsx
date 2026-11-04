@@ -415,7 +415,11 @@ function OwnershipStep({
         )}
       </>
     );
-  } else if (row?.status === "pending" && row.verification_method === "dns_txt") {
+  } else if (
+    row?.status === "pending" &&
+    row.verification_method === "dns_txt" &&
+    row.verification_token
+  ) {
     ownership = (
       <>
         <p className="text-sm text-gray-700">
@@ -455,7 +459,8 @@ function OwnershipStep({
       </>
     );
   } else {
-    // No row yet, a failed one, or a pending one without a DNS challenge.
+    // No row yet, a failed one, or a pending one without a DNS challenge (or whose
+    // token another organization's verification cleared).
     ownership = (
       <>
         {row?.status === "failed" ? (
