@@ -3,6 +3,18 @@
 from django.db import migrations, models
 
 
+def delete_sending_only_domains(apps, schema_editor):
+    """Going back: a row kept only for sending has no purpose left.
+
+    Runs right before the two-purpose constraint is put back, which such a
+    row would violate.
+    """
+    OrganizationDomain = apps.get_model("organizations", "OrganizationDomain")
+    OrganizationDomain.objects.filter(
+        is_branding=False, is_email_routing=False
+    ).delete()
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ("organizations", "0016_otpcode_organization_widget_session"),
@@ -13,6 +25,7 @@ class Migration(migrations.Migration):
             model_name="organizationdomain",
             name="domain_has_at_least_one_purpose",
         ),
+        migrations.RunPython(migrations.RunPython.noop, delete_sending_only_domains),
         migrations.AddField(
             model_name="organizationdomain",
             name="is_sending",
