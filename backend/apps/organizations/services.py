@@ -241,9 +241,11 @@ def apply_dns_verification_success(domain_obj: OrganizationDomain) -> None:
         None,
     )
     if loser is not None:
+        # Its TXT may stay published: winning back needs a new token.
         loser.status = OrganizationDomain.Status.FAILED
+        loser.verification_token = ""
         loser.last_check_at = timezone.now()
-        loser.save(update_fields=["status", "last_check_at"])
+        loser.save(update_fields=["status", "verification_token", "last_check_at"])
         _notify_ownership_transferred(loser, new_owner=domain_obj.organization)
         logger.info(
             "Domain %s ownership transferred from %s to %s",

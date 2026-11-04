@@ -686,8 +686,9 @@ def on_ownership_verified(row: OrganizationDomain) -> None:
     verified; does nothing unless it still is.
 
     Other organizations' mailboxes lose a public address on the domain, and
-    their rows of it lose their sending state; a registration they still hold
-    is removed in the background.
+    their rows of it lose their token (a TXT left published must not win the
+    domain back: their admins regenerate one) and their sending state; a
+    registration they still hold is removed in the background.
     """
     from apps.email_channel.models import Mailbox
 
@@ -716,10 +717,10 @@ def on_ownership_verified(row: OrganizationDomain) -> None:
             .exclude(pk=row.pk)
         )
         for other in others:
-            if other.sending_status == Sending.NONE and not other.sending_provider_ref:
-                continue
-            queue_removal(forget_registration(other))
-            _reset(other)
+            other.verification_token = ""
+            if other.sending_status != Sending.NONE or other.sending_provider_ref:
+                queue_removal(forget_registration(other))
+                _reset(other)
             other.save()
 
 

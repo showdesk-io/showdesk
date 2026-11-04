@@ -696,6 +696,70 @@ class TestOwnershipTransfer:
             == 1
         )
 
+    def test_the_loser_cannot_win_back_with_its_old_record(self) -> None:
+        """A transfer clears the other organizations' tokens: their admins
+        regenerate one to claim the domain again."""
+        loser_org = OrganizationFactory()
+        loser_admin = AdminFactory(organization=loser_org)
+        winner_org = OrganizationFactory()
+        loser_row = OrganizationDomain.objects.create(
+            organization=loser_org,
+            domain="contested.com",
+            is_email_routing=True,
+            status=OrganizationDomain.Status.VERIFIED,
+            verification_method=OrganizationDomain.VerificationMethod.DNS_TXT,
+            verification_token="losertoken",
+        )
+        third_row = services.start_dns_challenge(
+            organization=OrganizationFactory(),
+            domain="contested.com",
+            is_branding=True,
+        )
+        winner_row = services.start_dns_challenge(
+            organization=winner_org, domain="contested.com", is_email_routing=True
+        )
+        # Every record is left published.
+        published = [
+            loser_row.txt_record_value,
+            third_row.txt_record_value,
+            winner_row.txt_record_value,
+        ]
+        client = APIClient()
+        client.force_authenticate(user=loser_admin)
+        verify = f"/api/v1/organization-domains/{loser_row.id}/verify/"
+
+        with patch(
+            "apps.organizations.dns_verification.query_txt_records",
+            return_value=published,
+        ):
+            assert services.perform_dns_check(winner_row) is True
+            loser_row.refresh_from_db()
+            third_row.refresh_from_db()
+            assert loser_row.status == OrganizationDomain.Status.FAILED
+            assert loser_row.verification_token == ""
+            assert third_row.verification_token == ""
+
+            response = client.post(verify)
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            assert response.data["code"] == "still_pending"
+            assert services.perform_dns_check(third_row) is False
+
+            response = client.post(
+                f"/api/v1/organization-domains/{loser_row.id}/regenerate-token/"
+            )
+            assert response.status_code == status.HTTP_200_OK
+            assert response.data["verification_token"]
+            assert client.post(verify).status_code == status.HTTP_202_ACCEPTED
+
+        loser_row.refresh_from_db()
+        with patch(
+            "apps.organizations.dns_verification.query_txt_records",
+            return_value=[loser_row.txt_record_value],
+        ):
+            response = client.post(verify)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["status"] == "verified"
+
 
 @pytest.mark.django_db
 class TestPendingPollerTask:
