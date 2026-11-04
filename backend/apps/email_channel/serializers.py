@@ -9,6 +9,7 @@ from rest_framework import serializers
 from apps.core.permissions import is_org_admin
 from apps.core.serializers import OrgScopedPrimaryKeyRelatedField
 from apps.email_channel.models import InboundEmail, Mailbox
+from apps.email_channel.sending.services import sendable_address, sendable_domains
 from apps.organizations.models import OrganizationDomain, Team
 from apps.tickets.models import TicketMessage
 from apps.tickets.serializers import WidgetMessageSerializer
@@ -29,6 +30,8 @@ class MailboxSerializer(serializers.ModelSerializer):
         queryset=Team.objects.all(), required=False, allow_null=True
     )
     inbound_address = serializers.SerializerMethodField()
+    # Whether replies go out from the public address now (§7.1).
+    sends_from_public_address = serializers.SerializerMethodField()
 
     class Meta:
         model = Mailbox
@@ -38,6 +41,7 @@ class MailboxSerializer(serializers.ModelSerializer):
             "local_part",
             "inbound_address",
             "public_address",
+            "sends_from_public_address",
             "default_team",
             "is_active",
             "forwarding_confirmation",
@@ -56,6 +60,13 @@ class MailboxSerializer(serializers.ModelSerializer):
 
     def get_inbound_address(self, mailbox: Mailbox) -> str:
         return mailbox.inbound_address if settings.INBOUND_EMAIL_DOMAIN else ""
+
+    def get_sends_from_public_address(self, mailbox: Mailbox) -> bool:
+        # One query for a whole list: the domains are kept on the root serializer.
+        cache = self.root.__dict__.setdefault("_sendable_domains", {})
+        if mailbox.organization_id not in cache:
+            cache[mailbox.organization_id] = sendable_domains(mailbox.organization_id)
+        return sendable_address(mailbox, cache[mailbox.organization_id]) is not None
 
     def validate(self, attrs: dict) -> dict:
         if self.instance is not None:

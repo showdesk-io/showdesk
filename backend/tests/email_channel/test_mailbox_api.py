@@ -5,6 +5,8 @@ from unittest import mock
 import pytest
 from botocore.exceptions import ClientError
 from django.core.files.base import ContentFile
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
 from apps.email_channel.models import InboundEmail, Mailbox
@@ -269,6 +271,31 @@ class TestMailboxes:
         assert renamed.status_code == 200, renamed.data
         assert same.status_code == 200, same.data
         assert cleared.status_code == 200, cleared.data
+
+    def test_a_mailbox_says_whether_it_sends_from_its_public_address(
+        self, authenticated_client, organization, settings
+    ):
+        settings.SENDING_DOMAIN_PROVIDER = "manual"
+        verified_domain(
+            organization,
+            is_sending=True,
+            sending_status=OrganizationDomain.SendingStatus.VERIFIED,
+        )
+        sendable = MailboxFactory(
+            organization=organization, public_address="support@acme.example.com"
+        )
+        with CaptureQueriesContext(connection) as one:
+            authenticated_client.get("/api/v1/mailboxes/")
+        MailboxFactory(organization=organization, public_address="x@other.example")
+        MailboxFactory(organization=organization)
+
+        with CaptureQueriesContext(connection) as three:
+            listed = authenticated_client.get("/api/v1/mailboxes/")
+
+        assert len(three) == len(one)
+        flags = {row["id"]: row["sends_from_public_address"] for row in listed.data}
+        assert flags.pop(str(sendable.id)) is True
+        assert set(flags.values()) == {False}
 
     def test_mailboxes_are_not_deleted_but_deactivated(self, admin_client, mailbox):
         # Deleting one would delete its log of received mails with it.

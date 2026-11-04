@@ -30,6 +30,8 @@ class OrganizationSerializer(serializers.ModelSerializer):
     # Instance settings, not the organization's: whether mail can reach a mailbox.
     inbound_email_enabled = serializers.SerializerMethodField()
     inbound_email_domain = serializers.SerializerMethodField()
+    # Whether a sending domain provider is configured: the wizard needs one.
+    sending_domains_enabled = serializers.SerializerMethodField()
 
     class Meta:
         model = Organization
@@ -56,6 +58,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "enabled_features",
             "inbound_email_enabled",
             "inbound_email_domain",
+            "sending_domains_enabled",
             "created_at",
             "updated_at",
         ]
@@ -87,6 +90,9 @@ class OrganizationSerializer(serializers.ModelSerializer):
 
     def get_inbound_email_domain(self, obj: Organization) -> str:
         return settings.INBOUND_EMAIL_DOMAIN
+
+    def get_sending_domains_enabled(self, obj: Organization) -> bool:
+        return settings.SENDING_DOMAIN_PROVIDER != "none"
 
     def to_representation(self, instance: Organization) -> dict:
         """Keep the widget secret to admins: it signs end-user identities."""

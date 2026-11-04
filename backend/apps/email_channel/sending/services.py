@@ -26,6 +26,7 @@ from .providers import (
     SendingDomainProvider,
     SendingProviderError,
     get_provider,
+    sending_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,45 @@ class TooSoonError(SendingError):
 class ProviderError(SendingError):
     code = "provider_error"
     http_status = 502
+
+
+def sendable_domains(organization_id) -> set[str]:
+    """The organization's domains mail may go out from now (§7.1).
+
+    Owned, and verified by the sending provider. None while it is `none`.
+    """
+    if not sending_enabled():
+        return set()
+    return set(
+        OrganizationDomain.objects.filter(
+            organization_id=organization_id,
+            status=Ownership.VERIFIED,
+            sending_status=Sending.VERIFIED,
+        ).values_list("domain", flat=True)
+    )
+
+
+def sendable_address(mailbox, domains: set[str] | None = None) -> str | None:
+    """The mailbox's public address, if mail may go out from it (§7.1).
+
+    Decided at each send, never stored: a transfer or a regression takes
+    effect on the next mail. `domains`: the organization's sendable domains,
+    when already known.
+    """
+    address = mailbox.public_address
+    if not (sending_enabled() and address):
+        return None
+    domain = address.rpartition("@")[2]
+    if domains is None:
+        sendable = OrganizationDomain.objects.filter(
+            organization_id=mailbox.organization_id,
+            domain=domain,
+            status=Ownership.VERIFIED,
+            sending_status=Sending.VERIFIED,
+        ).exists()
+    else:
+        sendable = domain in domains
+    return address if sendable else None
 
 
 def provider() -> SendingDomainProvider:

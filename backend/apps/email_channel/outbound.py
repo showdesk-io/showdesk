@@ -17,6 +17,7 @@ from apps.core.text import one_line
 from apps.email_channel import presence
 from apps.email_channel.content import REPLY_MARKER
 from apps.email_channel.models import Mailbox
+from apps.email_channel.sending.services import sendable_address
 from apps.email_channel.tokens import conversation_token, reply_address
 from apps.tickets.access import ticket_session_ids
 from apps.tickets.models import (
@@ -224,7 +225,8 @@ def from_address(ticket) -> str | None:
     """The ``From`` of the ticket's mail, None for ``DEFAULT_FROM_EMAIL`` (§5.1).
 
     The ticket's mailbox, or else the organization's first active one, while the
-    inbound domain is set.
+    inbound domain is set: its public address once mail may go out from it
+    (§7.1), else its inbound address.
     """
     if not settings.INBOUND_EMAIL_DOMAIN:
         return None
@@ -241,7 +243,7 @@ def from_address(ticket) -> str | None:
         return None
     organization = ticket.organization
     name = one_line(organization.email_from_name) or one_line(organization.name)
-    return formataddr((name, mailbox.inbound_address))
+    return formataddr((name, sendable_address(mailbox) or mailbox.inbound_address))
 
 
 def reply_to(ticket) -> list[str] | None:
