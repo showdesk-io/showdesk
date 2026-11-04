@@ -1,9 +1,12 @@
 {% extends "emails/base.txt" %}
 {% block content %}{{ losing_org_name }} no longer owns the domain {{ domain }}.
 
-{{ new_owner_name }} just verified ownership via DNS. New signups from @{{ domain }} will be routed to their workspace.
+{{ new_owner_name }} just verified ownership via DNS. For {{ losing_org_name }}, this means:
 
-Existing members of {{ losing_org_name }} are not affected — only future signups change destination. If this looks wrong, you can re-verify the domain via DNS TXT in Settings.
+- New signups from @{{ domain }} are no longer routed to your workspace. Existing members are not affected.
+- Your mailboxes' public addresses on {{ domain }} were removed, and replies are no longer sent from {{ domain }}: they go out from your mailboxes' inbound addresses.
+
+If this looks wrong, you can re-verify the domain with a new DNS TXT record in Settings.
 
 {{ settings_url }}
 
