@@ -1,11 +1,14 @@
 """Sending domain providers: what each asks to publish and how it reads a check (§7.2).
 
-The DNS boundary is `dns_verification.lookup_txt`; nothing else is mocked.
+The DNS boundary is `dns_verification.lookup_txt` and the HTTP one
+`requests.request` as `scaleway_tem` calls it; nothing else is mocked.
 """
 
+import json
 from unittest import mock
 
 import pytest
+import requests
 from django.core.exceptions import ImproperlyConfigured
 
 from apps.email_channel.sending.providers import (
@@ -115,3 +118,164 @@ def test_unknown_provider_is_misconfigured(settings) -> None:
     settings.SENDING_DOMAIN_PROVIDER = "carrier-pigeon"
     with pytest.raises(ImproperlyConfigured):
         get_provider()
+
+
+TEM_KEY = "scw-secret-key-not-to-leak"
+TEM_PROJECT = "11111111-2222-3333-4444-555555555555"
+TEM_DOMAINS = (
+    "https://api.scaleway.com/transactional-email/v1alpha1/regions/fr-par/domains"
+)
+
+
+def tem_domain(status: str, last_error: str = "", **records) -> dict:
+    """A TEM domain as its API returns it."""
+    return {
+        "id": "dom-1",
+        "name": "acme.com",
+        "status": status,
+        "last_error": last_error,
+        "records": records,
+    }
+
+
+class FakeTEM:
+    """`requests.request`, answering each (method, url) with canned JSON."""
+
+    def __init__(self, routes: dict) -> None:
+        self.routes = routes
+        self.calls = []
+
+    def __call__(self, method: str, url: str, **kwargs) -> requests.Response:
+        self.calls.append((method, url, kwargs))
+        answer = self.routes[method, url]
+        if isinstance(answer, Exception):
+            raise answer
+        status, body = answer
+        response = requests.Response()
+        response.status_code = status
+        response._content = json.dumps(body).encode()
+        response.url = url
+        return response
+
+
+@pytest.fixture
+def tem(settings):
+    settings.SENDING_DOMAIN_PROVIDER = "scaleway_tem"
+    settings.SCW_TEM_SECRET_KEY = TEM_KEY
+    settings.SCW_TEM_PROJECT_ID = TEM_PROJECT
+    settings.SCW_TEM_REGION = "fr-par"
+    return get_provider()
+
+
+def answering(routes: dict) -> FakeTEM:
+    fake = FakeTEM(routes)
+    return mock.patch(
+        "apps.email_channel.sending.scaleway_tem.requests.request", fake
+    ), fake
+
+
+class TestScalewayTEM:
+    def test_register_creates_the_domain_and_returns_its_records(self, tem) -> None:
+        created = tem_domain(
+            "unchecked",
+            dmarc={"name": "_dmarc", "value": "v=DMARC1; p=none"},
+            mx={"name": "", "value": "10 blackhole.scw-tem.cloud."},
+            dkim={"name": f"{TEM_PROJECT}._domainkey", "value": "v=DKIM1; h=sha256"},
+            spf={"name": "", "value": "v=spf1 include:_spf.tem.scaleway.com -all"},
+        )
+        patcher, fake = answering({("POST", TEM_DOMAINS): (200, created)})
+        with patcher:
+            registered = tem.register("acme.com")
+
+        [(method, url, kwargs)] = fake.calls
+        assert (method, url) == ("POST", TEM_DOMAINS)
+        assert kwargs["headers"]["X-Auth-Token"] == TEM_KEY
+        assert kwargs["json"] == {
+            "project_id": TEM_PROJECT,
+            "domain_name": "acme.com",
+            "autoconfig": False,
+        }
+        assert kwargs["timeout"] == 10
+        assert registered.ref == "dom-1"
+        assert registered.records == [
+            {
+                "type": "TXT",
+                "name": "acme.com",
+                "value": "v=spf1 include:_spf.tem.scaleway.com -all",
+            },
+            {
+                "type": "TXT",
+                "name": f"{TEM_PROJECT}._domainkey.acme.com",
+                "value": "v=DKIM1; h=sha256",
+            },
+            {"type": "MX", "name": "acme.com", "value": "10 blackhole.scw-tem.cloud."},
+            {"type": "TXT", "name": "_dmarc.acme.com", "value": "v=DMARC1; p=none"},
+        ]
+
+    def test_check_maps_statuses(self, tem) -> None:
+        def check(status: str, last_error: str = ""):
+            domain = tem_domain(status, last_error)
+            patcher, fake = answering(
+                {
+                    ("GET", f"{TEM_DOMAINS}/dom-1"): (200, domain),
+                    ("POST", f"{TEM_DOMAINS}/dom-1/check"): (200, domain),
+                }
+            )
+            with patcher:
+                return tem.check("dom-1"), [call[:2] for call in fake.calls]
+
+        result, calls = check("checked")
+        assert result.status == CheckStatus.VERIFIED
+        assert calls == [
+            ("GET", f"{TEM_DOMAINS}/dom-1"),
+            ("POST", f"{TEM_DOMAINS}/dom-1/check"),
+        ]
+
+        result, _calls = check("invalid", "SPF record not found")
+        assert (result.status, result.error) == (
+            CheckStatus.PENDING,
+            "SPF record not found",
+        )
+        assert check("autoconfiguring")[0].status == CheckStatus.PENDING
+
+        # A domain TEM gave up on isn't checked again.
+        result, calls = check("locked")
+        assert result.status == CheckStatus.FAILED
+        assert calls == [("GET", f"{TEM_DOMAINS}/dom-1")]
+
+    def test_http_errors_raise_a_provider_error(self, tem) -> None:
+        patcher, _fake = answering(
+            {("GET", f"{TEM_DOMAINS}/dom-1"): requests.Timeout("read timed out")}
+        )
+        with patcher, pytest.raises(SendingProviderError):
+            tem.check("dom-1")
+
+        patcher, _fake = answering(
+            {("GET", f"{TEM_DOMAINS}/dom-1"): (503, {"message": "unavailable"})}
+        )
+        with patcher, pytest.raises(SendingProviderError) as error:
+            tem.check("dom-1")
+        assert TEM_KEY not in str(error.value)
+
+        patcher, _fake = answering(
+            {("POST", TEM_DOMAINS): (409, {"message": "domain already exists"})}
+        )
+        with patcher, pytest.raises(SendingProviderError, match="already registered"):
+            tem.register("acme.com")
+
+    def test_remove_revokes(self, tem) -> None:
+        revoke = ("POST", f"{TEM_DOMAINS}/dom-1/revoke")
+        patcher, fake = answering({revoke: (200, tem_domain("revoked"))})
+        with patcher:
+            tem.remove("dom-1")
+        assert [call[:2] for call in fake.calls] == [revoke]
+
+        # Already gone counts as removed.
+        patcher, _fake = answering({revoke: (404, {"message": "not found"})})
+        with patcher:
+            tem.remove("dom-1")
+
+    def test_without_credentials_is_misconfigured(self, tem, settings) -> None:
+        settings.SCW_TEM_SECRET_KEY = ""
+        with pytest.raises(ImproperlyConfigured):
+            get_provider()

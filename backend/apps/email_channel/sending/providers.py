@@ -90,6 +90,10 @@ def get_provider() -> SendingDomainProvider:
         from .manual import ManualProvider
 
         return ManualProvider()
+    if name == "scaleway_tem":
+        from .scaleway_tem import ScalewayTEMProvider
+
+        return ScalewayTEMProvider()
     raise ImproperlyConfigured(
         f"Unknown SENDING_DOMAIN_PROVIDER {name!r}: use none, manual or scaleway_tem."
     )
