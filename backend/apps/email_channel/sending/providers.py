@@ -53,6 +53,14 @@ class SendingProviderError(Exception):
     """The provider refused or could not be reached. The message is shown to admins."""
 
 
+class AlreadyRegisteredError(SendingProviderError):
+    """The provider already holds a registration of this domain name."""
+
+
+class ProviderUnavailableError(SendingProviderError):
+    """No provider is configured: nothing can be done at one, removals wait."""
+
+
 class SendingDomainProvider(Protocol):
     """What every sending domain provider does."""
 
@@ -75,7 +83,11 @@ class NoProvider:
         return DomainCheck(CheckStatus.UNKNOWN)
 
     def remove(self, ref: str) -> None:
-        return None
+        # A registration made under another provider is still there: the
+        # removal must wait for one, not be taken as done.
+        raise ProviderUnavailableError(
+            "No sending domain provider is configured to remove this registration."
+        )
 
 
 def sending_enabled() -> bool:

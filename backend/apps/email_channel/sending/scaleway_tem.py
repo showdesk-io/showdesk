@@ -21,7 +21,13 @@ import requests
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
-from .providers import CheckStatus, DomainCheck, RegisteredDomain, SendingProviderError
+from .providers import (
+    AlreadyRegisteredError,
+    CheckStatus,
+    DomainCheck,
+    RegisteredDomain,
+    SendingProviderError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +139,7 @@ class ScalewayTEMProvider:
             )
         except _HTTPError as exc:
             if exc.status_code == 409:
-                raise SendingProviderError(
+                raise AlreadyRegisteredError(
                     f"{domain} is already registered with Scaleway Transactional Email."
                 ) from None
             raise

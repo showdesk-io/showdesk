@@ -38,3 +38,21 @@ def delete_raw_mail(sender, instance, **kwargs) -> None:
             logger.exception("Couldn't delete the raw mail %s", name)
 
     transaction.on_commit(delete)
+
+
+def record_sending_removal(sender, instance, **kwargs) -> None:
+    """A domain row holding a sending registration is deleted: record its removal.
+
+    Rows also go by cascade, with their organization.
+    """
+    from apps.email_channel.sending.services import queue_removal, record_removal
+
+    ref = (
+        type(instance)
+        .objects.select_for_update()
+        .filter(pk=instance.pk)
+        .values_list("sending_provider_ref", flat=True)
+        .first()
+    )
+    if ref:
+        queue_removal(record_removal(instance.domain, ref))

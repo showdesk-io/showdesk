@@ -4,9 +4,11 @@ Every service takes an `OrganizationDomain` row. Provider calls are made
 outside any transaction; what they return is written under a row lock, after
 re-reading the row, so a transfer or a disable that happened meanwhile wins.
 
-A registration the provider still holds is remembered in the row's
-`sending_provider_ref` until the provider confirmed its removal: removals
-that fail are retried by `remove_sending_registration`.
+A registration a row lets go of (turned off, replaced, lost with the
+domain, deleted with the row) is recorded as a `SendingRemoval` in the same
+transaction that clears the row's `sending_provider_ref`; the record stays
+until the provider confirmed the removal, retried by
+`remove_sending_registration`, and nobody registers that domain meanwhile.
 """
 
 from __future__ import annotations
@@ -16,13 +18,17 @@ import logging
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
+from apps.email_channel.models import SendingRemoval
 from apps.organizations.models import OrganizationDomain, is_public_email_domain
 
 from .providers import (
+    AlreadyRegisteredError,
     CheckStatus,
     DomainCheck,
+    ProviderUnavailableError,
     SendingDomainProvider,
     SendingProviderError,
     get_provider,
@@ -31,12 +37,14 @@ from .providers import (
 
 logger = logging.getLogger(__name__)
 
-# Long enough for a registration and its first check (two provider calls with
-# a 10 s timeout each), and released as soon as they are done.
-ENABLE_LOCK_SECONDS = 120
+# Longer than a registration and its first check could take (a few provider
+# calls with a 10 s timeout each), and released as soon as they are done.
+ENABLE_LOCK_SECONDS = 300
 # "Check now" at most this often per domain: each one hits DNS or the provider.
 CHECK_NOW_SECONDS = 30
 MAX_ERROR_LENGTH = 500
+# Tries of a removal before its task gives up; the hourly sweep tries again.
+MAX_REMOVAL_ATTEMPTS = 8
 
 Ownership = OrganizationDomain.Status
 Sending = OrganizationDomain.SendingStatus
@@ -157,8 +165,10 @@ def _unlock_domain(domain: str) -> None:
 def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
     """Register the row's domain with the provider, then check it once.
 
-    Needs the domain owned, and no other organization's registration of it
-    still being removed. Already pending or verified: nothing to do.
+    Needs the domain owned, and no registration of it still being removed.
+    Already pending or verified: nothing to do. A registration made but not
+    stored on the row (the row went, or changed hands, or the write failed)
+    is recorded for removal.
     """
     _lock_domain(row.domain)
     try:
@@ -169,48 +179,83 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
             raise NotOwnedError(f"Verify {row.domain} for your organization first.")
         if row.sending_status in (Sending.PENDING, Sending.VERIFIED):
             return row
-        if (
-            OrganizationDomain.objects.filter(domain=row.domain)
-            .exclude(pk=row.pk)
-            .exclude(sending_provider_ref="")
-            .exists()
-        ):
-            raise RemovalPendingError(
-                f"{row.domain}'s previous sending setup is still being removed. "
-                "Try again in a few minutes."
-            )
         try:
             sender = provider()
-            old_ref = row.sending_provider_ref
-            if old_ref:
-                # A failed or turned-off registration: replace it.
-                sender.remove(old_ref)
-                _forget_ref(old_ref, row.pk)
+        except SendingProviderError as exc:
+            raise ProviderError(str(exc)) from exc
+        if row.sending_provider_ref:
+            # A failed registration: replace it, once it is gone.
+            _replace_registration(row)
+        if SendingRemoval.objects.filter(domain=row.domain).exists():
+            raise _removal_pending(row.domain)
+        try:
             registered = sender.register(row.domain)
+        except AlreadyRegisteredError as exc:
+            raise _removal_pending(row.domain) from exc
         except SendingProviderError as exc:
             raise ProviderError(str(exc)) from exc
 
-        with transaction.atomic():
-            locked = OrganizationDomain.objects.select_for_update().get(pk=row.pk)
-            owned = locked.status == Ownership.VERIFIED
-            if owned:
-                locked.is_sending = True
-                locked.sending_status = Sending.PENDING
-                locked.sending_provider_ref = registered.ref
-                locked.sending_dns_records = registered.records
-                locked.sending_requested_at = timezone.now()
-                locked.sending_last_checked_at = None
-                locked.sending_last_error = ""
-                locked.save()
-            else:
-                # Transferred while registering: the registration isn't ours.
-                queue_removal(registered.ref)
-        if not owned:
+        try:
+            locked = _store_registration(row, registered)
+        except Exception:
+            with transaction.atomic():
+                queue_removal(record_removal(row.domain, registered.ref))
+            raise
+        if locked is None:
             raise NotOwnedError(f"Verify {row.domain} for your organization first.")
         check_sending(locked, sender=sender)
         return locked
     finally:
         _unlock_domain(row.domain)
+
+
+def _removal_pending(domain: str) -> RemovalPendingError:
+    return RemovalPendingError(
+        f"{domain}'s previous sending setup is still being removed. "
+        "Try again in a few minutes."
+    )
+
+
+def _replace_registration(row: OrganizationDomain) -> None:
+    """Remove the row's own failed registration now, before registering again.
+
+    ProviderError if the provider couldn't: the removal goes on in the
+    background, and enabling waits for it.
+    """
+    with transaction.atomic():
+        locked = OrganizationDomain.objects.select_for_update().get(pk=row.pk)
+        removal = forget_registration(locked)
+        locked.save()
+    row.sending_provider_ref = ""
+    if removal is not None and not remove_now(removal):
+        raise ProviderError(
+            f"{row.domain}'s previous sending setup couldn't be removed yet. "
+            "Try again in a few minutes."
+        )
+
+
+def _store_registration(row, registered) -> OrganizationDomain | None:
+    """Store a new registration on the row, if it still is there and owned.
+
+    Otherwise record the registration for removal and return None.
+    """
+    with transaction.atomic():
+        locked = (
+            OrganizationDomain.objects.select_for_update().filter(pk=row.pk).first()
+        )
+        if locked is None or locked.status != Ownership.VERIFIED:
+            # Deleted or transferred while registering: not ours to keep.
+            queue_removal(record_removal(row.domain, registered.ref))
+            return None
+        locked.is_sending = True
+        locked.sending_status = Sending.PENDING
+        locked.sending_provider_ref = registered.ref
+        locked.sending_dns_records = registered.records
+        locked.sending_requested_at = timezone.now()
+        locked.sending_last_checked_at = None
+        locked.sending_last_error = ""
+        locked.save()
+        return locked
 
 
 def check_now(row: OrganizationDomain) -> OrganizationDomain:
@@ -316,33 +361,20 @@ def apply_check(
 
 
 def disable_sending(row: OrganizationDomain) -> OrganizationDomain:
-    """Stop sending from the domain: remove the registration, reset the state.
+    """Stop sending from the domain: reset the state, remove the registration.
 
-    The purpose (`is_sending`) stays. A removal that fails is retried in the
-    background, the row keeping the ref meanwhile.
+    The purpose (`is_sending`) stays. The removal is recorded with the reset,
+    tried at once, and retried in the background if the provider failed.
     """
     _lock_domain(row.domain)
     try:
-        row.refresh_from_db()
-        ref = row.sending_provider_ref
-        removed = True
-        if ref:
-            try:
-                provider().remove(ref)
-            except SendingProviderError as exc:
-                logger.warning(
-                    "Removing %s's sending registration failed: %s", row.domain, exc
-                )
-                removed = False
         with transaction.atomic():
             locked = OrganizationDomain.objects.select_for_update().get(pk=row.pk)
+            removal = forget_registration(locked)
             _reset(locked)
-            if ref and locked.sending_provider_ref == ref:
-                if removed:
-                    locked.sending_provider_ref = ""
-                else:
-                    queue_removal(ref, locked.pk)
             locked.save()
+        if removal is not None:
+            remove_now(removal)
         return locked
     finally:
         _unlock_domain(row.domain)
@@ -396,41 +428,72 @@ def on_ownership_verified(row: OrganizationDomain) -> None:
         for other in others:
             if other.sending_status == Sending.NONE and not other.sending_provider_ref:
                 continue
+            queue_removal(forget_registration(other))
             _reset(other)
             other.save()
-            if other.sending_provider_ref:
-                queue_removal(other.sending_provider_ref, other.pk)
 
 
-def on_domain_deleted(row: OrganizationDomain) -> None:
-    """A row is being deleted: remove its registration, if it holds one."""
-    if row.sending_provider_ref:
-        queue_removal(row.sending_provider_ref)
+def forget_registration(row: OrganizationDomain) -> SendingRemoval | None:
+    """Take the row's registration off it and record it for removal.
+
+    In the caller's transaction, with the row locked; the caller saves the
+    row. None if it held none.
+    """
+    ref = row.sending_provider_ref
+    if not ref:
+        return None
+    row.sending_provider_ref = ""
+    return record_removal(row.domain, ref)
 
 
-def queue_removal(ref: str, row_id=None) -> None:
-    """Remove a registration in the background, once the transaction commits."""
+def record_removal(domain: str, ref: str) -> SendingRemoval:
+    """Record a registration to remove; one record per ref."""
+    removal, _created = SendingRemoval.objects.get_or_create(
+        ref=ref, defaults={"domain": domain}
+    )
+    return removal
+
+
+def queue_removal(removal: SendingRemoval | None) -> None:
+    """Remove a recorded registration in the background, once committed."""
     from apps.email_channel.tasks import remove_sending_registration
 
-    transaction.on_commit(
-        lambda: remove_sending_registration.delay(
-            ref, str(row_id) if row_id is not None else None
+    if removal is not None:
+        transaction.on_commit(lambda: remove_sending_registration.delay(removal.pk))
+
+
+def remove_now(removal: SendingRemoval) -> bool:
+    """Try a recorded removal at once; queue it if the provider failed."""
+    from apps.email_channel.tasks import remove_sending_registration
+
+    try:
+        run_removal(removal.pk)
+    except SendingProviderError as exc:
+        logger.warning(
+            "Removing %s's sending registration failed: %s", removal.domain, exc
         )
-    )
+        remove_sending_registration.delay(removal.pk)
+        return False
+    return True
 
 
-def remove_registration(ref: str, row_id=None) -> None:
-    """Remove a registration at the provider, then forget it on the row.
+def run_removal(removal_id) -> None:
+    """Remove a recorded registration at the provider, then forget the record.
 
-    SendingProviderError if the provider couldn't: the caller retries.
+    SendingProviderError if the provider couldn't, counted on the record
+    (unless there is no provider at all: ProviderUnavailableError).
     """
-    provider().remove(ref)
-    if row_id is not None:
-        _forget_ref(ref, row_id)
-
-
-def _forget_ref(ref: str, row_id) -> None:
-    """Clear the row's ref if it still is this one."""
-    OrganizationDomain.objects.filter(pk=row_id, sending_provider_ref=ref).update(
-        sending_provider_ref="", updated_at=timezone.now()
-    )
+    removal = SendingRemoval.objects.filter(pk=removal_id).first()
+    if removal is None:
+        return  # Done meanwhile.
+    try:
+        provider().remove(removal.ref)
+    except ProviderUnavailableError:
+        raise
+    except SendingProviderError as exc:
+        SendingRemoval.objects.filter(pk=removal.pk).update(
+            attempts=F("attempts") + 1, last_error=str(exc)[:MAX_ERROR_LENGTH]
+        )
+        raise
+    removal.delete()
+    logger.info("Removed sending registration %s of %s", removal.ref, removal.domain)

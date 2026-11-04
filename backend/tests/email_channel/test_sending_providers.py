@@ -12,8 +12,10 @@ import requests
 from django.core.exceptions import ImproperlyConfigured
 
 from apps.email_channel.sending.providers import (
+    AlreadyRegisteredError,
     CheckStatus,
     DomainCheck,
+    ProviderUnavailableError,
     SendingProviderError,
     get_provider,
 )
@@ -144,9 +146,12 @@ class TestManualProvider:
 
 
 def test_none_provider_refuses_to_register(settings) -> None:
+    """Nor does it pretend to remove anything: a removal waits for a provider."""
     settings.SENDING_DOMAIN_PROVIDER = "none"
     with pytest.raises(SendingProviderError):
         get_provider().register("acme.com")
+    with pytest.raises(ProviderUnavailableError):
+        get_provider().remove("ref")
 
 
 def test_unknown_provider_is_misconfigured(settings) -> None:
@@ -331,7 +336,7 @@ class TestScalewayTEM:
         patcher, _fake = answering(
             {("POST", TEM_DOMAINS): (409, {"message": "domain already exists"})}
         )
-        with patcher, pytest.raises(SendingProviderError, match="already registered"):
+        with patcher, pytest.raises(AlreadyRegisteredError):
             tem.register("acme.com")
 
         # A ref that isn't TEM's never reaches a URL.

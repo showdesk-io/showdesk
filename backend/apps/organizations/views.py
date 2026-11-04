@@ -510,14 +510,6 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
             return forbidden
         return super().destroy(request, *args, **kwargs)
 
-    @transaction.atomic
-    def perform_destroy(self, instance) -> None:
-        # Imported here: the email channel depends on this app, not the reverse.
-        from apps.email_channel.sending.services import on_domain_deleted
-
-        on_domain_deleted(instance)
-        instance.delete()
-
     def perform_create(self, serializer) -> None:
         org = get_active_org(self.request)
         serializer.save(organization=org)

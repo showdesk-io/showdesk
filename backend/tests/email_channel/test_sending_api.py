@@ -9,6 +9,7 @@ from unittest import mock
 import pytest
 from rest_framework.test import APIClient
 
+from apps.email_channel.models import SendingRemoval
 from apps.organizations.models import OrganizationDomain
 from tests.email_channel.mails import INBOUND_DOMAIN
 from tests.factories import AdminFactory, OrganizationFactory
@@ -73,13 +74,7 @@ def test_enable_refusals(admin_client, organization):
 
     pending.status = OrganizationDomain.Status.VERIFIED
     pending.save()
-    OrganizationDomain.objects.create(
-        organization=OrganizationFactory(),
-        domain="acme.com",
-        is_branding=True,
-        status=OrganizationDomain.Status.FAILED,
-        sending_provider_ref="acme.com",
-    )
+    SendingRemoval.objects.create(domain="acme.com", ref="acme.com")
     response = admin_client.post(url(pending))
     assert response.status_code == 409
     assert response.data["code"] == "removal_pending"

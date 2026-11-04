@@ -180,18 +180,64 @@ def send_conversation_link(self, ticket_id: str) -> None:
         raise self.retry(exc=exc)
 
 
-@shared_task(bind=True, max_retries=8)
-def remove_sending_registration(self, ref: str, row_id: str | None = None) -> None:
-    """Remove a sending registration at the provider, retrying while it fails.
+@shared_task(bind=True, max_retries=None)
+def remove_sending_registration(self, removal_id: int) -> None:
+    """Remove a recorded sending registration at the provider.
 
-    Then the row of ``row_id`` forgets ``ref``, if it still holds that one: a
-    domain re-registered meanwhile keeps its new ref.
+    Retried with a growing delay while the provider fails, up to
+    MAX_REMOVAL_ATTEMPTS tries of the record; then left to the hourly sweep.
+    Without a provider the record waits as it is.
     """
-    from apps.email_channel.sending.providers import SendingProviderError
-    from apps.email_channel.sending.services import remove_registration
+    from apps.email_channel.models import SendingRemoval
+    from apps.email_channel.sending.providers import (
+        ProviderUnavailableError,
+        SendingProviderError,
+    )
+    from apps.email_channel.sending.services import MAX_REMOVAL_ATTEMPTS, run_removal
 
     try:
-        remove_registration(ref, row_id)
+        run_removal(removal_id)
+    except ProviderUnavailableError:
+        logger.warning(
+            "Sending registration removal %s waits: no provider is configured.",
+            removal_id,
+        )
     except SendingProviderError as exc:
-        logger.warning("Removing sending registration %s failed: %s", ref, exc)
+        removal = SendingRemoval.objects.filter(pk=removal_id).first()
+        if removal is None:
+            return
+        if removal.attempts >= MAX_REMOVAL_ATTEMPTS:
+            logger.error(
+                "Gave up removing sending registration %s of %s after %d tries: %s",
+                removal.ref,
+                removal.domain,
+                removal.attempts,
+                exc,
+            )
+            return
+        logger.warning("Removing sending registration %s failed: %s", removal.ref, exc)
         raise self.retry(exc=exc, countdown=60 * 2**self.request.retries) from exc
+
+
+# A recorded removal older than this whose task isn't retrying anymore (lost
+# before it ran, or gave up) is queued again by the hourly sweep.
+REMOVAL_SWEEP_AFTER = timedelta(hours=1)
+
+
+@shared_task
+def requeue_sending_removals() -> int:
+    """Queue again, once each, the removals no task is working on anymore."""
+    from django.db.models import Q
+
+    from apps.email_channel.models import SendingRemoval
+    from apps.email_channel.sending.services import MAX_REMOVAL_ATTEMPTS
+
+    stale = SendingRemoval.objects.filter(
+        Q(attempts=0) | Q(attempts__gte=MAX_REMOVAL_ATTEMPTS),
+        created_at__lt=timezone.now() - REMOVAL_SWEEP_AFTER,
+    ).values_list("pk", flat=True)
+    count = 0
+    for removal_id in stale:
+        remove_sending_registration.delay(removal_id)
+        count += 1
+    return count
