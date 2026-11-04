@@ -149,6 +149,45 @@ def test_sending_needs_the_organization_own_dns_proof(admin_client, organization
         assert check_sending(row) == CheckStatus.UNKNOWN
 
 
+def test_another_organization_token_does_not_prove_ours(admin_client, organization):
+    """The real owner's `_showdesk` TXT, published for its own row, leaves a
+    squatter's row pending."""
+    row = owned(organization, verification_token="ours")
+    with published({}):
+        assert admin_client.post(url(row)).status_code == 200
+    row.refresh_from_db()
+
+    theirs = {**MANUAL_RECORDS, "_showdesk.acme.com": ["showdesk-verification=theirs"]}
+    with published(theirs):
+        assert check_sending(row) == CheckStatus.PENDING
+    row.refresh_from_db()
+    assert row.sending_status == "pending"
+    assert "_showdesk TXT record" in row.sending_last_error
+
+
+def test_a_domain_set_up_under_another_provider_shows_as_not_set_up(
+    admin_client, organization
+):
+    """Until the periodic check resets it, the row isn't shown as set up."""
+    row = owned(
+        organization,
+        is_sending=True,
+        sending_status="verified",
+        sending_provider="scaleway_tem",
+        sending_provider_ref="tem-id",
+        sending_dns_records=[{"type": "TXT", "name": "acme.com", "value": "x"}],
+        sending_last_error="SPF: add include:x.",
+    )
+
+    response = admin_client.get(f"/api/v1/organization-domains/{row.id}/")
+
+    assert response.status_code == 200, response.data
+    assert response.data["sending_status"] == ""
+    assert response.data["sending_dns_records"] == []
+    assert response.data["sending_last_error"] == ""
+    assert response.data["is_sending"] is True
+
+
 def test_check_now(admin_client, organization):
     row = owned(organization)
     response = admin_client.post(url(row, "check/"))

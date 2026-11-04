@@ -280,6 +280,7 @@ class TestMailboxes:
             organization,
             is_sending=True,
             sending_status=OrganizationDomain.SendingStatus.VERIFIED,
+            sending_provider="manual",
         )
         sendable = MailboxFactory(
             organization=organization, public_address="support@acme.example.com"

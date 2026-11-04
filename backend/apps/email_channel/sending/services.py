@@ -153,14 +153,11 @@ def sendable_address(mailbox, domains: set[str] | None = None) -> str | None:
 
 
 def _sendable_rows():
-    """Owned rows verified by the configured provider.
-
-    A blank `sending_provider` predates the field: the configured one's.
-    """
+    """Owned rows verified by the configured provider, and registered with it."""
     return OrganizationDomain.objects.filter(
         status=Ownership.VERIFIED,
         sending_status=Sending.VERIFIED,
-        sending_provider__in=("", settings.SENDING_DOMAIN_PROVIDER),
+        sending_provider=settings.SENDING_DOMAIN_PROVIDER,
     )
 
 
@@ -285,12 +282,12 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
         if row.sending_provider_ref:
             # A failed registration: replace it, once it is gone.
             _replace_registration(row)
-        if SendingRemoval.objects.filter(domain=row.domain).exists():
+        if _removal_pending_here(row.domain):
             raise _removal_pending(row.domain)
         try:
             registered = sender.register(row.domain)
         except AlreadyRegisteredError as exc:
-            if SendingRemoval.objects.filter(domain=row.domain).exists():
+            if _removal_pending_here(row.domain):
                 raise _removal_pending(row.domain) from exc
             # Not ours to wait for: registered by hand, or a record lost.
             logger.error(
@@ -352,6 +349,18 @@ def _with_ownership_record(row: OrganizationDomain, records) -> list[dict]:
     """The records to publish: the row's `_showdesk` TXT, then the provider's."""
     own = ownership_record(row)
     return [own, *(r for r in records if r != own)]
+
+
+def _removal_pending_here(domain: str) -> bool:
+    """Whether a registration of the domain waits for removal by the
+    configured provider (or by whichever is configured: provider unknown).
+
+    One waiting for another provider is held elsewhere: it doesn't conflict
+    with a registration here, and may wait for good.
+    """
+    return SendingRemoval.objects.filter(
+        domain=domain, provider__in=("", settings.SENDING_DOMAIN_PROVIDER)
+    ).exists()
 
 
 def _removal_pending(domain: str) -> RemovalPendingError:

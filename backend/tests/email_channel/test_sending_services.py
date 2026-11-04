@@ -94,7 +94,7 @@ def registered_row(organization, **fields) -> OrganizationDomain:
         organization,
         is_sending=True,
         sending_status=fields.pop("sending_status", Sending.PENDING),
-        sending_provider_ref="ref-acme.com",
+        sending_provider_ref=fields.pop("sending_provider_ref", "ref-acme.com"),
         sending_dns_records=RECORDS,
         sending_requested_at=timezone.now() - timedelta(hours=1),
         **fields,
@@ -135,6 +135,37 @@ class TestEnable:
         with pytest.raises(services.RemovalPendingError):
             services.enable_sending(row)
         assert provider.calls == []
+
+    def test_a_removal_waiting_on_another_provider_does_not_block(
+        self, provider, organization
+    ) -> None:
+        """Set up under `scaleway_tem`, then the operator moved to `manual`:
+        TEM's registration waits for TEM, and `manual` registers at once."""
+        row = registered_row(
+            organization,
+            sending_status=Sending.VERIFIED,
+            sending_provider="scaleway_tem",
+            sending_provider_ref="tem-id",
+        )
+
+        services.enable_sending(row)
+
+        row.refresh_from_db()
+        assert row.sending_status == Sending.PENDING
+        assert row.sending_provider == "manual"
+        assert row.sending_provider_ref == "ref-acme.com"
+        removal = SendingRemoval.objects.get(ref="tem-id")
+        assert removal.provider == "scaleway_tem"
+
+        # TEM answering that it knows the name isn't ours to wait for either.
+        services.disable_sending(row)
+        with (
+            mock.patch.object(
+                provider, "register", side_effect=AlreadyRegisteredError("taken")
+            ),
+            pytest.raises(services.ProviderConflictError),
+        ):
+            services.enable_sending(row)
 
     def test_a_name_the_provider_already_holds(
         self, provider, organization, caplog
@@ -693,7 +724,12 @@ def test_an_old_verified_webmail_row_never_counts_as_ownership(
     migration = importlib.import_module(
         "apps.email_channel.migrations.0005_free_squatted_public_addresses"
     )
-    row = domain_row(organization, is_sending=True, sending_status=Sending.VERIFIED)
+    row = domain_row(
+        organization,
+        is_sending=True,
+        sending_status=Sending.VERIFIED,
+        sending_provider="manual",
+    )
     OrganizationDomain.objects.filter(pk=row.pk).update(domain="gmail.com")
     someone = MailboxFactory(public_address="someone@gmail.com")
     ours = MailboxFactory(organization=organization, public_address="us@gmail.com")
@@ -713,3 +749,34 @@ def test_an_old_verified_webmail_row_never_counts_as_ownership(
     assert services.sendable_domains(organization.id) == set()
     row.refresh_from_db()
     assert row.status == OrganizationDomain.Status.VERIFIED  # Left as it was.
+
+
+def test_only_the_configured_provider_rows_are_sendable(provider, organization):
+    """`provider` configures `manual`. A row registered with another one, or
+    with none recorded, is not sendable, by either path."""
+    for domain, made_by in (
+        ("acme.com", "manual"),
+        ("acme.org", "scaleway_tem"),
+        ("acme.net", ""),
+    ):
+        registered_row(
+            organization,
+            domain=domain,
+            sending_status=Sending.VERIFIED,
+            sending_provider=made_by,
+            sending_provider_ref=f"ref-{domain}",
+        )
+    mailboxes = {
+        domain: MailboxFactory(
+            organization=organization, public_address=f"help@{domain}"
+        )
+        for domain in ("acme.com", "acme.org", "acme.net")
+    }
+
+    domains = services.sendable_domains(organization.id)
+
+    assert domains == {"acme.com"}
+    for domain, mailbox in mailboxes.items():
+        expected = mailbox.public_address if domain == "acme.com" else None
+        assert services.sendable_address(mailbox, domains) == expected
+        assert services.sendable_address(mailbox) == expected

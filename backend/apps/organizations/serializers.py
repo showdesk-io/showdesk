@@ -364,6 +364,23 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             fields["is_sending"].read_only = True
         return fields
 
+    def to_representation(self, instance) -> dict:
+        """A row registered with another provider than the configured one is
+        shown as not set up (as the periodic check will reset it): its records
+        were the previous provider's.
+        """
+        data = super().to_representation(instance)
+        made_by = instance.sending_provider
+        if made_by and made_by != settings.SENDING_DOMAIN_PROVIDER:
+            data.update(
+                sending_status="",
+                sending_dns_records=[],
+                sending_requested_at=None,
+                sending_last_checked_at=None,
+                sending_last_error="",
+            )
+        return data
+
     def validate_is_sending(self, value: bool) -> bool:
         from apps.email_channel.sending.providers import sending_enabled
 

@@ -141,6 +141,7 @@ def _sending_domain(organization, **fields) -> OrganizationDomain:
             "sending_status", OrganizationDomain.SendingStatus.VERIFIED
         ),
         sending_provider_ref="acme.com",
+        sending_provider="manual",
         **fields,
     )
 

@@ -75,6 +75,7 @@ def sending_row(organization, status, **fields) -> OrganizationDomain:
         is_sending=True,
         sending_status=status,
         sending_provider_ref=fields.pop("ref", "ref-acme.com"),
+        sending_provider=fields.pop("sending_provider", "manual"),
         sending_requested_at=fields.pop(
             "requested_at", timezone.now() - timedelta(hours=1)
         ),
