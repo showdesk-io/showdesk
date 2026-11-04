@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -35,7 +35,9 @@ class RegisteredDomain:
     """A domain the provider now knows, and the records to publish for it."""
 
     ref: str
-    records: list[dict[str, str]]
+    # [{type, name, value}], plus `merge: True` on a record a domain has at
+    # most one of (SPF, DMARC): merge into an existing one, don't add another.
+    records: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -44,7 +46,7 @@ class DomainCheck:
 
     status: CheckStatus
     error: str = ""
-    records: list[dict[str, str]] | None = None
+    records: list[dict[str, Any]] | None = None
 
 
 class SendingProviderError(Exception):

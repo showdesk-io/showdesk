@@ -48,6 +48,7 @@ class TestManualProvider:
                 "type": "TXT",
                 "name": "acme.com",
                 "value": "v=spf1 include:spf.mail.example.net ~all",
+                "merge": True,
             },
             {
                 "type": "CNAME",
@@ -90,6 +91,40 @@ class TestManualProvider:
         assert result.status == CheckStatus.PENDING
         assert "DKIM" in result.error and "SPF" not in result.error
 
+    def test_check_reads_records_as_receivers_do(self, manual) -> None:
+        """Qualifiers, trailing dots and split TXT strings don't matter."""
+        with published(
+            {
+                "acme.com": ["v=spf1 +include:spf.mail.example.net. -all"],
+                "showdesk._domainkey.acme.com": ["v=DKIM1; k=rsa; p=MIIBIj ANBgkqh"],
+                f"showdesk._domainkey.{INBOUND_DOMAIN}": [OPERATOR_KEY],
+            }
+        ):
+            assert manual.check("acme.com").status == CheckStatus.VERIFIED
+
+        # Nothing after the first `all` mechanism is ever evaluated.
+        with published(
+            {
+                "acme.com": ["v=spf1 ~all include:spf.mail.example.net"],
+                "showdesk._domainkey.acme.com": [OPERATOR_KEY],
+                f"showdesk._domainkey.{INBOUND_DOMAIN}": [OPERATOR_KEY],
+            }
+        ):
+            result = manual.check("acme.com")
+        assert result.status == CheckStatus.PENDING and "SPF" in result.error
+
+    def test_check_without_the_operator_key_is_unknown(self, manual, caplog) -> None:
+        """A missing or revoked (empty `p=`) operator key is the operator's fault."""
+        with published(
+            {
+                "acme.com": [GOOD_SPF],
+                "showdesk._domainkey.acme.com": ["v=DKIM1; k=rsa; p="],
+                f"showdesk._domainkey.{INBOUND_DOMAIN}": ["v=DKIM1; k=rsa; p="],
+            }
+        ):
+            assert manual.check("acme.com").status == CheckStatus.UNKNOWN
+        assert f"showdesk._domainkey.{INBOUND_DOMAIN}" in caplog.text
+
     def test_check_that_cannot_resolve_is_unknown(self, manual) -> None:
         with published(
             {
@@ -122,6 +157,7 @@ def test_unknown_provider_is_misconfigured(settings) -> None:
 
 TEM_KEY = "scw-secret-key-not-to-leak"
 TEM_PROJECT = "11111111-2222-3333-4444-555555555555"
+TEM_ID = "0b6a3c1e-9d2f-4e7a-8c5b-1f2e3d4c5b6a"
 TEM_DOMAINS = (
     "https://api.scaleway.com/transactional-email/v1alpha1/regions/fr-par/domains"
 )
@@ -130,7 +166,7 @@ TEM_DOMAINS = (
 def tem_domain(status: str, last_error: str = "", **records) -> dict:
     """A TEM domain as its API returns it."""
     return {
-        "id": "dom-1",
+        "id": TEM_ID,
         "name": "acme.com",
         "status": status,
         "last_error": last_error,
@@ -196,40 +232,75 @@ class TestScalewayTEM:
             "autoconfig": False,
         }
         assert kwargs["timeout"] == 10
-        assert registered.ref == "dom-1"
+        assert registered.ref == TEM_ID
         assert registered.records == [
             {
                 "type": "TXT",
                 "name": "acme.com",
                 "value": "v=spf1 include:_spf.tem.scaleway.com -all",
+                "merge": True,
             },
             {
                 "type": "TXT",
                 "name": f"{TEM_PROJECT}._domainkey.acme.com",
                 "value": "v=DKIM1; h=sha256",
             },
-            {"type": "MX", "name": "acme.com", "value": "10 blackhole.scw-tem.cloud."},
-            {"type": "TXT", "name": "_dmarc.acme.com", "value": "v=DMARC1; p=none"},
+            # No MX: TEM's blackhole would take the support address's mail.
+            {
+                "type": "TXT",
+                "name": "_dmarc.acme.com",
+                "value": "v=DMARC1; p=none",
+                "merge": True,
+            },
         ]
 
+    def test_register_refuses_unusable_answers(self, tem) -> None:
+        for answer in (
+            (503, {"message": "unavailable"}),
+            (200, ["not", "an", "object"]),
+            (200, {"name": "acme.com", "status": "unchecked"}),  # No id.
+        ):
+            patcher, _fake = answering({("POST", TEM_DOMAINS): answer})
+            with patcher, pytest.raises(SendingProviderError):
+                tem.register("acme.com")
+
+        # A record without a name can't be published: it is left out.
+        created = tem_domain(
+            "unchecked",
+            dkim={"value": "v=DKIM1; h=sha256"},
+            spf={"name": "", "value": "v=spf1 include:_spf.tem.scaleway.com -all"},
+        )
+        patcher, _fake = answering({("POST", TEM_DOMAINS): (200, created)})
+        with patcher:
+            records = tem.register("acme.com").records
+        assert [record["name"] for record in records] == ["acme.com"]
+
     def test_check_maps_statuses(self, tem) -> None:
-        def check(status: str, last_error: str = ""):
+        def check(status: str, last_error: str = "", check_answer=None):
             domain = tem_domain(status, last_error)
             patcher, fake = answering(
                 {
-                    ("GET", f"{TEM_DOMAINS}/dom-1"): (200, domain),
-                    ("POST", f"{TEM_DOMAINS}/dom-1/check"): (200, domain),
+                    ("GET", f"{TEM_DOMAINS}/{TEM_ID}"): (200, domain),
+                    ("POST", f"{TEM_DOMAINS}/{TEM_ID}/check"): check_answer
+                    or (200, domain),
                 }
             )
             with patcher:
-                return tem.check("dom-1"), [call[:2] for call in fake.calls]
+                return tem.check(TEM_ID), [call[:2] for call in fake.calls]
 
-        result, calls = check("checked")
+        # The outcome is TEM's last real check; the POST only asks for the
+        # next one, and answers `pending` while it runs.
+        result, calls = check("checked", check_answer=(200, tem_domain("pending")))
         assert result.status == CheckStatus.VERIFIED
         assert calls == [
-            ("GET", f"{TEM_DOMAINS}/dom-1"),
-            ("POST", f"{TEM_DOMAINS}/dom-1/check"),
+            ("GET", f"{TEM_DOMAINS}/{TEM_ID}"),
+            ("POST", f"{TEM_DOMAINS}/{TEM_ID}/check"),
         ]
+        # Asking for the next check may fail without changing the outcome.
+        result, _calls = check("checked", check_answer=(503, {"message": "busy"}))
+        assert result.status == CheckStatus.VERIFIED
+
+        assert check("unknown")[0].status == CheckStatus.UNKNOWN
 
         result, _calls = check("invalid", "SPF record not found")
         assert (result.status, result.error) == (
@@ -241,20 +312,20 @@ class TestScalewayTEM:
         # A domain TEM gave up on isn't checked again.
         result, calls = check("locked")
         assert result.status == CheckStatus.FAILED
-        assert calls == [("GET", f"{TEM_DOMAINS}/dom-1")]
+        assert calls == [("GET", f"{TEM_DOMAINS}/{TEM_ID}")]
 
     def test_http_errors_raise_a_provider_error(self, tem) -> None:
         patcher, _fake = answering(
-            {("GET", f"{TEM_DOMAINS}/dom-1"): requests.Timeout("read timed out")}
+            {("GET", f"{TEM_DOMAINS}/{TEM_ID}"): requests.Timeout("read timed out")}
         )
         with patcher, pytest.raises(SendingProviderError):
-            tem.check("dom-1")
+            tem.check(TEM_ID)
 
         patcher, _fake = answering(
-            {("GET", f"{TEM_DOMAINS}/dom-1"): (503, {"message": "unavailable"})}
+            {("GET", f"{TEM_DOMAINS}/{TEM_ID}"): (503, {"message": "unavailable"})}
         )
         with patcher, pytest.raises(SendingProviderError) as error:
-            tem.check("dom-1")
+            tem.check(TEM_ID)
         assert TEM_KEY not in str(error.value)
 
         patcher, _fake = answering(
@@ -263,17 +334,24 @@ class TestScalewayTEM:
         with patcher, pytest.raises(SendingProviderError, match="already registered"):
             tem.register("acme.com")
 
+        # A ref that isn't TEM's never reaches a URL.
+        patcher, fake = answering({})
+        with patcher, pytest.raises(SendingProviderError):
+            tem.check("../../projects")
+        assert fake.calls == []
+
     def test_remove_revokes(self, tem) -> None:
-        revoke = ("POST", f"{TEM_DOMAINS}/dom-1/revoke")
+        revoke = ("POST", f"{TEM_DOMAINS}/{TEM_ID}/revoke")
         patcher, fake = answering({revoke: (200, tem_domain("revoked"))})
         with patcher:
-            tem.remove("dom-1")
+            tem.remove(TEM_ID)
         assert [call[:2] for call in fake.calls] == [revoke]
 
-        # Already gone counts as removed.
-        patcher, _fake = answering({revoke: (404, {"message": "not found"})})
-        with patcher:
-            tem.remove("dom-1")
+        # Already gone (404) or already revoked (409) counts as removed.
+        for status_code in (404, 409):
+            patcher, _fake = answering({revoke: (status_code, {"message": "no"})})
+            with patcher:
+                tem.remove(TEM_ID)
 
     def test_without_credentials_is_misconfigured(self, tem, settings) -> None:
         settings.SCW_TEM_SECRET_KEY = ""

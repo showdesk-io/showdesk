@@ -40,7 +40,7 @@ Each one is pinned by a test in the task named.
 | 8 | A regression (verified → not verified) puts the row back to `pending` with a new 72 h window, and mails the admins once. 72 h of `pending` → `failed`, mailed once; `failed` rows are only checked by "Check now". Reaching `verified` is mailed too. | Records removed by mistake heal by themselves when restored; the admins know about each change. One template, `sending_domain_status`. | 7 |
 | 9 | "Check now" is limited to once per 30 s per domain (cache lock). | Each call hits DNS or the provider's API. | 4 |
 | 10 | The From is decided at send time (`sendable_address(mailbox)`), never stored. It covers the three mails using `from_address`: reply, unread reply, conversation link. | A transfer or a regression takes effect on the next mail, without a migration of anything. | 6 |
-| 11 | TEM record names are normalised to fully qualified names; records are stored as `[{type, name, value}]` in the provider's order. TEM's MX and DMARC are shown with SPF and DKIM. | The wizard shows exactly what to publish; TEM recommends all four. | 3 |
+| 11 | TEM record names are normalised to fully qualified names; records are stored as `[{type, name, value}]` in the order SPF, DKIM, DMARC. TEM's MX is never shown. SPF records (TEM's and `manual`'s) and TEM's DMARC carry `"merge": true`: a domain has at most one of each, so if one exists the value is merged into it rather than published as a second record. | The wizard shows exactly what to publish. TEM's MX points to a blackhole meant for send-only domains; ours host the support address and receive mail, so publishing it would lose that mail. Two SPF or two DMARC records make receivers ignore both. | 3 |
 | 12 | `requests` is added to `requirements.txt` explicitly (already installed through Anymail). | A direct import must not depend on a transitive pin. | 3 |
 | 13 | The organization payload carries `sending_domains_enabled` (provider ≠ `none`); a mailbox carries `sends_from_public_address`. | The wizard is hidden with `none`; the card says which From is used now. | 6 |
 
@@ -230,12 +230,12 @@ def test_tem_register_creates_the_domain_and_returns_its_records(): ...
     # POST /transactional-email/v1alpha1/regions/fr-par/domains {"project_id", "domain_name": "acme.com", "autoconfig": False}
     # response records {"spf": {"name": "", "value": "v=spf1 include:_spf.tem.scaleway.com -all"},
     #                   "dkim": {"name": "<project>._domainkey", "value": "v=DKIM1; …"}, "mx": …, "dmarc": …}
-    # → ref == id; names fully qualified; order spf, dkim, mx, dmarc; MX type "MX"
+    # → ref == id; names fully qualified; order spf, dkim, dmarc; no MX; merge on spf and dmarc
 def test_tem_check_maps_statuses(): ...
-    # POST …/check then GET …: checked → VERIFIED; unchecked/pending/autoconfiguring/invalid → PENDING with last_error; locked/revoked → FAILED
+    # GET … gives the status (POST …/check only triggers the next check): checked → VERIFIED; unchecked/pending/autoconfiguring/invalid → PENDING with last_error; locked/revoked → FAILED
 def test_tem_http_errors_raise_a_provider_error(): ...
     # 5xx / timeout on check → SendingProviderError (the caller reads UNKNOWN); 409 on register → SendingProviderError("already registered…")
-def test_tem_remove_revokes(): ...  # POST …/revoke; 404 counts as removed
+def test_tem_remove_revokes(): ...  # POST …/revoke; 404 and 409 count as removed
 ```
 
 **Step 3: Implement** a small `_call(method, path, json=None)` with a 10 s timeout, `raise_for_status` mapped to `SendingProviderError` (message without the secret). `ImproperlyConfigured` without key or project.
