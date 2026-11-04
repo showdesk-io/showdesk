@@ -60,7 +60,19 @@ export async function createOrResumeSession(
   });
 
   if (!res.ok) throw new Error(`Session error: ${res.status}`);
-  const data = await res.json();
+  return parseSession(await res.json());
+}
+
+/** A session as the API sends it. */
+interface SessionData {
+  session_id: string;
+  name?: string | null;
+  email?: string | null;
+  external_user_id?: string | null;
+  email_proof_offered?: boolean;
+}
+
+function parseSession(data: SessionData): WidgetSession {
   return {
     sessionId: data.session_id,
     name: data.name || "",
@@ -70,19 +82,20 @@ export async function createOrResumeSession(
   };
 }
 
-/** Update contact info on the session. */
+/** Update contact info on the session. The session as the backend now has it. */
 export async function updateSessionContact(
   config: ShowdeskConfig,
   sessionId: string,
   name: string,
   email: string,
-): Promise<void> {
+): Promise<WidgetSession> {
   const res = await fetch(`${config.apiUrl}/tickets/widget_session/`, {
     method: "PATCH",
     headers: { ...headers(config, sessionId), "Content-Type": "application/json" },
     body: JSON.stringify({ name, email }),
   });
   if (!res.ok) throw new Error(`Update contact error: ${res.status}`);
+  return parseSession(await res.json());
 }
 
 /**

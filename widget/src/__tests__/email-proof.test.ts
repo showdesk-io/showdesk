@@ -147,11 +147,13 @@ describe("the email code banner", () => {
       call.url.includes("widget_history") && proven
         ? { status: 200, data: [historyItem("e1", "Invoice question", "open", 1)] }
         : base(call);
+    const before = b.histories().length;
 
     await askAndEnter("123456");
 
     expect(banner()).toBeNull();
     expect(panelText()).toContain("Invoice question");
+    expect(b.histories()).toHaveLength(before + 1);
     const verify = b.calls.find((c) => c.url.includes("widget_email_verify"));
     expect(verify?.body).toEqual({ code: "123456" });
   });

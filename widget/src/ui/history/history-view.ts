@@ -48,7 +48,8 @@ export function renderHistoryView(
   if (store.state.session?.emailProofOffered) {
     wrapper.appendChild(
       renderEmailProofBanner(store, config, () => {
-        void loadHistory(list, store, config);
+        // Unless the view was rendered again for the proven session meanwhile.
+        if (list.isConnected) void loadHistory(list, store, config);
       }),
     );
   }
@@ -58,6 +59,24 @@ export function renderHistoryView(
 
   // Fetch history
   loadHistory(list, store, config);
+
+  // Rendered for a session that changed since, or before there was one, or before it
+  // offered the code (a contact just saved): rendered again for the one there is now.
+  const shownSession = store.state.session;
+  const unsubscribe = store.subscribe(() => {
+    if (!wrapper.isConnected) {
+      unsubscribe();
+      return;
+    }
+    const session = store.state.session;
+    if (
+      session?.sessionId !== shownSession?.sessionId ||
+      Boolean(session?.emailProofOffered) !== Boolean(shownSession?.emailProofOffered)
+    ) {
+      unsubscribe();
+      renderHistoryView(container, store, config);
+    }
+  });
 }
 
 async function loadHistory(
