@@ -435,6 +435,15 @@ CONVERSATION_LINK_MAX_AGE_DAYS = config(
     "CONVERSATION_LINK_MAX_AGE_DAYS", default=30, cast=int
 )
 
+# =============================================================================
+# Sending domains: mail from an organization's own verified domain
+# =============================================================================
+# Who sets up a customer domain for sending: none (feature off), manual or
+# scaleway_tem. See apps.email_channel.sending.
+SENDING_DOMAIN_PROVIDER = (
+    config("SENDING_DOMAIN_PROVIDER", default="none").strip().lower()
+)
+
 # Frontend URL for links in emails
 SITE_URL = config("SITE_URL", default="http://localhost")
 

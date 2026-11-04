@@ -636,14 +636,16 @@ class OTPCode(models.Model):
 
 
 class OrganizationDomain(TimestampedModel):
-    """A domain claimed by an organization for branding and/or email routing.
+    """A domain claimed by an organization for branding, email routing or sending.
 
-    Two independent purposes:
+    Three independent purposes:
       - is_branding:      shown publicly (replaces the legacy `domain` field).
       - is_email_routing: drives the signup auto-join flow (replaces the
                           legacy `email_domain` field).
+      - is_sending:       mailboxes' public addresses on it may become the
+                          From of outgoing mail (see email_channel.sending).
 
-    A row may serve one or both. At least one must be set (DB-checked).
+    A row may serve any of them. At least one must be set (DB-checked).
 
     Verification:
       - admin_email: an admin in the org has a verified email on this domain.
@@ -659,9 +661,20 @@ class OrganizationDomain(TimestampedModel):
     globally (partial unique index). When org B's DNS challenge succeeds
     on a domain org A holds, A flips to `failed` and B becomes `verified`.
     Once verified, a row stays verified forever unless transferred.
+
+    Sending: `is_sending` is the admin's intent, `sending_status` where the
+    sending provider stands ("" while not registered with it). Mail goes out
+    from the domain only while both the ownership and the sending status are
+    verified.
     """
 
     class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        VERIFIED = "verified", "Verified"
+        FAILED = "failed", "Failed"
+
+    class SendingStatus(models.TextChoices):
+        NONE = "", "Not set up"
         PENDING = "pending", "Pending"
         VERIFIED = "verified", "Verified"
         FAILED = "failed", "Failed"
@@ -698,6 +711,32 @@ class OrganizationDomain(TimestampedModel):
     verified_at = models.DateTimeField(null=True, blank=True)
     last_check_at = models.DateTimeField(null=True, blank=True)
 
+    is_sending = models.BooleanField(default=False)
+    sending_status = models.CharField(
+        max_length=20,
+        choices=SendingStatus.choices,
+        default=SendingStatus.NONE,
+        blank=True,
+        db_index=True,
+    )
+    sending_provider_ref = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="The domain's id at the sending provider, kept until removed there.",
+    )
+    sending_dns_records = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Records to publish for sending: [{type, name, value}].",
+    )
+    sending_requested_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Start of the current pending cycle (it fails after 72 h).",
+    )
+    sending_last_checked_at = models.DateTimeField(null=True, blank=True)
+    sending_last_error = models.CharField(max_length=500, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
         constraints = [
@@ -711,7 +750,9 @@ class OrganizationDomain(TimestampedModel):
                 name="unique_verified_domain_globally",
             ),
             models.CheckConstraint(
-                condition=models.Q(is_branding=True) | models.Q(is_email_routing=True),
+                condition=models.Q(is_branding=True)
+                | models.Q(is_email_routing=True)
+                | models.Q(is_sending=True),
                 name="domain_has_at_least_one_purpose",
             ),
         ]
@@ -725,6 +766,8 @@ class OrganizationDomain(TimestampedModel):
             purposes.append("routing")
         if self.is_branding:
             purposes.append("branding")
+        if self.is_sending:
+            purposes.append("sending")
         return f"{self.domain} [{','.join(purposes)}] ({self.status})"
 
     @staticmethod

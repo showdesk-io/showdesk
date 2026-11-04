@@ -456,14 +456,19 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
     def _create_with_admin_email(self, request, org):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        is_sending = serializer.validated_data.get("is_sending", False)
         try:
             row = services.try_admin_email_autoverify(
                 organization=org,
                 domain=serializer.validated_data["domain"],
                 is_branding=serializer.validated_data.get("is_branding", False),
+                # Routing is the default purpose of this path, unless the
+                # domain is claimed to send from it: routing would let anyone
+                # signing up on it ask to join.
                 is_email_routing=serializer.validated_data.get(
-                    "is_email_routing", True
+                    "is_email_routing", not is_sending
                 ),
+                is_sending=is_sending,
             )
         except services.DomainVerificationError as exc:
             return Response(
@@ -486,6 +491,7 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
             domain=domain,
             is_branding=serializer.validated_data.get("is_branding", False),
             is_email_routing=serializer.validated_data.get("is_email_routing", False),
+            is_sending=serializer.validated_data.get("is_sending", False),
         )
         return Response(self.get_serializer(row).data, status=status.HTTP_201_CREATED)
 

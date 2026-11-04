@@ -96,11 +96,20 @@ class OrganizationDomainAdmin(admin.ModelAdmin):
         "organization",
         "is_branding",
         "is_email_routing",
+        "is_sending",
         "status",
+        "sending_status",
         "verification_method",
         "verified_at",
     ]
-    list_filter = ["status", "verification_method", "is_branding", "is_email_routing"]
+    list_filter = [
+        "status",
+        "sending_status",
+        "verification_method",
+        "is_branding",
+        "is_email_routing",
+        "is_sending",
+    ]
     search_fields = ["domain", "organization__slug", "organization__name"]
     readonly_fields = [
         "id",

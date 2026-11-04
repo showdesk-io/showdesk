@@ -260,6 +260,11 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
     `domain` is write-once: settable on create but immutable afterwards.
     Status, verification_method, token, and verified_at are entirely
     server-managed (set by the verify endpoint, not the client).
+
+    `is_sending` may only be asked for at creation, and only while a sending
+    provider is configured; afterwards sending is turned on and off through
+    its own endpoints. The sending state is the provider's: read-only, and
+    `sending_provider_ref` is never exposed.
     """
 
     txt_record_name = serializers.CharField(read_only=True)
@@ -277,6 +282,7 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             "domain",
             "is_branding",
             "is_email_routing",
+            "is_sending",
             "status",
             "verification_method",
             "verification_token",
@@ -284,6 +290,11 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             "last_check_at",
             "txt_record_name",
             "txt_record_value",
+            "sending_status",
+            "sending_dns_records",
+            "sending_requested_at",
+            "sending_last_checked_at",
+            "sending_last_error",
             "created_at",
             "updated_at",
         ]
@@ -296,6 +307,11 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             "last_check_at",
             "txt_record_name",
             "txt_record_value",
+            "sending_status",
+            "sending_dns_records",
+            "sending_requested_at",
+            "sending_last_checked_at",
+            "sending_last_error",
             "created_at",
             "updated_at",
         ]
@@ -317,6 +333,19 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Enter a valid domain (e.g. acme.com).")
         return normalized
 
+    def get_fields(self) -> dict:
+        fields = super().get_fields()
+        if self.instance is not None:
+            fields["is_sending"].read_only = True
+        return fields
+
+    def validate_is_sending(self, value: bool) -> bool:
+        if value and settings.SENDING_DOMAIN_PROVIDER == "none":
+            raise serializers.ValidationError(
+                "Sending from your own domain is not available on this server."
+            )
+        return value
+
     def validate(self, attrs: dict) -> dict:
         is_branding = attrs.get(
             "is_branding",
@@ -326,7 +355,11 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
             "is_email_routing",
             getattr(self.instance, "is_email_routing", False),
         )
-        if not (is_branding or is_email_routing):
+        is_sending = attrs.get(
+            "is_sending",
+            getattr(self.instance, "is_sending", False),
+        )
+        if not (is_branding or is_email_routing or is_sending):
             raise serializers.ValidationError(
                 {"is_branding": "Choose at least one purpose."}
             )

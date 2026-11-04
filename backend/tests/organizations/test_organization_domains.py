@@ -108,6 +108,12 @@ class TestOrganizationDomainModel:
             assert len(t) == 32
             assert all(c in "0123456789abcdef" for c in t)
 
+    def test_sending_alone_is_a_purpose(self, organization) -> None:
+        row = OrganizationDomain.objects.create(
+            organization=organization, domain="acme.com", is_sending=True
+        )
+        assert row.sending_status == ""
+
 
 @pytest.mark.django_db
 class TestOrganizationDomainAPI:
@@ -243,6 +249,79 @@ class TestOrganizationDomainAPI:
         token = response.data["verification_token"]
         assert token
         assert response.data["txt_record_value"] == f"showdesk-verification={token}"
+
+
+@pytest.mark.django_db
+class TestSendingPurposeAPI:
+    def test_create_for_sending_needs_a_provider(self, admin_client, settings) -> None:
+        settings.SENDING_DOMAIN_PROVIDER = "none"
+        response = admin_client.post(
+            "/api/v1/organization-domains/",
+            {"domain": "acme.com", "is_sending": True},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "is_sending" in response.data
+
+        settings.SENDING_DOMAIN_PROVIDER = "manual"
+        response = admin_client.post(
+            "/api/v1/organization-domains/",
+            {"domain": "acme.com", "is_sending": True},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        assert response.data["is_sending"] is True
+        assert response.data["is_email_routing"] is False
+        assert response.data["sending_status"] == ""
+
+    def test_admin_email_for_sending_does_not_turn_routing_on(
+        self, organization, settings
+    ) -> None:
+        settings.SENDING_DOMAIN_PROVIDER = "manual"
+        admin = AdminFactory(
+            organization=organization, email="founder@acme.com", is_verified=True
+        )
+        client = APIClient()
+        client.force_authenticate(user=admin)
+        response = client.post(
+            "/api/v1/organization-domains/",
+            {
+                "domain": "acme.com",
+                "is_sending": True,
+                "verification_method": "admin_email",
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        assert response.data["status"] == "verified"
+        assert response.data["is_sending"] is True
+        assert response.data["is_email_routing"] is False
+
+    def test_sending_state_is_read_only(self, admin_client, organization) -> None:
+        """Sending is set up through its own endpoints, never by a PATCH."""
+        d = OrganizationDomain.objects.create(
+            organization=organization,
+            domain="acme.com",
+            is_branding=True,
+            sending_provider_ref="tem-123",
+        )
+        response = admin_client.patch(
+            f"/api/v1/organization-domains/{d.id}/",
+            {
+                "is_sending": True,
+                "sending_status": "verified",
+                "sending_dns_records": [{"type": "TXT", "name": "x", "value": "y"}],
+                "sending_provider_ref": "forged",
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert "sending_provider_ref" not in response.data
+        d.refresh_from_db()
+        assert d.is_sending is False
+        assert d.sending_status == ""
+        assert d.sending_dns_records == []
+        assert d.sending_provider_ref == "tem-123"
 
 
 @pytest.mark.django_db

@@ -84,6 +84,7 @@ def try_admin_email_autoverify(
     domain: str,
     is_branding: bool = False,
     is_email_routing: bool = True,
+    is_sending: bool = False,
 ) -> OrganizationDomain:
     """Create or upgrade a row to verified via admin_email.
 
@@ -116,6 +117,7 @@ def try_admin_email_autoverify(
         defaults={
             "is_branding": is_branding,
             "is_email_routing": is_email_routing,
+            "is_sending": is_sending,
             "status": OrganizationDomain.Status.VERIFIED,
             "verification_method": OrganizationDomain.VerificationMethod.ADMIN_EMAIL,
             "verified_at": timezone.now(),
@@ -141,6 +143,7 @@ def start_dns_challenge(
     domain: str,
     is_branding: bool = False,
     is_email_routing: bool = False,
+    is_sending: bool = False,
 ) -> OrganizationDomain:
     """Create or reset a row in pending state with a fresh DNS token."""
     domain = domain.lower().strip()
@@ -150,6 +153,7 @@ def start_dns_challenge(
         defaults={
             "is_branding": is_branding,
             "is_email_routing": is_email_routing,
+            "is_sending": is_sending,
             "status": OrganizationDomain.Status.PENDING,
             "verification_method": OrganizationDomain.VerificationMethod.DNS_TXT,
             "verification_token": OrganizationDomain.generate_token(),
