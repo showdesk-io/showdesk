@@ -483,6 +483,20 @@ inbound provider.
   with a real key. If TEM refused, enabling would answer 409
   `provider_conflict` and an operator would have to clear the name.
 
+- A public address saved while its domain changes hands: the address is
+  validated against the domain's owner, then saved, and a verification by
+  another organization in between frees the addresses saved before it only.
+  The loser keeps the address until it edits it, but can't send from it (its
+  row isn't verified); the new owner gets "already used" for it. An operator
+  can clear it in the Django admin.
+
+- A webmail provider missing from `PUBLIC_EMAIL_DOMAINS` (in code; the
+  `SHOWDESK_PUBLIC_EMAIL_DOMAINS` variable its comment mentions is not read)
+  is an ordinary domain: its first user can verify it by admin email, which
+  frees the public addresses other organizations had on it. Sending from it
+  still needs its DNS (the `_showdesk` TXT), which nobody but the provider
+  has. Add such providers to the list.
+
 - Two checks of the same domain (the periodic one and a "Check now") may
   finish out of order, the older result written last. That is rare (checks
   take seconds, "Check now" is rate-limited) and bounded: the next check, at
@@ -614,6 +628,9 @@ these choices beyond this design. Each one is pinned by a test.
 | 13 | The organization payload carries `sending_domains_enabled` (provider not `none`); a mailbox carries `sends_from_public_address`. | The wizard is hidden without a provider; the mailbox card says which From is used now. |
 | 14 | Sending needs the organization's own `_showdesk.<domain>` TXT (`showdesk-verification=<token>`), whatever the provider, at every check: it is the first record to publish (a row verified by admin email gets a token then, its ownership untouched), and a check without it is pending (a regression on a verified domain), one that can't read it inconclusive. | `manual`'s records are the same for every organization, so the real owner publishing them for itself would verify a squatter's row too; an admin's mailbox proves an address, not control of the DNS; and TEM's re-registration of a revoked name is unconfirmed. |
 | 15 | A row remembers the provider it was registered with (`sending_provider`); only one of the configured provider is sendable. Changing `SENDING_DOMAIN_PROVIDER` makes every domain set up under the previous one fall back: the next check resets it (no mail) and its admins set it up again. Its registration is recorded for removal by the provider that made it, unless that one has nothing to remove (`manual`), and waits until that provider is configured again. | The published records were the previous provider's; the new one never checked them. |
+| 16 | A domain is validated more strictly on create: at least two labels of 1-63 `[a-z0-9-]` with no hyphen at either end, a non-numeric last label, 200 characters at most. | Room for `<selector>._domainkey.<domain>` within DNS's 253 characters, and no IP address taken for a domain. |
+| 17 | A public webmail domain is refused on create for every purpose (branding, routing, sending), by DNS or admin email alike. | Nobody owns `gmail.com`, whatever the row is for. |
+| 18 | An admin-email verification of a domain the organization already has adds the asked purposes to the row and keeps the others, and leaves its sending state alone. | Verifying again must not drop a purpose, nor stop sending. |
 
 What admins have:
 
@@ -634,10 +651,11 @@ What admins have:
 - Settings → Email: each mailbox card says "Replies are sent from" its public
   or inbound address, and admins get a "Send from your domain" wizard:
   (1) address and ownership (DNS TXT or the admin's own email), saving the
-  address once its domain is verified; (2) the records to publish, with copy
-  buttons and merge notes; (3) status, last check and error, "Check now",
+  address once its domain is verified; (2) the records to publish, the
+  domain's own `_showdesk` TXT first ("The first record proves your
+  organization controls the domain."), with copy buttons and merge notes; (3) status, last check and error, "Check now",
   "Stop sending from this domain". Settings → General shows the "Sending"
-  purpose and status on the domain.
+  purpose and status on the domain while a provider is configured.
 - `manage.py seed` marks the demo mailbox's domain for sending, unregistered,
   when `INBOUND_EMAIL_DOMAIN` is set.
 
@@ -645,7 +663,10 @@ What operators set (§8):
 
 - `SENDING_DOMAIN_PROVIDER`: `none` (default, feature hidden), `manual` or
   `scaleway_tem`. A misconfigured provider is logged, and admins only see
-  that sending from their domain is unavailable.
+  that sending from their domain is unavailable; so are a provider's own
+  error messages (admins see "The sending service answered 503."). Changing
+  it makes every domain set up under the previous one fall back, to be set
+  up again (choice 15).
 - `manual`: `SENDING_DOMAIN_SPF_INCLUDE` and `SENDING_DOMAIN_DKIM_SELECTOR`,
   with `INBOUND_EMAIL_DOMAIN`. The operator publishes the DKIM key at
   `<selector>._domainkey.<INBOUND_EMAIL_DOMAIN>` and has the sending service
