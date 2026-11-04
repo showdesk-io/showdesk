@@ -331,7 +331,8 @@ class TestScalewayTEM:
         )
         with patcher, pytest.raises(SendingProviderError) as error:
             tem.check(TEM_ID)
-        assert TEM_KEY not in str(error.value)
+        # Scaleway's own words go to the log, not to the organization's admins.
+        assert str(error.value) == "The sending service answered 503."
 
         patcher, _fake = answering(
             {("POST", TEM_DOMAINS): (409, {"message": "domain already exists"})}

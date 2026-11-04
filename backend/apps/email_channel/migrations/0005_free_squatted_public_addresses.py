@@ -2,9 +2,48 @@ import logging
 
 from django.db import migrations
 
-from apps.organizations.models import is_public_email_domain
-
 logger = logging.getLogger(__name__)
+
+# A frozen copy of `apps.organizations.models.PUBLIC_EMAIL_DOMAINS` as it was
+# when this migration was written: a migration must not change with the code.
+# Later additions to the list, or to the environment's
+# SHOWDESK_PUBLIC_EMAIL_DOMAINS should it be read some day, don't apply here.
+PUBLIC_EMAIL_DOMAINS = frozenset(
+    {
+        "gmail.com",
+        "googlemail.com",
+        "hotmail.com",
+        "hotmail.fr",
+        "outlook.com",
+        "outlook.fr",
+        "live.com",
+        "msn.com",
+        "yahoo.com",
+        "yahoo.fr",
+        "ymail.com",
+        "icloud.com",
+        "me.com",
+        "mac.com",
+        "protonmail.com",
+        "proton.me",
+        "pm.me",
+        "aol.com",
+        "gmx.com",
+        "gmx.de",
+        "mail.com",
+        "mail.ru",
+        "yandex.com",
+        "yandex.ru",
+        "qq.com",
+        "163.com",
+        "126.com",
+        "free.fr",
+        "orange.fr",
+        "wanadoo.fr",
+        "laposte.net",
+        "sfr.fr",
+    }
+)
 
 
 def free_squatted_public_addresses(apps, schema_editor):
@@ -21,7 +60,7 @@ def free_squatted_public_addresses(apps, schema_editor):
         for domain, organization_id in OrganizationDomain.objects.filter(
             status="verified"
         ).values_list("domain", "organization_id")
-        if not is_public_email_domain(domain)
+        if domain.lower() not in PUBLIC_EMAIL_DOMAINS
     }
     squatted = [
         mailbox

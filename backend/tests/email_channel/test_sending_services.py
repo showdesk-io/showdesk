@@ -232,6 +232,15 @@ class TestEnable:
             services.enable_sending(row)
         assert provider.calls == []
 
+        # A refusal needs no lock: it is told as such, and takes none.
+        pending = domain_row(
+            OrganizationFactory(), status=OrganizationDomain.Status.PENDING
+        )
+        with pytest.raises(services.NotOwnedError):
+            services.enable_sending(pending)
+        with pytest.raises(services.NotOwnedError):
+            services.disable_sending(pending)
+
     def test_after_a_failure_the_old_registration_is_replaced(
         self, provider, organization
     ) -> None:

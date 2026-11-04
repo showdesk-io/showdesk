@@ -100,9 +100,9 @@ class ScalewayTEMProvider:
                 response.status_code,
                 detail,
             )
+            # Scaleway's own words stay in the log: admins see the status only.
             raise _HTTPError(
-                f"Scaleway Transactional Email answered {response.status_code}"
-                + (f": {detail}" if detail else "."),
+                f"The sending service answered {response.status_code}.",
                 response.status_code,
             )
         try:

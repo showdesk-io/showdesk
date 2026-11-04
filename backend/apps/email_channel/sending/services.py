@@ -269,13 +269,11 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
     stored on the row (the row went, or changed hands, or the write failed)
     is recorded for removal.
     """
+    _require_owned(row)  # Before the lock: a refusal must not hold it.
     token = _lock_domain(row.domain)
     try:
         row.refresh_from_db()
-        if is_public_email_domain(row.domain):
-            raise PublicDomainError("Mail can't be sent from a public webmail domain.")
-        if row.status != Ownership.VERIFIED:
-            raise NotOwnedError(f"Verify {row.domain} for your organization first.")
+        _require_owned(row)
         _ensure_ownership_token(row)
         drop_switched_registration(row)
         if row.sending_status in (Sending.PENDING, Sending.VERIFIED):
@@ -320,6 +318,14 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
         return locked
     finally:
         _unlock_domain(row.domain, token)
+
+
+def _require_owned(row: OrganizationDomain) -> None:
+    """Refuse a webmail domain, or one the row's organization doesn't own."""
+    if is_public_email_domain(row.domain):
+        raise PublicDomainError("Mail can't be sent from a public webmail domain.")
+    if row.status != Ownership.VERIFIED:
+        raise NotOwnedError(f"Verify {row.domain} for your organization first.")
 
 
 def _ensure_ownership_token(row: OrganizationDomain) -> None:
@@ -637,11 +643,14 @@ def disable_sending(row: OrganizationDomain) -> OrganizationDomain:
 
     The purpose (`is_sending`) stays. The removal is recorded with the reset,
     tried at once, and retried in the background if the provider failed.
+    Needs the domain owned, as enabling does.
     """
+    _require_owned(row)  # Before the lock: a refusal must not hold it.
     token = _lock_domain(row.domain)
     try:
         with transaction.atomic():
             locked = OrganizationDomain.objects.select_for_update().get(pk=row.pk)
+            _require_owned(locked)
             removal = forget_registration(locked)
             _reset(locked)
             locked.save()

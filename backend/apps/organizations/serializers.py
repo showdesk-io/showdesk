@@ -10,7 +10,6 @@ from apps.core.serializers import (
     OrgScopedPrimaryKeyRelatedField,
     read_only_organization_field,
 )
-from apps.email_channel.sending.providers import sending_enabled
 
 from .models import (
     Organization,
@@ -92,7 +91,10 @@ class OrganizationSerializer(serializers.ModelSerializer):
         return settings.INBOUND_EMAIL_DOMAIN
 
     def get_sending_domains_enabled(self, obj: Organization) -> bool:
-        return settings.SENDING_DOMAIN_PROVIDER != "none"
+        # Imported here: the email channel depends on this app, not the reverse.
+        from apps.email_channel.sending.providers import sending_enabled
+
+        return sending_enabled()
 
     def to_representation(self, instance: Organization) -> dict:
         """Keep the widget secret to admins: it signs end-user identities."""
@@ -363,6 +365,8 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
         return fields
 
     def validate_is_sending(self, value: bool) -> bool:
+        from apps.email_channel.sending.providers import sending_enabled
+
         if value and not sending_enabled():
             raise serializers.ValidationError(
                 "Sending from your own domain is not available on this server."
