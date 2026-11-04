@@ -185,8 +185,9 @@ def remove_sending_registration(self, removal_id: int) -> None:
     """Remove a recorded sending registration at the provider.
 
     Retried with a growing delay while the provider fails, up to
-    MAX_REMOVAL_ATTEMPTS tries of the record; then left to the hourly sweep.
-    Without a provider the record waits as it is.
+    MAX_REMOVAL_ATTEMPTS tries of the record; then left to the sweep.
+    Without a provider, or under another than the one that made the
+    registration, the record waits as it is.
     """
     from apps.email_channel.models import SendingRemoval
     from apps.email_channel.sending.providers import (
@@ -197,11 +198,8 @@ def remove_sending_registration(self, removal_id: int) -> None:
 
     try:
         run_removal(removal_id)
-    except ProviderUnavailableError:
-        logger.warning(
-            "Sending registration removal %s waits: no provider is configured.",
-            removal_id,
-        )
+    except ProviderUnavailableError as exc:
+        logger.warning("Sending registration removal %s waits: %s", removal_id, exc)
     except SendingProviderError as exc:
         removal = SendingRemoval.objects.filter(pk=removal_id).first()
         if removal is None:
@@ -219,26 +217,42 @@ def remove_sending_registration(self, removal_id: int) -> None:
         raise self.retry(exc=exc, countdown=60 * 2**self.request.retries) from exc
 
 
-# A recorded removal older than this whose task isn't retrying anymore (lost
-# before it ran, or gave up) is queued again by the hourly sweep.
-REMOVAL_SWEEP_AFTER = timedelta(hours=1)
+# A recorded removal not tried for this long (its task lost before it ran,
+# given up, or waiting for its provider) is queued again by the hourly sweep.
+# Longer than the task's longest retry delay, so a removal still retrying
+# isn't queued twice.
+REMOVAL_SWEEP_AFTER = timedelta(hours=3)
 
 
 @shared_task
 def requeue_sending_removals() -> int:
-    """Queue again, once each, the removals no task is working on anymore."""
-    from django.db.models import Q
+    """Queue again the removals not tried for REMOVAL_SWEEP_AFTER.
+
+    Whatever their attempts: one given up is logged as an error each time,
+    for an operator to look at.
+    """
+    from django.db.models.functions import Coalesce
 
     from apps.email_channel.models import SendingRemoval
-    from apps.email_channel.sending.services import MAX_REMOVAL_ATTEMPTS
+    from apps.email_channel.sending.services import (
+        MAX_REMOVAL_ATTEMPTS,
+        enqueue_removal,
+    )
 
-    stale = SendingRemoval.objects.filter(
-        Q(attempts=0) | Q(attempts__gte=MAX_REMOVAL_ATTEMPTS),
-        created_at__lt=timezone.now() - REMOVAL_SWEEP_AFTER,
-    ).values_list("pk", flat=True)
+    stale = SendingRemoval.objects.annotate(
+        last_try=Coalesce("last_attempt_at", "created_at")
+    ).filter(last_try__lt=timezone.now() - REMOVAL_SWEEP_AFTER)
     count = 0
-    for removal_id in stale:
-        remove_sending_registration.delay(removal_id)
+    for removal in stale:
+        if removal.attempts >= MAX_REMOVAL_ATTEMPTS:
+            logger.error(
+                "Sending registration %s of %s still not removed after %d tries: %s",
+                removal.ref,
+                removal.domain,
+                removal.attempts,
+                removal.last_error,
+            )
+        enqueue_removal(removal.pk)
         count += 1
     return count
 

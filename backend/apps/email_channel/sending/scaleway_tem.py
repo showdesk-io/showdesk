@@ -57,6 +57,8 @@ class _HTTPError(SendingProviderError):
 class ScalewayTEMProvider:
     """Domains registered in one Scaleway project through the TEM API."""
 
+    removal_needed = True
+
     def __init__(self) -> None:
         self.secret_key = settings.SCW_TEM_SECRET_KEY.strip()
         self.project_id = settings.SCW_TEM_PROJECT_ID.strip()

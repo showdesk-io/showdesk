@@ -158,3 +158,30 @@ def test_not_there_without_a_provider(admin_client, organization, settings):
     assert admin_client.post(url(row)).status_code == 404
     assert admin_client.post(url(row, "check/")).status_code == 404
     assert admin_client.delete(url(row)).status_code == 404
+
+
+def test_a_transfer_under_manual_leaves_nothing_to_remove(
+    admin_client, organization, django_capture_on_commit_callbacks
+):
+    """`manual` registers nothing anywhere: the new owner sets up at once."""
+    from apps.email_channel.sending.services import on_ownership_verified
+
+    previous = owned(OrganizationFactory())
+    theirs = APIClient()
+    theirs.force_authenticate(AdminFactory(organization=previous.organization))
+    with published({}):
+        assert theirs.post(url(previous)).status_code == 200
+
+    # `organization` wins the domain.
+    OrganizationDomain.objects.filter(pk=previous.pk).update(
+        status=OrganizationDomain.Status.FAILED
+    )
+    row = owned(organization)
+    with django_capture_on_commit_callbacks(execute=True):
+        on_ownership_verified(row)
+
+    assert not SendingRemoval.objects.exists()
+    with published({}):
+        response = admin_client.post(url(row))
+    assert response.status_code == 200, response.data
+    assert response.data["sending_status"] == "pending"

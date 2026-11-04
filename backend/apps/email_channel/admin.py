@@ -71,13 +71,29 @@ class InboundEmailAdmin(admin.ModelAdmin):
 class SendingRemovalAdmin(admin.ModelAdmin):
     """Sending registrations still to remove at the provider: to watch, not edit.
 
-    Removed by their task and the hourly sweep. A record may be deleted by
+    Removed by their task and the sweep. A record may be deleted by
     hand once the registration was removed at the provider some other way.
     """
 
-    list_display = ["domain", "ref", "attempts", "last_error", "created_at"]
+    list_display = [
+        "domain",
+        "ref",
+        "provider",
+        "attempts",
+        "last_attempt_at",
+        "last_error",
+        "created_at",
+    ]
     search_fields = ["domain", "ref"]
-    readonly_fields = ["domain", "ref", "attempts", "last_error", "created_at"]
+    readonly_fields = [
+        "domain",
+        "ref",
+        "provider",
+        "attempts",
+        "last_attempt_at",
+        "last_error",
+        "created_at",
+    ]
 
     def has_add_permission(self, request) -> bool:
         return False

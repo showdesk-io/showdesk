@@ -62,7 +62,13 @@ class ProviderUnavailableError(SendingProviderError):
 
 
 class SendingDomainProvider(Protocol):
-    """What every sending domain provider does."""
+    """What every sending domain provider does.
+
+    `removal_needed`: whether a registration it made exists anywhere but on
+    our row, so that letting go of one must be recorded and removed there.
+    """
+
+    removal_needed: bool
 
     def register(self, domain: str) -> RegisteredDomain: ...
 
@@ -73,6 +79,10 @@ class SendingDomainProvider(Protocol):
 
 class NoProvider:
     """`none`: nothing can be registered, so nothing is ever sendable."""
+
+    # It makes no registration. One let go of while it is configured was made
+    # by another provider: see `services.record_removal`.
+    removal_needed = False
 
     def register(self, domain: str) -> RegisteredDomain:
         raise SendingProviderError(

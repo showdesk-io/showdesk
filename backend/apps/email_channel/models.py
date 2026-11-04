@@ -208,8 +208,17 @@ class SendingRemoval(models.Model):
 
     domain = models.CharField(max_length=255, db_index=True)
     ref = models.CharField(max_length=255, unique=True)
+    provider = models.CharField(
+        max_length=32,
+        blank=True,
+        help_text=(
+            "The provider that made the registration: only it removes it. "
+            'Blank if unknown (recorded while the provider was "none").'
+        ),
+    )
     created_at = models.DateTimeField(default=timezone.now)
     attempts = models.PositiveIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
     last_error = models.CharField(max_length=500, blank=True)
 
     class Meta:

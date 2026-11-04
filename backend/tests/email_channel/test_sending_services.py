@@ -33,6 +33,8 @@ Sending = OrganizationDomain.SendingStatus
 class FakeProvider:
     """Registers every domain as `ref-<domain>`, answers checks with `result`."""
 
+    removal_needed = True
+
     def __init__(self) -> None:
         self.result = DomainCheck(CheckStatus.PENDING, "SPF: add include:x.")
         self.calls: list[tuple[str, str]] = []
@@ -296,6 +298,27 @@ class TestDisable:
         assert row.sending_status == ""
         assert row.sending_provider_ref == ""
 
+    def test_a_broker_down_leaves_the_removal_to_the_sweep(
+        self, provider, organization, admin_client
+    ) -> None:
+        provider.fail = {"remove"}
+        row = registered_row(organization, sending_status=Sending.VERIFIED)
+
+        with mock.patch(
+            "apps.email_channel.tasks.remove_sending_registration.delay",
+            side_effect=ConnectionError("broker down"),
+        ):
+            response = admin_client.delete(
+                f"/api/v1/organization-domains/{row.id}/sending/"
+            )
+
+        assert response.status_code == 200, response.data
+        assert response.data["sending_status"] == ""
+        removal = SendingRemoval.objects.get()
+        assert removal.ref == "ref-acme.com"
+        assert removal.provider == "manual"
+        assert removal.last_attempt_at is not None
+
 
 class TestRemovalTask:
     def test_a_done_removal_is_forgotten(self, provider) -> None:
@@ -351,20 +374,53 @@ class TestRemovalTask:
         removal.refresh_from_db()
         assert removal.attempts == 0
 
-    def test_the_sweep_requeues_what_was_lost_or_given_up(self) -> None:
+    def test_a_removal_made_under_another_provider_waits(
+        self, provider, caplog
+    ) -> None:
+        from apps.email_channel.tasks import remove_sending_registration
+
+        removal = SendingRemoval.objects.create(
+            domain="acme.com", ref="ref-old", provider="scaleway_tem"
+        )
+
+        with mock.patch.object(remove_sending_registration, "retry") as retry:
+            remove_sending_registration(removal.pk)
+
+        retry.assert_not_called()
+        assert provider.calls == []
+        removal.refresh_from_db()
+        assert removal.attempts == 0
+        assert removal.last_attempt_at is not None
+        assert "scaleway_tem" in caplog.text
+
+    def test_the_sweep_requeues_what_is_stuck(self, caplog) -> None:
         from apps.email_channel.tasks import requeue_sending_removals
 
-        old = timezone.now() - timedelta(hours=2)
-        lost = SendingRemoval.objects.create(domain="a.com", ref="1", created_at=old)
-        given_up = SendingRemoval.objects.create(
+        now = timezone.now()
+        never_tried = SendingRemoval.objects.create(
+            domain="a.com", ref="1", created_at=now - timedelta(hours=4)
+        )
+        stuck = SendingRemoval.objects.create(
             domain="b.com",
             ref="2",
-            created_at=old,
+            created_at=now - timedelta(days=1),
+            last_attempt_at=now - timedelta(hours=4),
+            attempts=1,
+        )
+        given_up = SendingRemoval.objects.create(
+            domain="c.com",
+            ref="3",
+            created_at=now - timedelta(days=1),
+            last_attempt_at=now - timedelta(hours=4),
             attempts=services.MAX_REMOVAL_ATTEMPTS,
         )
-        SendingRemoval.objects.create(domain="c.com", ref="3")  # Just queued.
+        SendingRemoval.objects.create(domain="d.com", ref="4")  # Just queued.
         SendingRemoval.objects.create(  # Still retrying.
-            domain="d.com", ref="4", created_at=old, attempts=2
+            domain="e.com",
+            ref="5",
+            created_at=now - timedelta(days=1),
+            last_attempt_at=now - timedelta(hours=1),
+            attempts=5,
         )
 
         with mock.patch(
@@ -373,8 +429,10 @@ class TestRemovalTask:
             requeue_sending_removals()
 
         assert sorted(c.args[0] for c in delay.call_args_list) == sorted(
-            [lost.pk, given_up.pk]
+            [never_tried.pk, stuck.pk, given_up.pk]
         )
+        [error] = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert "c.com" in error.getMessage()
 
 
 class TestOwnershipVerified:

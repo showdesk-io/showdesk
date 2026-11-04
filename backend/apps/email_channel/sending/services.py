@@ -6,9 +6,10 @@ re-reading the row, so a transfer or a disable that happened meanwhile wins.
 
 A registration a row lets go of (turned off, replaced, lost with the
 domain, deleted with the row) is recorded as a `SendingRemoval` in the same
-transaction that clears the row's `sending_provider_ref`; the record stays
-until the provider confirmed the removal, retried by
-`remove_sending_registration`, and nobody registers that domain meanwhile.
+transaction that clears the row's `sending_provider_ref`, unless the provider
+has nothing to remove (`removal_needed`); the record stays until the provider
+that made it confirmed the removal, retried by `remove_sending_registration`
+and the sweep, and nobody registers that domain meanwhile.
 """
 
 from __future__ import annotations
@@ -544,33 +545,57 @@ def forget_registration(row: OrganizationDomain) -> SendingRemoval | None:
     return record_removal(row.domain, ref)
 
 
-def record_removal(domain: str, ref: str) -> SendingRemoval:
-    """Record a registration to remove; one record per ref."""
+def record_removal(domain: str, ref: str) -> SendingRemoval | None:
+    """Record a registration to remove; one record per ref.
+
+    None when the configured provider's registrations exist nowhere but on
+    our row (`manual`): nothing to remove, nothing to wait for. Recorded
+    while no provider is configured, the record's provider is unknown (""):
+    the next one configured removes it.
+    """
+    name = settings.SENDING_DOMAIN_PROVIDER
+    if sending_enabled():
+        try:
+            needed = get_provider().removal_needed
+        except ImproperlyConfigured:
+            needed = True  # Can't tell: keep the record, it is cheap.
+        if not needed:
+            return None
+    else:
+        name = ""
     removal, _created = SendingRemoval.objects.get_or_create(
-        ref=ref, defaults={"domain": domain}
+        ref=ref, defaults={"domain": domain, "provider": name}
     )
     return removal
 
 
 def queue_removal(removal: SendingRemoval | None) -> None:
     """Remove a recorded registration in the background, once committed."""
+    if removal is not None:
+        transaction.on_commit(lambda: enqueue_removal(removal.pk))
+
+
+def enqueue_removal(removal_id) -> None:
+    """Queue a removal's task. A broker down is only logged: the sweep's job."""
     from apps.email_channel.tasks import remove_sending_registration
 
-    if removal is not None:
-        transaction.on_commit(lambda: remove_sending_registration.delay(removal.pk))
+    try:
+        remove_sending_registration.delay(removal_id)
+    except Exception:
+        logger.exception(
+            "Couldn't queue sending removal %s; the sweep will.", removal_id
+        )
 
 
 def remove_now(removal: SendingRemoval) -> bool:
     """Try a recorded removal at once; queue it if the provider failed."""
-    from apps.email_channel.tasks import remove_sending_registration
-
     try:
         run_removal(removal.pk)
     except SendingProviderError as exc:
         logger.warning(
             "Removing %s's sending registration failed: %s", removal.domain, exc
         )
-        remove_sending_registration.delay(removal.pk)
+        enqueue_removal(removal.pk)
         return False
     return True
 
@@ -578,12 +603,21 @@ def remove_now(removal: SendingRemoval) -> bool:
 def run_removal(removal_id) -> None:
     """Remove a recorded registration at the provider, then forget the record.
 
-    SendingProviderError if the provider couldn't, counted on the record
-    (unless there is no provider at all: ProviderUnavailableError).
+    SendingProviderError if the provider couldn't, counted on the record.
+    ProviderUnavailableError, not counted, if the configured provider can't
+    remove it: `none`, or another than the one that made it. Every try
+    stamps `last_attempt_at`, which the sweep goes by.
     """
     removal = SendingRemoval.objects.filter(pk=removal_id).first()
     if removal is None:
         return  # Done meanwhile.
+    SendingRemoval.objects.filter(pk=removal.pk).update(last_attempt_at=timezone.now())
+    configured = settings.SENDING_DOMAIN_PROVIDER
+    if removal.provider and removal.provider != configured:
+        raise ProviderUnavailableError(
+            f"Registration {removal.ref} was made by {removal.provider}, "
+            f"not by the configured provider ({configured})."
+        )
     try:
         provider().remove(removal.ref)
     except ProviderUnavailableError:

@@ -35,6 +35,9 @@ _DKIM_KEY_RE = re.compile(r"(?:^|;)p=([^;]+)")
 class ManualProvider:
     """DNS records built from the settings, checked with our own resolver."""
 
+    # Nothing is registered anywhere: there is never anything to remove.
+    removal_needed = False
+
     def __init__(self) -> None:
         self.spf_include = (
             settings.SENDING_DOMAIN_SPF_INCLUDE.strip().lower().rstrip(".")
