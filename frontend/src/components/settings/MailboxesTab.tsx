@@ -4,7 +4,7 @@
  * Admins manage them, agents read them.
  */
 
-import { useId, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { clsx } from "clsx";
 import { formatDistanceToNow } from "date-fns";
@@ -161,6 +161,8 @@ function MailboxCard({
   const regenerate = useRegenerateMailboxAddress();
   const [showLog, setShowLog] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
+  const wizardId = useId();
+  const wizardToggle = useRef<HTMLButtonElement>(null);
   const confirmation = mailbox.forwarding_confirmation;
 
   const copyAddress = () => {
@@ -234,8 +236,10 @@ function MailboxCard({
             {canSendFromDomain && (
               <button
                 type="button"
+                ref={wizardToggle}
                 onClick={() => setShowWizard(!showWizard)}
                 aria-expanded={showWizard}
+                aria-controls={wizardId}
                 className={SMALL_BUTTON_CLASS}
               >
                 Send from your domain
@@ -272,15 +276,24 @@ function MailboxCard({
         </div>
       </dl>
 
-      <p className="mt-4 text-sm text-gray-600">
-        Replies are sent from{" "}
-        <span className="font-medium text-gray-800">
-          {mailbox.sends_from_public_address ? mailbox.public_address : mailbox.inbound_address}
-        </span>
-      </p>
+      {(mailbox.sends_from_public_address || mailbox.inbound_address) && (
+        <p className="mt-4 text-sm text-gray-600">
+          Replies are sent from{" "}
+          <span className="font-medium text-gray-800">
+            {mailbox.sends_from_public_address ? mailbox.public_address : mailbox.inbound_address}
+          </span>
+        </p>
+      )}
 
       {canSendFromDomain && showWizard && (
-        <SendingDomainWizard mailbox={mailbox} onClose={() => setShowWizard(false)} />
+        <SendingDomainWizard
+          id={wizardId}
+          mailbox={mailbox}
+          onClose={() => {
+            setShowWizard(false);
+            wizardToggle.current?.focus();
+          }}
+        />
       )}
 
       {(confirmation?.code || confirmation?.url) && (

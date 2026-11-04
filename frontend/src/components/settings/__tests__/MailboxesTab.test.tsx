@@ -302,9 +302,15 @@ describe("MailboxesTab", () => {
 
     await user.click(await screen.findByRole("button", { name: "Send from your domain" }));
 
-    expect(
-      await screen.findByRole("region", { name: "Send from your domain" }),
-    ).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Send from your domain" });
+    expect(await screen.findByRole("region", { name: "Send from your domain" })).toHaveAttribute(
+      "id",
+      toggle.getAttribute("aria-controls"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Close send from your domain" }));
+    expect(screen.queryByRole("region", { name: "Send from your domain" })).not.toBeInTheDocument();
+    expect(toggle).toHaveFocus();
   });
 
   it("hides the wizard without a sending provider", async () => {

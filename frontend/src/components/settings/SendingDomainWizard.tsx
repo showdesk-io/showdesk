@@ -8,7 +8,7 @@
  * wizard can be closed and opened again anywhere. Admins only, with a sending provider.
  */
 
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { formatDistanceToNow } from "date-fns";
 import toast from "react-hot-toast";
@@ -61,9 +61,12 @@ function ago(date: string): string {
 }
 
 export function SendingDomainWizard({
+  id,
   mailbox,
   onClose,
 }: {
+  /** For the button that opens it (`aria-controls`). */
+  id?: string;
   mailbox: Mailbox;
   onClose: () => void;
 }) {
@@ -103,7 +106,11 @@ export function SendingDomainWizard({
           {ownedRow ? (
             <RecordsStep row={ownedRow} />
           ) : (
-            <p className="text-sm text-gray-500">Once the address's domain is verified.</p>
+            <p className="text-sm text-gray-500">
+              {row?.status === "verified"
+                ? "Once the address is saved."
+                : "Once the address's domain is verified."}
+            </p>
           )}
         </Step>
         <Step number={3} title="Status" current={step === 3} done={false}>
@@ -119,6 +126,7 @@ export function SendingDomainWizard({
 
   return (
     <section
+      id={id}
       aria-labelledby={headingId}
       className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4"
     >
@@ -136,6 +144,7 @@ export function SendingDomainWizard({
         <button
           type="button"
           onClick={onClose}
+          aria-label="Close send from your domain"
           className="shrink-0 rounded-sm px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
         >
           Close
@@ -160,6 +169,14 @@ function Step({
   children: ReactNode;
 }) {
   const headingId = useId();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const wasCurrent = useRef(current);
+
+  // Where the wizard moved to, for keyboard and screen reader users; not when it opens.
+  useEffect(() => {
+    if (current && !wasCurrent.current) headingRef.current?.focus();
+    wasCurrent.current = current;
+  }, [current]);
 
   return (
     <li>
@@ -171,7 +188,11 @@ function Step({
           current ? "border-primary-300" : "border-gray-200",
         )}
       >
-        <h5 className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+        <h5
+          ref={headingRef}
+          tabIndex={-1}
+          className="flex items-center gap-2 text-sm font-semibold text-gray-900 outline-none"
+        >
           <span id={headingId}>
             {number}. {title}
           </span>
@@ -234,8 +255,21 @@ function OwnershipStep({
   const updateMailbox = useUpdateMailbox();
   const [error, setError] = useState<string | null>(null);
   const [addressErrors, setAddressErrors] = useState<string[]>([]);
+  // From "Use this address" until the mailbox reloaded with it, or the API refused it.
+  const [saving, setSaving] = useState(false);
+  const [seen, setSeen] = useState({ addressSaved, status: row?.status });
+  if (seen.addressSaved !== addressSaved || seen.status !== row?.status) {
+    setSeen({ addressSaved, status: row?.status });
+    if (seen.addressSaved !== addressSaved) setSaving(false);
+    // What the error was about has changed.
+    if (seen.status !== row?.status) setError(null);
+  }
   const isPending =
-    create.isPending || verify.isPending || regenerate.isPending || updateMailbox.isPending;
+    create.isPending ||
+    verify.isPending ||
+    regenerate.isPending ||
+    updateMailbox.isPending ||
+    saving;
   const canUseMyEmail = Boolean(domain) && domainOf(currentUser?.email ?? "") === domain;
 
   const changeAddress = (value: string) => {
@@ -284,12 +318,24 @@ function OwnershipStep({
   };
 
   const saveAddress = () => {
+    if (
+      mailbox.sends_from_public_address &&
+      !window.confirm(
+        `Replies go out from ${mailbox.public_address} now. Until ${domain} is set up for sending, they will go out from ${mailbox.inbound_address} instead. Use ${address.trim()}?`,
+      )
+    ) {
+      return;
+    }
     setAddressErrors([]);
+    setSaving(true);
     updateMailbox.mutate(
       { id: mailbox.id, public_address: address.trim() },
       {
         onSuccess: () => toast.success("Public address saved."),
-        onError: (err) => setAddressErrors(fieldErrors(err, "public_address")),
+        onError: (err) => {
+          setSaving(false);
+          setAddressErrors(fieldErrors(err, "public_address"));
+        },
       },
     );
   };
@@ -334,6 +380,9 @@ function OwnershipStep({
         <p className="text-sm text-gray-700">
           Add this TXT record to {domain}'s DNS to prove it is your organization's, then check
           it. We also check it every 15 minutes for 7 days.
+        </p>
+        <p className="text-sm text-gray-500">
+          You can close this and come back: DNS changes can take a while.
         </p>
         <dl className="space-y-2 text-sm">
           <RecordField label="Name" value={row.txt_record_name} copyLabel="Copy the TXT record name" />
@@ -473,20 +522,28 @@ function RecordsStep({ row }: { row: OrganizationDomain }) {
       <p className="text-sm text-gray-700">
         Publish these records where {row.domain}'s DNS is managed.
       </p>
-      <RecordsTable records={row.sending_dns_records} />
+      {row.sending_dns_records.length > 0 ? (
+        <RecordsTable records={row.sending_dns_records} />
+      ) : (
+        <p className="text-sm text-gray-500">
+          The sending service returned no records yet. Check again in a minute.
+        </p>
+      )}
     </>
   );
 }
 
-/** What a record to merge is, for its note: SPF and DMARC are TXT records. */
+/** How to publish a record that may already exist: SPF and DMARC are TXT records. */
 function mergeNote(record: SendingRecord): string {
   const value = record.value.trim().toLowerCase();
-  const kind = value.startsWith("v=spf1")
-    ? "an SPF record"
-    : value.startsWith("v=dmarc1")
-      ? "a DMARC record"
-      : `a ${record.type} record`;
-  return `Already have ${kind} at ${record.name}? Merge this into it rather than adding a second record.`;
+  if (value.startsWith("v=spf1")) {
+    return `Already have an SPF record at ${record.name}? Add the include: part to it rather than adding a second record.`;
+  }
+  if (value.startsWith("v=dmarc1")) {
+    return `Already have a DMARC record at ${record.name}? Keep a single one.`;
+  }
+  const article = /^[aefhilmnorsx]/i.test(record.type) ? "an" : "a";
+  return `Already have ${article} ${record.type} record at ${record.name}? Merge this into it rather than adding a second record.`;
 }
 
 function RecordsTable({ records }: { records: SendingRecord[] }) {
@@ -621,7 +678,10 @@ function StatusStep({ row, mailbox }: { row: OrganizationDomain; mailbox: Mailbo
         </p>
       )}
       {row.sending_status === "verified" && (
-        <p className="text-sm text-gray-700">Replies go out from {mailbox.public_address}.</p>
+        <p className="text-sm text-gray-700">
+          Replies go out from{" "}
+          {mailbox.sends_from_public_address ? mailbox.public_address : mailbox.inbound_address}.
+        </p>
       )}
       {row.sending_status === "failed" && (
         <p className="text-sm text-gray-700">

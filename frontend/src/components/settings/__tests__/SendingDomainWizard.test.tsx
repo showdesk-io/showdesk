@@ -10,6 +10,7 @@ import { AxiosError, type AxiosResponse } from "axios";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/api/client";
 import { useAuthStore } from "@/store/authStore";
+import { useMailboxes } from "@/hooks/useMailboxes";
 import type { Mailbox, OrganizationDomain } from "@/types";
 import { SendingDomainWizard } from "../SendingDomainWizard";
 
@@ -77,15 +78,26 @@ function refusal(data: unknown, status = 400): AxiosError {
 }
 
 let domains: OrganizationDomain[];
+let mailboxes: Mailbox[];
 let userEmail: string;
 
-async function renderWizard(mailbox: Mailbox = MAILBOX) {
+/** The wizard on the mailbox as the API lists it, as in the Email tab. */
+function ListedMailboxWizard() {
+  const { data } = useMailboxes();
+  return data?.[0] ? <SendingDomainWizard mailbox={data[0]} onClose={() => {}} /> : null;
+}
+
+async function renderWizard(mailbox: Mailbox | "listed" = MAILBOX) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <SendingDomainWizard mailbox={mailbox} onClose={() => {}} />
+      {mailbox === "listed" ? (
+        <ListedMailboxWizard />
+      ) : (
+        <SendingDomainWizard mailbox={mailbox} onClose={() => {}} />
+      )}
     </QueryClientProvider>,
   );
   await screen.findByRole("region", { name: "1. Address and ownership" });
@@ -102,9 +114,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   useAuthStore.setState({ isAuthenticated: true });
   domains = [];
+  mailboxes = [MAILBOX];
   userEmail = "ann@acme.com";
   client.get.mockImplementation((url: string) => {
     if (url === "/organization-domains/") return Promise.resolve({ data: { results: domains } });
+    if (url === "/mailboxes/") return Promise.resolve({ data: mailboxes });
     if (url === "/users/me/") return Promise.resolve({ data: { id: "u1", email: userEmail } });
     return Promise.reject(new Error(`unexpected ${url}`));
   });
@@ -135,6 +149,36 @@ describe("SendingDomainWizard", () => {
     await waitFor(() => expect(client.get).toHaveBeenCalledWith("/users/me/"));
     expect(screen.getByRole("button", { name: "Verify with DNS" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Verify with my email" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["a failed domain", domain({ status: "failed", verified_at: null })],
+    ["a pending domain without a DNS challenge", domain({ status: "pending", verification_method: null, verification_token: "" })],
+  ])("restarts the DNS challenge of %s rather than adding it again", async (_, row) => {
+    domains = [row];
+    const user = await renderWizard();
+    client.post.mockResolvedValueOnce({ data: domain({ status: "pending" }) });
+
+    await user.click(screen.getByRole("button", { name: "Verify with DNS" }));
+
+    expect(client.post).toHaveBeenCalledWith("/organization-domains/d1/regenerate-token/");
+    expect(client.post).not.toHaveBeenCalledWith("/organization-domains/", expect.anything());
+  });
+
+  it("stays on step 1 while the TXT record isn't found", async () => {
+    domains = [domain({ status: "pending", verified_at: null })];
+    const user = await renderWizard();
+    client.post.mockResolvedValueOnce({
+      status: 202,
+      data: { detail: "Still pending.", code: "still_pending", domain: domains[0] },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Check now" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "TXT record not found yet. DNS can take a few minutes to propagate.",
+    );
+    expect(currentStep()).toHaveAccessibleName("1. Address and ownership");
   });
 
   it("shows a pending domain's TXT record, and moves on to step 2 once verified", async () => {
@@ -180,6 +224,39 @@ describe("SendingDomainWizard", () => {
     expect(currentStep()).toHaveAccessibleName("1. Address and ownership");
   });
 
+  it("saves the address, then moves on to step 2 once the mailbox has it", async () => {
+    domains = [domain({ domain: "acme.org", id: "d2" })];
+    const user = await renderWizard("listed");
+    client.patch.mockImplementationOnce(() => {
+      mailboxes = [{ ...MAILBOX, public_address: "help@acme.org" }];
+      return Promise.resolve({ data: mailboxes[0] });
+    });
+
+    const field = screen.getByLabelText("Address to send from");
+    await user.clear(field);
+    await user.type(field, "help@acme.org");
+    await user.click(screen.getByRole("button", { name: "Use this address" }));
+
+    await waitFor(() => expect(currentStep()).toHaveAccessibleName("2. DNS records"));
+    expect(client.patch).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("heading", { name: "2. DNS records" })).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Use this address" })).not.toBeInTheDocument();
+  });
+
+  it("warns before moving replies off a public address they go out from", async () => {
+    domains = [domain({ domain: "acme.org", id: "d2" })];
+    const user = await renderWizard({ ...MAILBOX, sends_from_public_address: true });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
+
+    const field = screen.getByLabelText("Address to send from");
+    await user.clear(field);
+    await user.type(field, "help@acme.org");
+    await user.click(screen.getByRole("button", { name: "Use this address" }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("acme-x7k2m9abcd@in.example.com"));
+    expect(client.patch).not.toHaveBeenCalled();
+  });
+
   it("gets the records, with a note on the one to merge and copy buttons", async () => {
     domains = [domain()];
     const user = await renderWizard();
@@ -193,7 +270,7 @@ describe("SendingDomainWizard", () => {
     expect(await screen.findByText("sd._domainkey.in.example.com")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Already have an SPF record at acme.com? Merge this into it rather than adding a second record.",
+        "Already have an SPF record at acme.com? Add the include: part to it rather than adding a second record.",
       ),
     ).toBeInTheDocument();
     expect(screen.getAllByText(/^Already have/)).toHaveLength(1);
@@ -225,6 +302,23 @@ describe("SendingDomainWizard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "acme.com's previous sending setup is still being removed.",
     );
+  });
+
+  it("shows why sending failed, and sets it up again", async () => {
+    domains = [
+      domain({
+        sending_status: "failed",
+        sending_dns_records: RECORDS,
+        sending_last_error: "DKIM record not found.",
+      }),
+    ];
+    const user = await renderWizard();
+    client.post.mockResolvedValueOnce({ data: domain({ sending_status: "pending" }) });
+
+    expect(screen.getByText("Last error: DKIM record not found.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Set up again" }));
+
+    expect(client.post).toHaveBeenCalledWith("/organization-domains/d1/sending/");
   });
 
   it("shows a verified domain's status, checks it, and stops sending once confirmed", async () => {
