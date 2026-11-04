@@ -360,6 +360,9 @@ def _reset(row: OrganizationDomain) -> None:
 def on_ownership_verified(row: OrganizationDomain) -> None:
     """The row's organization just proved it owns the domain: free it elsewhere.
 
+    Called inside the verification's transaction, once the row is saved
+    verified; does nothing unless it still is.
+
     Other organizations' mailboxes lose a public address on the domain, and
     their rows of it lose their sending state; a registration they still hold
     is removed in the background.
@@ -369,6 +372,10 @@ def on_ownership_verified(row: OrganizationDomain) -> None:
     if is_public_email_domain(row.domain):
         return  # Nobody owns it: nothing to take from anybody.
     with transaction.atomic():
+        if not OrganizationDomain.objects.filter(
+            pk=row.pk, status=Ownership.VERIFIED
+        ).exists():
+            return  # A stale call: the row lost the domain meanwhile.
         freed = (
             Mailbox.objects.filter(public_address__endswith=f"@{row.domain}")
             .exclude(organization_id=row.organization_id)

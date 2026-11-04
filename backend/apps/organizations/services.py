@@ -106,6 +106,10 @@ def try_admin_email_autoverify(
             "No admin in this organization has a verified email on this domain."
         )
 
+    # Every row of the domain, as the DNS path does: a concurrent verification
+    # elsewhere waits, and the freeing below sees settled rows.
+    list(OrganizationDomain.objects.select_for_update().filter(domain=domain))
+
     if is_domain_taken_elsewhere(domain, exclude_org=organization):
         raise DomainAlreadyClaimedError(
             "This domain is already verified by another organization. "
@@ -271,15 +275,16 @@ def apply_dns_verification_success(domain_obj: OrganizationDomain) -> None:
 
 
 def _after_ownership_verified(row: OrganizationDomain) -> None:
-    """Once committed, free the domain in other organizations (§7.1).
+    """Free the domain in other organizations (§7.1), in the same transaction.
 
-    Their public addresses on it and their sending registration go. Robust: a
-    failure there is logged, the verification stands.
+    Their public addresses on it and their sending state go with the
+    verification, or neither does. The caller holds every row of the domain
+    locked; provider removals are deferred to the commit.
     """
     # Imported here: the email channel depends on this app, not the reverse.
     from apps.email_channel.sending.services import on_ownership_verified
 
-    transaction.on_commit(lambda: on_ownership_verified(row), robust=True)
+    on_ownership_verified(row)
 
 
 # ---------------------------------------------------------------------------

@@ -348,6 +348,55 @@ class TestOwnershipVerified:
         squatter.refresh_from_db()
         assert squatter.public_address == ""
 
+    def test_freeing_is_part_of_the_verification_and_spares_the_winner(
+        self, provider, organization
+    ) -> None:
+        """No commit callback needed, and the winner's own setup stays."""
+        from apps.organizations import services as domains
+
+        previous = domain_row(
+            OrganizationFactory(), is_sending=True, sending_status=Sending.VERIFIED
+        )
+        squatter = MailboxFactory(
+            organization=previous.organization, public_address="support@acme.com"
+        )
+        # The winner had set sending up, then asked for a new token.
+        winner = registered_row(organization, status=OrganizationDomain.Status.PENDING)
+        winner.verification_method = OrganizationDomain.VerificationMethod.DNS_TXT
+        winner.verification_token = "token"
+        winner.save()
+
+        with mock.patch(
+            "apps.organizations.dns_verification.lookup_txt",
+            return_value=[winner.txt_record_value],
+        ):
+            assert domains.perform_dns_check(winner) is True
+
+        squatter.refresh_from_db()
+        previous.refresh_from_db()
+        winner.refresh_from_db()
+        assert squatter.public_address == ""
+        assert previous.sending_status == ""
+        assert winner.status == OrganizationDomain.Status.VERIFIED
+        assert winner.sending_status == Sending.PENDING
+        assert winner.sending_provider_ref == "ref-acme.com"
+
+    def test_a_stale_call_for_a_row_no_longer_verified_does_nothing(
+        self, provider, organization
+    ) -> None:
+        lost = domain_row(organization, status=OrganizationDomain.Status.FAILED)
+        other = registered_row(OrganizationFactory(), sending_status=Sending.VERIFIED)
+        theirs = MailboxFactory(
+            organization=other.organization, public_address="support@acme.com"
+        )
+
+        services.on_ownership_verified(lost)
+
+        theirs.refresh_from_db()
+        other.refresh_from_db()
+        assert theirs.public_address == "support@acme.com"
+        assert other.sending_status == Sending.VERIFIED
+
     def test_deleting_a_registered_domain_removes_its_registration(
         self, provider, organization, admin_client, django_capture_on_commit_callbacks
     ) -> None:
