@@ -360,6 +360,24 @@ class TestCheck:
         row.refresh_from_db()
         assert row.sending_dns_records == [services.ownership_record(row), *newer]
 
+    def test_the_ownership_record_is_refreshed_at_every_check(
+        self, provider, organization
+    ) -> None:
+        """The token changed since the records were stored (a new token asked
+        for, or given on enable): the next check shows the current one first,
+        even when the provider returns no records."""
+        stale = {"type": "TXT", "name": "_showdesk.acme.com", "value": "old"}
+        row = registered_row(organization)
+        OrganizationDomain.objects.filter(pk=row.pk).update(
+            sending_dns_records=[*RECORDS, stale]
+        )
+        row.refresh_from_db()
+
+        services.check_sending(row)
+
+        row.refresh_from_db()
+        assert row.sending_dns_records == [services.ownership_record(row), *RECORDS]
+
     def test_only_a_registered_owned_domain_is_checked(
         self, provider, organization
     ) -> None:

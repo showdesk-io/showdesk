@@ -346,9 +346,17 @@ def ownership_record(row: OrganizationDomain) -> dict[str, str]:
 
 
 def _with_ownership_record(row: OrganizationDomain, records) -> list[dict]:
-    """The records to publish: the row's `_showdesk` TXT, then the provider's."""
+    """The records to publish: the row's current `_showdesk` TXT, then the
+    provider's (any older `_showdesk` TXT dropped)."""
     own = ownership_record(row)
-    return [own, *(r for r in records if r != own)]
+    return [
+        own,
+        *(
+            r
+            for r in records
+            if not (r.get("type") == "TXT" and r.get("name") == own["name"])
+        ),
+    ]
 
 
 def _removal_pending_here(domain: str) -> bool:
@@ -476,17 +484,22 @@ def _with_ownership_check(row: OrganizationDomain, result: DomainCheck) -> Domai
     the same for every organization, and an admin's mailbox doesn't prove
     control of the DNS. A provider FAILED or UNKNOWN result stands; a TXT
     lookup that can't conclude is UNKNOWN; a missing TXT is PENDING.
+
+    The records come back with the row's current TXT first, refreshed even
+    when the provider returns none: the token may have changed since.
     """
-    records = result.records and _with_ownership_record(row, result.records)
+    records = _with_ownership_record(
+        row, result.records or row.sending_dns_records or []
+    )
     if result.status in (CheckStatus.FAILED, CheckStatus.UNKNOWN):
-        return DomainCheck(result.status, result.error, records or None)
+        return DomainCheck(result.status, result.error, records)
     found = dns_verification.lookup_txt(row.txt_record_name)
     if found is None:
         return DomainCheck(CheckStatus.UNKNOWN)
     if row.verification_token and row.txt_record_value in found:
-        return DomainCheck(result.status, result.error, records or None)
+        return DomainCheck(result.status, result.error, records)
     error = f"{OWNERSHIP_RECORD_MISSING} {result.error}".strip()
-    return DomainCheck(CheckStatus.PENDING, error, records or None)
+    return DomainCheck(CheckStatus.PENDING, error, records)
 
 
 def next_sending_status(
