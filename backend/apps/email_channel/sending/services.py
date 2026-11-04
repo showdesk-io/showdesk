@@ -15,6 +15,7 @@ and the sweep, and nobody registers that domain meanwhile.
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import timedelta
 
 from django.conf import settings
@@ -85,6 +86,11 @@ class NotRegisteredError(SendingError):
 
 class RemovalPendingError(SendingError):
     code = "removal_pending"
+    http_status = 409
+
+
+class ProviderConflictError(SendingError):
+    code = "provider_conflict"
     http_status = 409
 
 
@@ -169,13 +175,23 @@ def check_lock_key(row: OrganizationDomain) -> str:
     return f"email_channel:sending:check:{row.pk}"
 
 
-def _lock_domain(domain: str) -> None:
-    if not cache.add(enable_lock_key(domain), 1, ENABLE_LOCK_SECONDS):
+def _lock_domain(domain: str) -> str:
+    """Take the domain's lock; returns the token that releases it."""
+    token = secrets.token_hex(16)
+    if not cache.add(enable_lock_key(domain), token, ENABLE_LOCK_SECONDS):
         raise InProgressError(f"{domain} is being set up already. Try again shortly.")
+    return token
 
 
-def _unlock_domain(domain: str) -> None:
-    cache.delete(enable_lock_key(domain))
+def _unlock_domain(domain: str, token: str) -> None:
+    """Release the lock if it still is ours: it may have expired and been
+    taken by someone else. Between the get and the delete, it could still
+    expire and be taken: only after ENABLE_LOCK_SECONDS, an unlikely window
+    we accept rather than a Redis script.
+    """
+    key = enable_lock_key(domain)
+    if cache.get(key) == token:
+        cache.delete(key)
 
 
 def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
@@ -186,7 +202,7 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
     stored on the row (the row went, or changed hands, or the write failed)
     is recorded for removal.
     """
-    _lock_domain(row.domain)
+    token = _lock_domain(row.domain)
     try:
         row.refresh_from_db()
         if is_public_email_domain(row.domain):
@@ -207,7 +223,19 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
         try:
             registered = sender.register(row.domain)
         except AlreadyRegisteredError as exc:
-            raise _removal_pending(row.domain) from exc
+            if SendingRemoval.objects.filter(domain=row.domain).exists():
+                raise _removal_pending(row.domain) from exc
+            # Not ours to wait for: registered by hand, or a record lost.
+            logger.error(
+                "The sending provider already holds %s, with no removal of ours "
+                "pending: %s",
+                row.domain,
+                exc,
+            )
+            raise ProviderConflictError(
+                "This domain is already registered with the sending service. "
+                "Contact your Showdesk administrator."
+            ) from exc
         except SendingProviderError as exc:
             raise ProviderError(str(exc)) from exc
 
@@ -222,7 +250,7 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
         check_sending(locked, sender=sender)
         return locked
     finally:
-        _unlock_domain(row.domain)
+        _unlock_domain(row.domain, token)
 
 
 def _removal_pending(domain: str) -> RemovalPendingError:
@@ -253,7 +281,8 @@ def _replace_registration(row: OrganizationDomain) -> None:
 def _store_registration(row, registered) -> OrganizationDomain | None:
     """Store a new registration on the row, if it still is there and owned.
 
-    Otherwise record the registration for removal and return None.
+    Otherwise record the registration for removal and return None. A ref
+    the row got meanwhile is recorded for removal, never overwritten.
     """
     with transaction.atomic():
         locked = (
@@ -263,6 +292,8 @@ def _store_registration(row, registered) -> OrganizationDomain | None:
             # Deleted or transferred while registering: not ours to keep.
             queue_removal(record_removal(row.domain, registered.ref))
             return None
+        if locked.sending_provider_ref != registered.ref:
+            queue_removal(forget_registration(locked))
         locked.is_sending = True
         locked.sending_status = Sending.PENDING
         locked.sending_provider_ref = registered.ref
@@ -465,7 +496,7 @@ def disable_sending(row: OrganizationDomain) -> OrganizationDomain:
     The purpose (`is_sending`) stays. The removal is recorded with the reset,
     tried at once, and retried in the background if the provider failed.
     """
-    _lock_domain(row.domain)
+    token = _lock_domain(row.domain)
     try:
         with transaction.atomic():
             locked = OrganizationDomain.objects.select_for_update().get(pk=row.pk)
@@ -476,7 +507,7 @@ def disable_sending(row: OrganizationDomain) -> OrganizationDomain:
             remove_now(removal)
         return locked
     finally:
-        _unlock_domain(row.domain)
+        _unlock_domain(row.domain, token)
 
 
 def _reset(row: OrganizationDomain) -> None:

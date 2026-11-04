@@ -127,15 +127,38 @@ class TestEnable:
             services.enable_sending(row)
         assert provider.calls == []
 
-        # The provider still knowing the name is the same answer.
+    def test_a_name_the_provider_already_holds(
+        self, provider, organization, caplog
+    ) -> None:
+        row = domain_row(organization)
+
+        def taken_while_removing(domain):
+            SendingRemoval.objects.get_or_create(domain=domain, ref="ref-old")
+            raise AlreadyRegisteredError("taken")
+
+        with (
+            mock.patch.object(provider, "register", side_effect=taken_while_removing),
+            pytest.raises(services.RemovalPendingError),
+        ):
+            services.enable_sending(row)
+
+        # Without any removal of ours, someone else holds it: an operator's job.
         SendingRemoval.objects.all().delete()
         with (
             mock.patch.object(
                 provider, "register", side_effect=AlreadyRegisteredError("taken")
             ),
-            pytest.raises(services.RemovalPendingError),
+            pytest.raises(services.ProviderConflictError) as refused,
         ):
             services.enable_sending(row)
+        assert (refused.value.code, refused.value.http_status) == (
+            "provider_conflict",
+            409,
+        )
+        assert any(
+            r.levelname == "ERROR" and "acme.com" in r.getMessage()
+            for r in caplog.records
+        )
 
     def test_a_registration_that_is_not_stored_is_removed(
         self, provider, organization
@@ -158,6 +181,26 @@ class TestEnable:
         ):
             services.enable_sending(row)
         assert SendingRemoval.objects.filter(ref="ref-acme.com").exists()
+
+    def test_what_happened_meanwhile_is_respected(self, provider, organization) -> None:
+        """A ref stored meanwhile is removed, a lock taken meanwhile kept."""
+        row = domain_row(organization)
+        key = services.enable_lock_key("acme.com")
+
+        def meanwhile():
+            OrganizationDomain.objects.filter(pk=row.pk).update(
+                sending_provider_ref="ref-meanwhile"
+            )
+            cache.set(key, "someone else's", 60)  # Ours expired, theirs began.
+
+        provider.on_register = meanwhile
+
+        services.enable_sending(row)
+
+        row.refresh_from_db()
+        assert row.sending_provider_ref == "ref-acme.com"
+        assert SendingRemoval.objects.filter(ref="ref-meanwhile").exists()
+        assert cache.get(key) == "someone else's"
 
     def test_a_provider_refusal_stores_nothing(self, provider, organization) -> None:
         provider.fail = {"register"}
