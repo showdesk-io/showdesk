@@ -686,6 +686,10 @@ class TestOwnershipTransfer:
         # Loser admins were emailed about the loss.
         recipients = [r for m in mail.outbox for r in m.to]
         assert loser_admin.email in recipients
+        # It says what stops, for every purpose the domain served.
+        notice = next(m for m in mail.outbox if loser_admin.email in m.to).body
+        assert "public addresses" in notice
+        assert "inbound" in notice
 
         # Sanity: still only one verified row per domain globally.
         assert (
