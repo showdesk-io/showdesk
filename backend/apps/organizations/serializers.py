@@ -10,6 +10,7 @@ from apps.core.serializers import (
     OrgScopedPrimaryKeyRelatedField,
     read_only_organization_field,
 )
+from apps.email_channel.sending.providers import sending_enabled
 
 from .models import (
     Organization,
@@ -340,7 +341,7 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
         return fields
 
     def validate_is_sending(self, value: bool) -> bool:
-        if value and settings.SENDING_DOMAIN_PROVIDER == "none":
+        if value and not sending_enabled():
             raise serializers.ValidationError(
                 "Sending from your own domain is not available on this server."
             )

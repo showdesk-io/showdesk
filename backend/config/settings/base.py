@@ -443,6 +443,16 @@ CONVERSATION_LINK_MAX_AGE_DAYS = config(
 SENDING_DOMAIN_PROVIDER = (
     config("SENDING_DOMAIN_PROVIDER", default="none").strip().lower()
 )
+# manual: the SPF include of the sending service, and the DKIM selector of the
+# one key it signs every customer domain with, published by the operator at
+# <selector>._domainkey.<INBOUND_EMAIL_DOMAIN>.
+SENDING_DOMAIN_SPF_INCLUDE = config("SENDING_DOMAIN_SPF_INCLUDE", default="")
+SENDING_DOMAIN_DKIM_SELECTOR = config("SENDING_DOMAIN_DKIM_SELECTOR", default="")
+# scaleway_tem: an API secret key allowed to manage Transactional Email in the
+# project the domains are registered in, and that project's region.
+SCW_TEM_SECRET_KEY = config("SCW_TEM_SECRET_KEY", default="")
+SCW_TEM_PROJECT_ID = config("SCW_TEM_PROJECT_ID", default="")
+SCW_TEM_REGION = config("SCW_TEM_REGION", default="fr-par")
 
 # Frontend URL for links in emails
 SITE_URL = config("SITE_URL", default="http://localhost")
