@@ -32,7 +32,6 @@ export interface WidgetState {
   isConnected: boolean;
   isLoading: boolean;
   contactNudgeDismissed: boolean;
-  contactNudgeShown: boolean;
 
   /** Unread badge count (agent replies while modal closed). */
   unreadCount: number;
@@ -64,7 +63,6 @@ export function createWidgetStore(): WidgetStore {
     isConnected: false,
     isLoading: false,
     contactNudgeDismissed: false,
-    contactNudgeShown: false,
     unreadCount: 0,
     emailCodeSentAt: null,
   };

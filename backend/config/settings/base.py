@@ -219,7 +219,17 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [config("REDIS_URL", default="redis://localhost:6379/0")],
+            # A consumer waits for messages with a blocking pop of 5 s
+            # (RedisChannelLayer.brpop_timeout), and redis-py's default socket
+            # timeout is 5 s too: an idle consumer's read would time out on the
+            # client side and take its socket down. A dead connection is still
+            # noticed, after this timeout.
+            "hosts": [
+                {
+                    "address": config("REDIS_URL", default="redis://localhost:6379/0"),
+                    "socket_timeout": 15,
+                }
+            ],
         },
     },
 }

@@ -75,7 +75,6 @@ const EMPTY_VIEW: Partial<WidgetState> = {
   unreadCount: 0,
   isLoading: false,
   contactNudgeDismissed: false,
-  contactNudgeShown: false,
   emailCodeSentAt: null,
 };
 
@@ -258,10 +257,6 @@ async function runSession(config: ShowdeskConfig, run: number): Promise<void> {
       // Silent — history is a nice-to-have on boot; user can still open the panel.
     }
 
-    // The history tab shows what it fetched when rendered, not the store.
-    if (changed && s.state.activeTab === "history") {
-      renderActiveTab(config);
-    }
   } catch (err) {
     if (run === sessionRun) {
       lastIdentitySent = null;
@@ -506,8 +501,8 @@ export function createModal(config: ShowdeskConfig): void {
   const tabBar = document.createElement("div");
   tabBar.className = "sd-tab-bar";
 
-  const chatTab = createTabBtn("chat", "💬 Chat", s, config);
-  const historyTab = createTabBtn("history", "📋 History", s, config);
+  const chatTab = createTabBtn("chat", "💬 Chat", s);
+  const historyTab = createTabBtn("history", "📋 History", s);
 
   tabBar.appendChild(chatTab);
   tabBar.appendChild(historyTab);
@@ -570,20 +565,13 @@ function createTabBtn(
   tab: WidgetTab,
   label: string,
   s: WidgetStore,
-  config: ShowdeskConfig,
 ): HTMLElement {
   const el = document.createElement("button");
   el.className = `sd-tab ${s.state.activeTab === tab ? "sd-tab-active" : ""}`;
   el.textContent = label;
   el.onclick = () => {
-    if (s.state.activeTab === tab) return;
-    s.update({ activeTab: tab });
-    const content = currentPanel?.querySelector(
-      ".sd-panel-content",
-    ) as HTMLElement | null;
-    if (content) {
-      renderTab(content, s, config);
-    }
+    // The panel's subscription renders the tab: once, whatever changed it.
+    if (s.state.activeTab !== tab) s.update({ activeTab: tab });
   };
   return el;
 }

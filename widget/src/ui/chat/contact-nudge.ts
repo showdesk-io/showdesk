@@ -1,7 +1,7 @@
 /**
  * Contact Nudge — Gentle inline prompt for anonymous users to add their info.
  *
- * Shown once after the first message is sent.
+ * Shown after the visitor's first message, until they save or dismiss it.
  */
 
 import type { WidgetStore } from "../../state/widget-state";

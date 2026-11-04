@@ -37,6 +37,10 @@ import {
 } from "../../recorder/popup-launcher";
 
 let messageListEl: HTMLElement | null = null;
+/** The contact nudge on screen, if any. */
+let nudgeEl: HTMLElement | null = null;
+/** The subscription of the view on screen: a view rendered again drops the previous one. */
+let unsubscribeView: (() => void) | null = null;
 let requestSession: () => Promise<WidgetSession | null> = async () => null;
 
 export function renderChatView(
@@ -48,6 +52,8 @@ export function renderChatView(
 ): void {
   container.innerHTML = "";
   requestSession = ensureSession;
+  unsubscribeView?.();
+  nudgeEl = null;
 
   // Message list (scrollable)
   messageListEl = document.createElement("div");
@@ -56,28 +62,7 @@ export function renderChatView(
 
   renderMessages(store, config);
 
-  // Contact nudge (after first message, if anonymous and not dismissed)
-  if (shouldShowNudge(store, config)) {
-    const nudge = renderContactNudge(store, (name, email) => {
-      const session = store.state.session;
-      if (session) {
-        updateSessionContact(config, session.sessionId, name, email).catch(
-          console.error,
-        );
-        // A new address has no proof yet; the same one keeps what it had.
-        const emailProofOffered =
-          email === session.email ? session.emailProofOffered : Boolean(email.trim());
-        store.update({
-          session: { ...session, name, email, emailProofOffered },
-          // A code asked for the previous email isn't one to enter now.
-          ...(email === session.email ? {} : { emailCodeSentAt: null }),
-        });
-      }
-    });
-    messageListEl.appendChild(nudge);
-    store.update({ contactNudgeShown: true });
-    scrollToBottom();
-  }
+  syncContactNudge(store, config);
 
   // Message input
   const input = renderMessageInput({
@@ -111,8 +96,9 @@ export function renderChatView(
   showReadOnly();
 
   // Subscribe to state changes
-  store.subscribe(() => {
+  unsubscribeView = store.subscribe(() => {
     renderMessages(store, config);
+    syncContactNudge(store, config);
     showReadOnly();
     scrollToBottom();
   });
@@ -233,7 +219,8 @@ function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
     const before = next
       ? messageListEl.querySelector(`[data-message-id="${CSS.escape(next.id)}"]`)
       : null;
-    messageListEl.insertBefore(bubble, before);
+    // The contact nudge stays below the messages.
+    messageListEl.insertBefore(bubble, before ?? nudgeEl);
   }
 
   scrollToBottom();
@@ -377,11 +364,65 @@ function scrollToBottom(): void {
   }
 }
 
+/**
+ * The contact nudge is offered once the visitor has written, until they save or dismiss
+ * it, and only while there's no email to reach them at.
+ */
 function shouldShowNudge(store: WidgetStore, config: ShowdeskConfig): boolean {
-  if (store.state.contactNudgeDismissed || store.state.contactNudgeShown) return false;
-  if (config.user?.name && config.user?.email) return false;
-  if (store.state.session?.name && store.state.session?.email) return false;
+  if (store.state.contactNudgeDismissed) return false;
+  if (config.user?.email || store.state.session?.email) return false;
   return store.state.messages.some((m) => m.senderType === "user");
+}
+
+/** Put the contact nudge on screen, or take it off, as the state now says. */
+function syncContactNudge(store: WidgetStore, config: ShowdeskConfig): void {
+  if (!messageListEl) return;
+  const show = shouldShowNudge(store, config);
+  if (!show) {
+    nudgeEl?.remove();
+    nudgeEl = null;
+    return;
+  }
+  if (nudgeEl?.parentElement === messageListEl) return;
+  nudgeEl = renderContactNudge(store, (name, email) =>
+    saveContact(name, email, store, config),
+  );
+  messageListEl.appendChild(nudgeEl);
+  scrollToBottom();
+}
+
+/**
+ * Give the session the contact typed in the nudge. Whether the history then offers a
+ * code for the email is the backend's to say: a new address has no proof yet, and
+ * nothing to offer until the answer says so.
+ */
+function saveContact(
+  name: string,
+  email: string,
+  store: WidgetStore,
+  config: ShowdeskConfig,
+): void {
+  const session = store.state.session;
+  if (!session) return;
+  const sameEmail = email === session.email;
+  store.update({
+    session: {
+      ...session,
+      name,
+      email,
+      emailProofOffered: sameEmail ? session.emailProofOffered : false,
+    },
+    // A code asked for the previous email isn't one to enter now.
+    ...(sameEmail ? {} : { emailCodeSentAt: null }),
+  });
+  updateSessionContact(config, session.sessionId, name, email)
+    .then((saved) => {
+      const current = store.state.session;
+      // Another session, or another contact typed since: not this answer's to say.
+      if (current?.sessionId !== saved.sessionId || current.email !== email) return;
+      store.update({ session: { ...current, emailProofOffered: saved.emailProofOffered } });
+    })
+    .catch(console.error);
 }
 
 /** On its way if there's a session, or else once there is one: false if there's none to be had. */
