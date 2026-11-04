@@ -138,6 +138,7 @@ def try_admin_email_autoverify(
             "last_check_at": timezone.now(),
         },
     )
+    _after_ownership_verified(row)
     logger.info(
         "Domain %s auto-verified for org %s via admin_email",
         domain,
@@ -261,12 +262,25 @@ def apply_dns_verification_success(domain_obj: OrganizationDomain) -> None:
             "verification_method",
         ]
     )
+    _after_ownership_verified(domain_obj)
     _notify_domain_verified(domain_obj)
     logger.info(
         "Domain %s verified for %s via DNS",
         domain_obj.domain,
         domain_obj.organization.slug,
     )
+
+
+def _after_ownership_verified(row: OrganizationDomain) -> None:
+    """Once committed, free the domain in other organizations (§7.1).
+
+    Their public addresses on it and their sending registration go. Robust: a
+    failure there is logged, the verification stands.
+    """
+    # Imported here: the email channel depends on this app, not the reverse.
+    from apps.email_channel.sending.services import on_ownership_verified
+
+    transaction.on_commit(lambda: on_ownership_verified(row), robust=True)
 
 
 # ---------------------------------------------------------------------------

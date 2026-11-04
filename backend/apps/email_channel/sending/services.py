@@ -310,6 +310,48 @@ def _reset(row: OrganizationDomain) -> None:
     row.sending_last_error = ""
 
 
+def on_ownership_verified(row: OrganizationDomain) -> None:
+    """The row's organization just proved it owns the domain: free it elsewhere.
+
+    Other organizations' mailboxes lose a public address on the domain, and
+    their rows of it lose their sending state; a registration they still hold
+    is removed in the background.
+    """
+    from apps.email_channel.models import Mailbox
+
+    with transaction.atomic():
+        freed = (
+            Mailbox.objects.filter(public_address__endswith=f"@{row.domain}")
+            .exclude(organization_id=row.organization_id)
+            .update(public_address="", updated_at=timezone.now())
+        )
+        if freed:
+            logger.info(
+                "Freed %d public address(es) on %s, now verified by %s",
+                freed,
+                row.domain,
+                row.organization_id,
+            )
+        others = (
+            OrganizationDomain.objects.select_for_update()
+            .filter(domain=row.domain)
+            .exclude(pk=row.pk)
+        )
+        for other in others:
+            if other.sending_status == Sending.NONE and not other.sending_provider_ref:
+                continue
+            _reset(other)
+            other.save()
+            if other.sending_provider_ref:
+                queue_removal(other.sending_provider_ref, other.pk)
+
+
+def on_domain_deleted(row: OrganizationDomain) -> None:
+    """A row is being deleted: remove its registration, if it holds one."""
+    if row.sending_provider_ref:
+        queue_removal(row.sending_provider_ref)
+
+
 def queue_removal(ref: str, row_id=None) -> None:
     """Remove a registration in the background, once the transaction commits."""
     from apps.email_channel.tasks import remove_sending_registration

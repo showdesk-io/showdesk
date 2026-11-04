@@ -9,6 +9,7 @@ from rest_framework.test import APIClient
 
 from apps.email_channel.models import InboundEmail, Mailbox
 from apps.email_channel.serializers import PUBLIC_ADDRESS_TAKEN, MailboxSerializer
+from apps.organizations.models import OrganizationDomain
 from apps.tickets.models import TicketMessage
 from tests.email_channel.mails import INBOUND_DOMAIN
 from tests.factories import (
@@ -53,6 +54,16 @@ def stranger():
     return client_for(AdminFactory(organization=OrganizationFactory()))
 
 
+def verified_domain(organization, domain="acme.example.com", **fields):
+    return OrganizationDomain.objects.create(
+        organization=organization,
+        domain=domain,
+        is_branding=True,
+        status=fields.pop("status", OrganizationDomain.Status.VERIFIED),
+        **fields,
+    )
+
+
 def _emailed_message(organization, raw=RAW) -> TicketMessage:
     ticket = TicketFactory(organization=organization, requester=None)
     message = TicketMessageFactory(
@@ -82,6 +93,7 @@ class TestMailboxes:
         self, authenticated_client, admin_client, organization
     ):
         team = TeamFactory(organization=organization)
+        verified_domain(organization)
 
         refused = authenticated_client.post(
             "/api/v1/mailboxes/", {"name": "Support"}, format="json"
@@ -184,8 +196,9 @@ class TestMailboxes:
         assert unknown.status_code == 400
 
     def test_an_address_taken_after_validation_is_the_same_400(
-        self, admin_client, mailbox
+        self, admin_client, mailbox, organization
     ):
+        verified_domain(organization)
         validate = MailboxSerializer.validate
 
         def validate_then_lose_the_race(serializer, attrs):
@@ -204,6 +217,58 @@ class TestMailboxes:
 
         assert response.status_code == 400
         assert response.data["public_address"] == [PUBLIC_ADDRESS_TAKEN]
+
+    def test_a_public_address_needs_its_domain_verified(
+        self, admin_client, mailbox, organization
+    ):
+        url = f"/api/v1/mailboxes/{mailbox.id}/"
+        verified_domain(
+            organization,
+            "pending.example.com",
+            status=OrganizationDomain.Status.PENDING,
+        )
+        verified_domain(OrganizationFactory(), "theirs.example.com")
+        verified_domain(organization)
+
+        pending = admin_client.patch(
+            url, {"public_address": "help@pending.example.com"}, format="json"
+        )
+        theirs = admin_client.patch(
+            url, {"public_address": "help@theirs.example.com"}, format="json"
+        )
+        created = admin_client.post(
+            "/api/v1/mailboxes/",
+            {"name": "Sales", "public_address": "sales@theirs.example.com"},
+            format="json",
+        )
+        ours = admin_client.patch(
+            url, {"public_address": "Help@Acme.example.com"}, format="json"
+        )
+
+        assert pending.status_code == 400
+        assert pending.data["public_address"] == [
+            "Verify pending.example.com for your organization first."
+        ]
+        assert theirs.status_code == 400
+        assert created.status_code == 400
+        assert "public_address" in created.data
+        assert ours.status_code == 200, ours.data
+        assert ours.data["public_address"] == "help@acme.example.com"
+
+    def test_an_unchanged_legacy_public_address_passes(self, admin_client, mailbox):
+        mailbox.public_address = "support@legacy.example.com"
+        mailbox.save()
+        url = f"/api/v1/mailboxes/{mailbox.id}/"
+
+        renamed = admin_client.patch(url, {"name": "Help"}, format="json")
+        same = admin_client.patch(
+            url, {"public_address": "SUPPORT@legacy.example.com"}, format="json"
+        )
+        cleared = admin_client.patch(url, {"public_address": ""}, format="json")
+
+        assert renamed.status_code == 200, renamed.data
+        assert same.status_code == 200, same.data
+        assert cleared.status_code == 200, cleared.data
 
     def test_mailboxes_are_not_deleted_but_deactivated(self, admin_client, mailbox):
         # Deleting one would delete its log of received mails with it.

@@ -9,11 +9,12 @@ from rest_framework import serializers
 from apps.core.permissions import is_org_admin
 from apps.core.serializers import OrgScopedPrimaryKeyRelatedField
 from apps.email_channel.models import InboundEmail, Mailbox
-from apps.organizations.models import Team
+from apps.organizations.models import OrganizationDomain, Team
 from apps.tickets.models import TicketMessage
 from apps.tickets.serializers import WidgetMessageSerializer
 
 PUBLIC_ADDRESS_TAKEN = "Another mailbox already uses this address."
+DOMAIN_NOT_VERIFIED = "Verify {domain} for your organization first."
 
 
 class MailboxSerializer(serializers.ModelSerializer):
@@ -70,6 +71,7 @@ class MailboxSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(exc.message_dict) from exc
         if "public_address" in attrs:
             attrs["public_address"] = candidate.public_address
+            self._check_domain_owned(candidate)
             if candidate.public_address and (
                 Mailbox.objects.filter(public_address=candidate.public_address)
                 .exclude(pk=candidate.pk)
@@ -79,6 +81,27 @@ class MailboxSerializer(serializers.ModelSerializer):
                     {"public_address": [PUBLIC_ADDRESS_TAKEN]}
                 )
         return attrs
+
+    def _check_domain_owned(self, candidate: Mailbox) -> None:
+        """A new public address needs its domain verified by the organization.
+
+        Nobody may reserve an address on a domain they haven't proven theirs.
+        An address set before this rule, left unchanged, stays.
+        """
+        address = candidate.public_address
+        if not address or (
+            self.instance is not None and address == self.instance.public_address
+        ):
+            return
+        domain = address.rpartition("@")[2]
+        if not OrganizationDomain.objects.filter(
+            organization_id=candidate.organization_id,
+            domain=domain,
+            status=OrganizationDomain.Status.VERIFIED,
+        ).exists():
+            raise serializers.ValidationError(
+                {"public_address": [DOMAIN_NOT_VERIFIED.format(domain=domain)]}
+            )
 
     def to_representation(self, instance: Mailbox) -> dict:
         data = super().to_representation(instance)

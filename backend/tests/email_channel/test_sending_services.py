@@ -20,7 +20,7 @@ from apps.email_channel.sending.providers import (
     SendingProviderError,
 )
 from apps.organizations.models import OrganizationDomain
-from tests.factories import OrganizationFactory
+from tests.factories import AdminFactory, MailboxFactory, OrganizationFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -288,3 +288,78 @@ class TestRemovalTask:
         ):
             remove_sending_registration("ref-acme.com")
         assert retry.call_args.kwargs["countdown"] > 0
+
+
+class TestOwnershipVerified:
+    def test_a_dns_win_frees_the_previous_owner(
+        self, provider, organization, django_capture_on_commit_callbacks
+    ) -> None:
+        from apps.organizations import services as domains
+
+        previous = registered_row(
+            OrganizationFactory(), sending_status=Sending.VERIFIED
+        )
+        theirs = MailboxFactory(
+            organization=previous.organization, public_address="support@acme.com"
+        )
+        elsewhere = MailboxFactory(
+            organization=previous.organization, public_address="help@other.com"
+        )
+        challenge = domains.start_dns_challenge(
+            organization=organization, domain="acme.com", is_branding=True
+        )
+
+        with (
+            mock.patch(
+                "apps.organizations.dns_verification.lookup_txt",
+                return_value=[challenge.txt_record_value],
+            ),
+            mock.patch(
+                "apps.email_channel.tasks.remove_sending_registration.delay"
+            ) as delay,
+            django_capture_on_commit_callbacks(execute=True),
+        ):
+            assert domains.perform_dns_check(challenge) is True
+
+        theirs.refresh_from_db()
+        elsewhere.refresh_from_db()
+        previous.refresh_from_db()
+        assert theirs.public_address == ""
+        assert elsewhere.public_address == "help@other.com"
+        assert previous.status == OrganizationDomain.Status.FAILED
+        assert previous.sending_status == ""
+        assert previous.is_sending is True
+        assert previous.sending_provider_ref == "ref-acme.com"
+        delay.assert_called_once_with("ref-acme.com", str(previous.pk))
+
+    def test_an_admin_email_verification_frees_a_squatter(
+        self, provider, organization, django_capture_on_commit_callbacks
+    ) -> None:
+        from apps.organizations import services as domains
+
+        squatter = MailboxFactory(public_address="support@acme.com")
+        AdminFactory(organization=organization, email="ceo@acme.com", is_verified=True)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            domains.try_admin_email_autoverify(
+                organization=organization, domain="acme.com", is_email_routing=True
+            )
+
+        squatter.refresh_from_db()
+        assert squatter.public_address == ""
+
+    def test_deleting_a_registered_domain_removes_its_registration(
+        self, provider, organization, admin_client, django_capture_on_commit_callbacks
+    ) -> None:
+        row = registered_row(organization, sending_status=Sending.VERIFIED)
+
+        with (
+            mock.patch(
+                "apps.email_channel.tasks.remove_sending_registration.delay"
+            ) as delay,
+            django_capture_on_commit_callbacks(execute=True),
+        ):
+            response = admin_client.delete(f"/api/v1/organization-domains/{row.id}/")
+
+        assert response.status_code == 204
+        delay.assert_called_once_with("ref-acme.com", None)
