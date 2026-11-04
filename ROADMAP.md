@@ -760,7 +760,6 @@ PR 2 (`feat/email-channel`, 2026-11-03): receiving, threading, repliable replies
 - [x] Model refactor decision: keep `Ticket → TicketMessage` + `channel`/`external_id` on messages (decided 2026-10-29); revisit when designing a third channel
 - [ ] PR 3: send from the organization's own domain (`SendingDomainProvider` adapter, DNS wizard, periodic checks)
 - [ ] Security follow-up: widget upload routes accept any ticket id of the organization with the public token alone (`tickets/widget_upload_attachment/`, `videos/widget_upload/`)
-- [ ] Ops follow-up: WebSocket consumers crash and reconnect periodically (about 70 times in 25 minutes in an end-to-end run). redis-py 8.1's asyncio client times out a blocking pop after about 5 s, the same timeout `channels_redis` uses for its receive, so the receive raises instead of returning empty. Needs its own fix (a socket timeout above the blocking timeout, or a `channels_redis`/redis-py version pairing that agrees)
 
 ### MCP server -- see `docs/brainstorm/mcp-server.md`
 
