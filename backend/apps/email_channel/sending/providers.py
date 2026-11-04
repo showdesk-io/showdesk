@@ -105,19 +105,23 @@ def sending_enabled() -> bool:
     return settings.SENDING_DOMAIN_PROVIDER != "none"
 
 
-def get_provider() -> SendingDomainProvider:
-    """The configured provider. ImproperlyConfigured if its settings are missing."""
-    name = settings.SENDING_DOMAIN_PROVIDER
+def provider_class(name: str) -> type[SendingDomainProvider]:
+    """The class of the provider called `name`. ImproperlyConfigured if unknown."""
     if name == "none":
-        return NoProvider()
+        return NoProvider
     if name == "manual":
         from .manual import ManualProvider
 
-        return ManualProvider()
+        return ManualProvider
     if name == "scaleway_tem":
         from .scaleway_tem import ScalewayTEMProvider
 
-        return ScalewayTEMProvider()
+        return ScalewayTEMProvider
     raise ImproperlyConfigured(
         f"Unknown SENDING_DOMAIN_PROVIDER {name!r}: use none, manual or scaleway_tem."
     )
+
+
+def get_provider() -> SendingDomainProvider:
+    """The configured provider. ImproperlyConfigured if its settings are missing."""
+    return provider_class(settings.SENDING_DOMAIN_PROVIDER)()

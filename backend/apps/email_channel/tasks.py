@@ -262,9 +262,11 @@ def check_sending_domains() -> int:
     """Check the sending domains due for it, each on its own (§7.3).
 
     Pending ones every run; verified ones once a day, to notice a regression;
-    failed ones only when an admin asks. Nothing without a provider. Returns
-    how many were checked.
+    failed ones only when an admin asks. Ones set up under another provider
+    are reset first. Nothing without a provider. Returns how many were
+    checked.
     """
+    from django.conf import settings
     from django.db.models import Q
 
     from apps.email_channel.sending.providers import (
@@ -274,6 +276,7 @@ def check_sending_domains() -> int:
     from apps.email_channel.sending.services import (
         SENDING_RECHECK_HOURS,
         check_sending,
+        drop_switched_registration,
         provider,
     )
     from apps.organizations.models import OrganizationDomain
@@ -284,6 +287,17 @@ def check_sending_domains() -> int:
         sender = provider()
     except SendingProviderError:
         return 0  # Logged by `provider()`.
+    # Set up under another provider: they fall back, to be set up again.
+    switched = (
+        OrganizationDomain.objects.exclude(sending_provider_ref="")
+        .exclude(sending_provider="")
+        .exclude(sending_provider=settings.SENDING_DOMAIN_PROVIDER)
+    )
+    for row in list(switched):
+        try:
+            drop_switched_registration(row)
+        except Exception:
+            logger.exception("Resetting sending domain %s failed", row.domain)
     Sending = OrganizationDomain.SendingStatus
     recheck_before = timezone.now() - timedelta(hours=SENDING_RECHECK_HOURS)
     due = (

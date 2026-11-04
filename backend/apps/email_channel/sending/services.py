@@ -41,6 +41,7 @@ from .providers import (
     SendingDomainProvider,
     SendingProviderError,
     get_provider,
+    provider_class,
     sending_enabled,
 )
 
@@ -113,18 +114,16 @@ class ProviderError(SendingError):
 def sendable_domains(organization_id) -> set[str]:
     """The organization's domains mail may go out from now (§7.1).
 
-    Owned, and verified by the sending provider. None while it is `none`.
-    A webmail row verified before those were refused never counts.
+    Owned, and verified by the configured sending provider. None while it is
+    `none`. A webmail row verified before those were refused never counts.
     """
     if not sending_enabled():
         return set()
     return {
         domain
-        for domain in OrganizationDomain.objects.filter(
-            organization_id=organization_id,
-            status=Ownership.VERIFIED,
-            sending_status=Sending.VERIFIED,
-        ).values_list("domain", flat=True)
+        for domain in _sendable_rows()
+        .filter(organization_id=organization_id)
+        .values_list("domain", flat=True)
         if not is_public_email_domain(domain)
     }
 
@@ -143,15 +142,82 @@ def sendable_address(mailbox, domains: set[str] | None = None) -> str | None:
     if is_public_email_domain(domain):
         return None  # Nobody's, even if verified before that was refused.
     if domains is None:
-        sendable = OrganizationDomain.objects.filter(
-            organization_id=mailbox.organization_id,
-            domain=domain,
-            status=Ownership.VERIFIED,
-            sending_status=Sending.VERIFIED,
-        ).exists()
+        sendable = (
+            _sendable_rows()
+            .filter(organization_id=mailbox.organization_id, domain=domain)
+            .exists()
+        )
     else:
         sendable = domain in domains
     return address if sendable else None
+
+
+def _sendable_rows():
+    """Owned rows verified by the configured provider.
+
+    A blank `sending_provider` predates the field: the configured one's.
+    """
+    return OrganizationDomain.objects.filter(
+        status=Ownership.VERIFIED,
+        sending_status=Sending.VERIFIED,
+        sending_provider__in=("", settings.SENDING_DOMAIN_PROVIDER),
+    )
+
+
+def provider_switched(row: OrganizationDomain) -> bool:
+    """Whether the row's registration was made by another provider."""
+    return bool(
+        row.sending_provider_ref
+        and row.sending_provider
+        and row.sending_provider != settings.SENDING_DOMAIN_PROVIDER
+    )
+
+
+def drop_switched_registration(row: OrganizationDomain) -> bool:
+    """Reset a row registered by another provider than the configured one.
+
+    Its records were that provider's: the domain falls back, and the admins
+    set it up again (no mail: nothing they did changed). The registration
+    is recorded for removal by the provider that made it, if it has one to
+    remove; the record waits until that provider is configured again.
+    Returns whether the row was reset; `row` is updated in place.
+    """
+    if not provider_switched(row):
+        return False
+    with transaction.atomic():
+        locked = (
+            OrganizationDomain.objects.select_for_update().filter(pk=row.pk).first()
+        )
+        if locked is None or not provider_switched(locked):
+            return False
+        made_by = locked.sending_provider
+        removal = forget_registration(locked)
+        _reset(locked)
+        locked.save()
+    if removal is not None:
+        logger.info(
+            "Sending registration %s of %s waits for %s to be configured again.",
+            removal.ref,
+            removal.domain,
+            made_by,
+        )
+    logger.info(
+        "Sending domain %s was set up with %s, not %s: reset.",
+        row.domain,
+        made_by,
+        settings.SENDING_DOMAIN_PROVIDER,
+    )
+    for field in (
+        "sending_status",
+        "sending_provider_ref",
+        "sending_provider",
+        "sending_dns_records",
+        "sending_requested_at",
+        "sending_last_checked_at",
+        "sending_last_error",
+    ):
+        setattr(row, field, getattr(locked, field))
+    return True
 
 
 def provider() -> SendingDomainProvider:
@@ -211,6 +277,7 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
         if row.status != Ownership.VERIFIED:
             raise NotOwnedError(f"Verify {row.domain} for your organization first.")
         _ensure_ownership_token(row)
+        drop_switched_registration(row)
         if row.sending_status in (Sending.PENDING, Sending.VERIFIED):
             return row
         try:
@@ -325,6 +392,7 @@ def _store_registration(row, registered) -> OrganizationDomain | None:
         locked.is_sending = True
         locked.sending_status = Sending.PENDING
         locked.sending_provider_ref = registered.ref
+        locked.sending_provider = settings.SENDING_DOMAIN_PROVIDER
         locked.sending_dns_records = _with_ownership_record(locked, registered.records)
         locked.sending_requested_at = timezone.now()
         locked.sending_last_checked_at = None
@@ -336,6 +404,8 @@ def _store_registration(row, registered) -> OrganizationDomain | None:
 def check_now(row: OrganizationDomain) -> OrganizationDomain:
     """An admin's "Check now": at most once per CHECK_NOW_SECONDS per domain."""
     _require_checkable(row)
+    if drop_switched_registration(row):
+        return row
     if not cache.add(check_lock_key(row), 1, CHECK_NOW_SECONDS):
         raise TooSoonError(
             "This domain was checked a moment ago. Try again in a few seconds."
@@ -644,28 +714,33 @@ def forget_registration(row: OrganizationDomain) -> SendingRemoval | None:
     ref = row.sending_provider_ref
     if not ref:
         return None
+    made_by = row.sending_provider
     row.sending_provider_ref = ""
-    return record_removal(row.domain, ref)
+    row.sending_provider = ""
+    return record_removal(row.domain, ref, made_by)
 
 
-def record_removal(domain: str, ref: str) -> SendingRemoval | None:
+def record_removal(domain: str, ref: str, made_by: str = "") -> SendingRemoval | None:
     """Record a registration to remove; one record per ref.
 
-    None when the configured provider's registrations exist nowhere but on
-    our row (`manual`): nothing to remove, nothing to wait for. Recorded
-    while no provider is configured, the record's provider is unknown (""):
-    the next one configured removes it.
+    `made_by`: the provider that made it, "" for the configured one. None
+    when that provider's registrations exist nowhere but on our row
+    (`manual`): nothing to remove, nothing to wait for. Made while no
+    provider is configured, the record's provider is unknown (""): the next
+    one configured removes it.
     """
-    name = settings.SENDING_DOMAIN_PROVIDER
-    if sending_enabled():
+    configured = settings.SENDING_DOMAIN_PROVIDER
+    name = made_by or configured
+    if name == "none":
+        name = ""
+    if name:
         try:
-            needed = get_provider().removal_needed
+            maker = get_provider() if name == configured else provider_class(name)
+            needed = maker.removal_needed
         except ImproperlyConfigured:
             needed = True  # Can't tell: keep the record, it is cheap.
         if not needed:
             return None
-    else:
-        name = ""
     removal, _created = SendingRemoval.objects.get_or_create(
         ref=ref, defaults={"domain": domain, "provider": name}
     )

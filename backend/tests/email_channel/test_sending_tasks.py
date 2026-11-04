@@ -12,6 +12,8 @@ import pytest
 from django.core import mail
 from django.utils import timezone
 
+from apps.email_channel.models import SendingRemoval
+from apps.email_channel.sending import services
 from apps.email_channel.sending.providers import CheckStatus, DomainCheck
 from apps.email_channel.sending.services import sendable_address
 from apps.email_channel.tasks import check_sending_domains
@@ -202,4 +204,48 @@ def test_nothing_is_checked_without_a_provider(
     settings.SENDING_DOMAIN_PROVIDER = "none"
 
     assert run_task(django_capture_on_commit_callbacks) == 0
+    assert provider.checked == []
+
+
+def test_a_domain_set_up_under_another_provider_falls_back(
+    provider, organization, admin, mailbox, settings, django_capture_on_commit_callbacks
+) -> None:
+    """Its records were another provider's: it must be set up again."""
+    row = sending_row(
+        organization,
+        Sending.VERIFIED,
+        sending_provider="manual",
+        sending_last_checked_at=timezone.now() - timedelta(hours=1),
+    )
+    assert sendable_address(mailbox) == "support@acme.com"
+    settings.SENDING_DOMAIN_PROVIDER = "scaleway_tem"
+    assert sendable_address(mailbox) is None
+
+    run_task(django_capture_on_commit_callbacks)
+
+    row.refresh_from_db()
+    assert (row.sending_status, row.sending_provider_ref, row.sending_provider) == (
+        "",
+        "",
+        "",
+    )
+    assert row.sending_dns_records == []
+    assert row.is_sending is True
+    assert provider.checked == []
+    assert not SendingRemoval.objects.exists()  # `manual` has nothing to remove.
+    assert mail.outbox == []
+
+
+def test_a_registration_left_behind_waits_for_its_provider(
+    provider, organization, admin
+) -> None:
+    row = sending_row(
+        organization, Sending.PENDING, sending_provider="scaleway_tem", ref="tem-id"
+    )
+
+    services.check_now(row)
+
+    assert row.sending_status == ""
+    removal = SendingRemoval.objects.get(ref="tem-id")
+    assert (removal.domain, removal.provider) == ("acme.com", "scaleway_tem")
     assert provider.checked == []

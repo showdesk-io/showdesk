@@ -61,6 +61,18 @@ class Migration(migrations.Migration):
         ),
         migrations.AddField(
             model_name="organizationdomain",
+            name="sending_provider",
+            field=models.CharField(
+                blank=True,
+                help_text=(
+                    "The provider the domain was registered with. Under another "
+                    "one, the domain falls back and must be set up again."
+                ),
+                max_length=32,
+            ),
+        ),
+        migrations.AddField(
+            model_name="organizationdomain",
             name="sending_requested_at",
             field=models.DateTimeField(
                 blank=True,

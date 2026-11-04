@@ -724,6 +724,14 @@ class OrganizationDomain(TimestampedModel):
         blank=True,
         help_text="The domain's id at the sending provider, kept until removed there.",
     )
+    sending_provider = models.CharField(
+        max_length=32,
+        blank=True,
+        help_text=(
+            "The provider the domain was registered with. Under another one, "
+            "the domain falls back and must be set up again."
+        ),
+    )
     sending_dns_records = models.JSONField(
         default=list,
         blank=True,
