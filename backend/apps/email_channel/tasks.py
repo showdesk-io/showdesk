@@ -178,3 +178,20 @@ def send_conversation_link(self, ticket_id: str) -> None:
     except Exception as exc:
         logger.exception("Failed to send a conversation link for %s", ticket.reference)
         raise self.retry(exc=exc)
+
+
+@shared_task(bind=True, max_retries=8)
+def remove_sending_registration(self, ref: str, row_id: str | None = None) -> None:
+    """Remove a sending registration at the provider, retrying while it fails.
+
+    Then the row of ``row_id`` forgets ``ref``, if it still holds that one: a
+    domain re-registered meanwhile keeps its new ref.
+    """
+    from apps.email_channel.sending.providers import SendingProviderError
+    from apps.email_channel.sending.services import remove_registration
+
+    try:
+        remove_registration(ref, row_id)
+    except SendingProviderError as exc:
+        logger.warning("Removing sending registration %s failed: %s", ref, exc)
+        raise self.retry(exc=exc, countdown=60 * 2**self.request.retries) from exc

@@ -570,6 +570,41 @@ class OrganizationDomainViewSet(viewsets.ModelViewSet):
         services.regenerate_dns_token(row)
         return Response(self.get_serializer(row).data)
 
+    # -- Sending from the domain (email_channel.sending) ---------------------
+
+    def _sending_call(self, request, call):
+        """Run a sending service on the row; its refusals become {detail, code}.
+
+        Imported here: the email channel depends on this app, not the reverse.
+        """
+        from apps.email_channel.sending import services as sending
+        from apps.email_channel.sending.providers import sending_enabled
+
+        if not sending_enabled():
+            raise NotFound()
+        if (forbidden := self._check_admin()) is not None:
+            return forbidden
+        row = self.get_object()
+        try:
+            row = call(sending, row)
+        except sending.SendingError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code}, status=exc.http_status
+            )
+        return Response(self.get_serializer(row).data)
+
+    @action(detail=True, methods=["post", "delete"], url_path="sending")
+    def sending(self, request, pk=None):
+        """POST: set the domain up for sending. DELETE: stop sending from it."""
+        if request.method == "DELETE":
+            return self._sending_call(request, lambda s, row: s.disable_sending(row))
+        return self._sending_call(request, lambda s, row: s.enable_sending(row))
+
+    @action(detail=True, methods=["post"], url_path="sending/check")
+    def sending_check(self, request, pk=None):
+        """Check the domain's sending records now (once per 30 s)."""
+        return self._sending_call(request, lambda s, row: s.check_now(row))
+
 
 class TeamViewSet(viewsets.ModelViewSet):
     """ViewSet for managing teams."""
