@@ -29,6 +29,7 @@ import type {
   DomainVerificationMethod,
   OrganizationDomain,
 } from "@/types";
+import { MAILBOXES } from "@/hooks/useMailboxes";
 import { ORGANIZATION_DOMAINS, useOrganizationDomains } from "@/hooks/useOrganizationDomains";
 import { SendingStatusBadge } from "./SendingDomainWizard";
 
@@ -41,8 +42,11 @@ export function DomainsList({ isAdmin }: DomainsListProps) {
   const { data: domains = [], isLoading } = useOrganizationDomains();
   const [showAddModal, setShowAddModal] = useState(false);
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ORGANIZATION_DOMAINS });
+  // A domain removed or verified can change which address a mailbox's replies go out from.
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ORGANIZATION_DOMAINS });
+    void queryClient.invalidateQueries({ queryKey: MAILBOXES });
+  };
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-6">
@@ -91,7 +95,7 @@ export function DomainsList({ isAdmin }: DomainsListProps) {
         <AddDomainModal
           onClose={() => setShowAddModal(false)}
           onCreated={() => {
-            void invalidate();
+            invalidate();
             setShowAddModal(false);
           }}
         />

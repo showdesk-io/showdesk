@@ -17,10 +17,10 @@ import {
   type CreateDomainPayload,
 } from "@/api/organizationDomains";
 import type { OrganizationDomain } from "@/types";
+import { MAILBOXES } from "./useMailboxes";
 
 /** Shared with DomainsList (Settings, General). */
 export const ORGANIZATION_DOMAINS = ["organization-domains"] as const;
-const MAILBOXES = ["mailboxes"] as const;
 
 export function useOrganizationDomains() {
   return useQuery({ queryKey: ORGANIZATION_DOMAINS, queryFn: fetchOrganizationDomains });
