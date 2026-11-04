@@ -34,15 +34,16 @@ Each one is pinned by a test in the task named.
 | 2 | One more field, `sending_requested_at`: when the current pending cycle started. | §7.3's 72 h window needs a start that neither `created_at` nor the ownership dates give. | 1 |
 | 3 | A public address may only be set (or changed) to an address on a domain the organization has **verified**. An unchanged legacy value is left alone. | The squatting limitation: reserving `support@bigcorp.com` now needs `bigcorp.com`'s proof. It rules out public webmail addresses (`support.acme@gmail.com`), which could never be sent from anyway; the inbound address keeps working for them. | 5 |
 | 4 | When an organization's ownership of a domain is verified (DNS or admin email), other organizations' mailboxes lose a public address on that domain, and a previous owner's sending registration is removed. | A legacy squatter or a previous owner must not keep the address, and §7.1 removes the registration on transfer. | 5 |
-| 5 | A row whose registration is still being removed keeps its `sending_provider_ref` until the provider confirmed; enabling sending on that domain elsewhere is a 409 meanwhile. | The new owner's registration of the same name must not race the removal of the old one (TEM refuses a name already in the project, and a late removal would delete the new one). | 4, 5 |
+| 5 | A registration a row lets go of (turned off, replaced, lost with the domain, deleted with the row or its organization, or made but never stored) becomes a `SendingRemoval(domain, ref, created_at, attempts, last_error)` in the transaction that clears the row's `sending_provider_ref`. The record goes once the provider confirmed. While one exists for a domain, enabling sending on it (any organization) is a 409 `removal_pending`, as is the provider answering that it already knows the name (TEM's 409). Its task retries up to 8 times with a growing delay; an hourly sweep queues again what was lost or given up. With provider `none` a removal waits. | A removal outlives its row; its retries can be seen (admin, read-only list); one guard covers every case. The new owner's registration of the same name must not race the removal of the old one (TEM refuses a name already in the project, and a late removal would delete the new one). | 4, 5 |
 | 6 | The `manual` adapter asks for an SPF include (`include:{SENDING_DOMAIN_SPF_INCLUDE}`) and a DKIM **CNAME** `{selector}._domainkey.{domain}` → `{selector}._domainkey.{INBOUND_EMAIL_DOMAIN}`, and checks that the TXT found through it is the operator's key. | Showdesk can't know a per-domain DKIM key it didn't create. A CNAME to one key the operator publishes once is checkable, and is what a self-hosted signer (OpenDKIM, Postal with a shared key, Haraka) can do for every customer domain. | 2 |
 | 7 | A check that can't conclude (DNS timeout, provider HTTP error) changes nothing. `dns_verification.lookup_txt()` returns `None` on such errors, unlike `query_txt_records()`. | A resolver hiccup must not flip every verified domain to the fallback and mail every admin. | 2, 3, 7 |
-| 8 | A regression (verified → not verified) puts the row back to `pending` with a new 72 h window, and mails the admins once. 72 h of `pending` → `failed`, mailed once; `failed` rows are only checked by "Check now". Reaching `verified` is mailed too. | Records removed by mistake heal by themselves when restored; the admins know about each change. One template, `sending_domain_status`. | 7 |
+| 8 | A provider PENDING result on a verified row (a regression) puts it back to `pending` with a new 72 h window, and mails the admins once. A provider FAILED result sends the row to `failed`, from `pending` or from `verified`. 72 h of `pending` → `failed`, mailed once; `failed` rows are only checked by "Check now", and set up again by enabling (which replaces the registration). Reaching `verified` is mailed too. | Records removed by mistake heal by themselves when restored; a FAILED result doesn't heal (TEM's `locked` and `revoked` are final), so waiting would only delay the admins. The admins know about each change. One template, `sending_domain_status`. | 7 |
 | 9 | "Check now" is limited to once per 30 s per domain (cache lock). | Each call hits DNS or the provider's API. | 4 |
 | 10 | The From is decided at send time (`sendable_address(mailbox)`), never stored. It covers the three mails using `from_address`: reply, unread reply, conversation link. | A transfer or a regression takes effect on the next mail, without a migration of anything. | 6 |
 | 11 | TEM record names are normalised to fully qualified names; records are stored as `[{type, name, value}]` in the order SPF, DKIM, DMARC. TEM's MX is never shown. SPF records (TEM's and `manual`'s) and TEM's DMARC carry `"merge": true`: a domain has at most one of each, so if one exists the value is merged into it rather than published as a second record. | The wizard shows exactly what to publish. TEM's MX points to a blackhole meant for send-only domains; ours host the support address and receive mail, so publishing it would lose that mail. Two SPF or two DMARC records make receivers ignore both. | 3 |
 | 12 | `requests` is added to `requirements.txt` explicitly (already installed through Anymail). | A direct import must not depend on a transitive pin. | 3 |
 | 13 | The organization payload carries `sending_domains_enabled` (provider ≠ `none`); a mailbox carries `sends_from_public_address`. | The wizard is hidden with `none`; the card says which From is used now. | 6 |
+| 14 | A public webmail domain (`is_public_email_domain`) is never verified, for any purpose: refused on create (DNS and admin email), and refused again by `enable_sending` (400 `public_domain`) and ignored by `on_ownership_verified`, for rows verified before the rule. | Nobody owns `gmail.com`: verifying it would let one organization free everybody's addresses on it, or send as it. | 5 |
 
 ---
 
@@ -69,7 +70,7 @@ Parallel agents each get their own database and Redis indexes.
 
 - TDD: failing test, watch it fail, minimal code, watch it pass, commit. Every task ends with a Conventional Commit (`feat(backend): …`, `feat(frontend): …`).
 - Few distinct test cases, no large parametrized tables.
-- Only the HTTP boundary (TEM: `requests.request` in `scaleway_tem.py`) and the DNS boundary (`dns_verification.lookup_txt`) are mocked.
+- Only the HTTP boundary (TEM: `requests.request` in `scaleway_tem.py`) and the DNS boundary (`dns_verification.lookup_txt`) are mocked. Exception: the service tests (`test_sending_services.py`) put a fake provider at `get_provider`, being about what the services store; the HTTP and DNS boundaries are tested in the provider tests, and the API tests go through `manual` with the DNS boundary patched.
 - English in code, comments and product strings. Nothing about Showdesk Cloud in this repo.
 - Every new setting goes in `.env.example` with a safe default and in `docker-compose.prod.yml`.
 - Celery tasks stay on the `default` queue (production consumes `default` and `video_processing` only).
@@ -257,9 +258,10 @@ def test_tem_remove_revokes(): ...  # POST …/revoke; 404 and 409 count as remo
 
 Services (all take the row; DB writes under `select_for_update`, provider calls outside transactions):
 
-- `enable_sending(row)`: requires `sending_enabled()`, `row.status == verified`, `sending_status in ("", "failed")`, and no other row of the same domain still holding a `sending_provider_ref` (409 `removal_pending`). Registers, then stores `is_sending=True`, `sending_status=pending`, ref, records, `sending_requested_at=now`, clears the error, and runs one `check_sending(row)`. A cache lock per domain name stops a double click from registering twice. On `SendingProviderError`: nothing stored, 502 with its message.
+- `enable_sending(row)`: requires `sending_enabled()`, a domain that isn't public webmail (400 `public_domain`), `row.status == verified`, `sending_status in ("", "failed")`, and no `SendingRemoval` of the same domain (409 `removal_pending`, also when the provider says it already knows the name). A failed registration of the row itself is removed first (recorded, tried at once; 502 if the provider fails, the removal going on in the background). Registers, then stores `is_sending=True`, `sending_status=pending`, ref, records, `sending_requested_at=now`, clears the error, and runs one `check_sending(row)`. A registration made but not stored (the row deleted or no longer owned meanwhile: 400 `not_owned`; any error while storing) is recorded for removal. A cache lock per domain name (300 s, released when done) stops a double click from registering twice. On `SendingProviderError`: nothing stored, 502 with its message.
 - `check_sending(row) -> CheckStatus`: calls the provider, applies the transition (Task 7 adds the mails), sets `sending_last_checked_at`, `sending_last_error`, newer records if any. UNKNOWN changes nothing but `sending_last_checked_at`. A row no longer verified in ownership is never checked (and never sends).
-- `disable_sending(row)`: removes at the provider, then resets `sending_status=""`, ref, records, error. If removal fails, the row is reset but keeps its ref and `remove_sending_registration` is queued (Task 7).
+- `disable_sending(row)`: resets `sending_status=""`, ref, records, error, recording the removal in the same transaction, then tries the removal at once; if the provider fails, `remove_sending_registration` is queued.
+- Removals (choice 5): `SendingRemoval` model and its read-only admin, `remove_sending_registration(removal_id)` (deletes the record on success; on `SendingProviderError` counts the try and retries with a growing delay, giving up at 8 with an error log), `requeue_sending_removals` (hourly beat, default queue: records older than 1 h with no try or given up). A data migration records the refs held by rows not set up for sending.
 
 API (admins; agents get 403):
 
@@ -271,7 +273,7 @@ DELETE /api/v1/organization-domains/{id}/sending/         → 200 row
 
 All three are 404 while `SENDING_DOMAIN_PROVIDER=none`.
 
-Tests: enable on a pending ownership is 400; enable stores the records and checks once; enable while another org's old row holds a ref is 409; check twice within 30 s is 429; disable resets; agent 403; cross-org 404.
+Tests: enable on a pending ownership is 400; enable stores the records and checks once; enable while a removal of the domain is recorded, or the provider already knows the name, is 409; a registration not stored is recorded for removal; a failed removal is recorded, counted and retried, given up at 8, swept hourly, and waits without a provider; check twice within 30 s is 429; disable resets; agent 403; cross-org 404.
 
 **Commit** `feat(backend): set up sending from a verified domain`.
 
@@ -280,16 +282,18 @@ Tests: enable on a pending ownership is 400; enable stores the records and check
 **Files:**
 - Modify: `backend/apps/email_channel/serializers.py` (`MailboxSerializer.validate`)
 - Modify: `backend/apps/organizations/services.py` (`try_admin_email_autoverify`, `apply_dns_verification_success`), `backend/apps/organizations/views.py` (`destroy`)
-- Modify: `backend/apps/email_channel/sending/services.py` (`on_ownership_verified`, `on_domain_deleted`)
+- Modify: `backend/apps/email_channel/sending/services.py` (`on_ownership_verified`), `backend/apps/email_channel/signals.py` (`pre_delete` of `OrganizationDomain`)
+- Create: `backend/apps/email_channel/migrations/0005_free_squatted_public_addresses.py`
 - Test: `backend/tests/email_channel/test_mailbox_api.py`, `backend/tests/email_channel/test_sending_services.py`
 
 Rules:
 
 - `MailboxSerializer.validate`: a new or changed non-empty `public_address` needs an `OrganizationDomain` of the mailbox's organization with that exact domain and `status=verified`; else 400 on `public_address`: "Verify {domain} for your organization first." Unchanged values pass.
-- `on_ownership_verified(row)` (called with `transaction.on_commit` by both verification paths): mailboxes of other organizations with a public address `@{domain}` get `public_address=""`; every other row of that domain gets `is_sending` unchanged, `sending_status=""` and, if it holds a ref, a queued `remove_sending_registration`.
-- Destroying a row with a ref queues the removal with the ref itself.
+- `on_ownership_verified(row)`, called by both verification paths inside their transaction once the row is saved verified (both lock every row of the domain), so the freeing and the verification commit together: unless the row, re-read, is no longer verified or the domain is public webmail, mailboxes of other organizations with a public address `@{domain}` get `public_address=""`; every other row of that domain gets `is_sending` unchanged, `sending_status=""` and, if it holds a ref, a recorded removal, queued on commit.
+- Deleting a row with a ref (destroy, or its organization's deletion) records its removal: a `pre_delete` receiver connected by the email channel's AppConfig.
+- A data migration clears the public addresses already set on a domain another organization has verified.
 
-Tests: setting a public address on an unverified domain is 400, on a verified one 200, an unchanged legacy one passes; org B winning the DNS challenge clears org A's mailbox address and resets A's sending state, queuing the removal; admin-email verification frees a squatter's address.
+Tests: setting a public address on an unverified domain is 400, on a verified one 200, an unchanged legacy one passes; org B winning the DNS challenge clears org A's mailbox address and resets A's sending state, recording the removal, without a commit callback and leaving the winner's own sending state alone; a stale call for a row no longer verified does nothing; admin-email verification frees a squatter's address; a webmail domain is refused by the admin-email service, the create API and `enable_sending`; the migration's function frees squatted addresses.
 
 **Commit** `fix(backend): tie public addresses to a verified domain`.
 
@@ -324,7 +328,7 @@ def sendable_address(mailbox) -> str | None:
 
 ## Batch 3: Periodic checks
 
-### Task 7: Beat task, removal task, admin mails
+### Task 7: Beat task, admin mails
 
 **Files:**
 - Modify: `backend/apps/email_channel/tasks.py`, `backend/apps/email_channel/sending/services.py`
@@ -333,10 +337,10 @@ def sendable_address(mailbox) -> str | None:
 - Test: `backend/tests/email_channel/test_sending_tasks.py`
 
 - `check_sending_domains()`: rows with ownership `verified` and either `sending_status=pending`, or `verified` and `sending_last_checked_at` older than 24 h (or null). Each in its own try/except. Nothing while the provider is `none`.
-- Transitions in `check_sending`: pending→verified (mail "verified"); verified→pending on a PENDING/FAILED result (`sending_requested_at=now`, mail "regressed"); pending past 72 h since `sending_requested_at` → failed (mail "failed"); provider FAILED on a pending row → failed (mail). Mails to active admins through `send_branded_email(fail_silently=True)`, one per transition.
-- `remove_sending_registration(ref, row_id=None)`: `bind=True`, `max_retries=8`, exponential backoff; on success clears the row's ref if it still holds that one.
+- Transitions in `check_sending` (already decided by `next_sending_status`; this task adds the mails and the 72 h limit): pending→verified (mail "verified"); verified→pending on a PENDING result (`sending_requested_at=now`, a new 72 h window, mail "regressed"); a FAILED result → failed from pending or verified (mail "failed"); pending past 72 h since `sending_requested_at` → failed (mail "failed"). Mails to active admins through `send_branded_email(fail_silently=True)`, one per transition.
+- The removal task and its sweep are already there (Batch 2, choice 5).
 
-Tests: pending → verified mails once and From switches; verified with records gone → pending + one mail, From falls back; 72 h → failed; UNKNOWN changes nothing; verified rows checked at most daily; removal retries then clears the ref.
+Tests: pending → verified mails once and From switches; verified with records gone → pending + one mail, From falls back; verified with a FAILED result → failed + one mail; 72 h → failed; UNKNOWN changes nothing; verified rows checked at most daily.
 
 **Commit** `feat(backend): check sending domains periodically`.
 
@@ -398,4 +402,4 @@ Tests: each step renders from a mocked domain state; step 1 → 2 on verificatio
    - forcing the row's sending status in the shell → reply mail in Mailpit `From: support@…`, Reply-To and threading unchanged; back to pending → inbound address;
    - `check_sending_domains` run by hand: regression mail in Mailpit;
    - transfer: a second org verifies the domain → first org's address freed, its From falls back.
-5. TEM: needs `SCW_TEM_SECRET_KEY` and `SCW_TEM_PROJECT_ID` from Dimitri (a key restricted to Transactional Email on the target project); until then it's covered by HTTP-boundary tests only.
+5. TEM: needs `SCW_TEM_SECRET_KEY` and `SCW_TEM_PROJECT_ID` from Dimitri (a key restricted to Transactional Email on the target project); until then it's covered by HTTP-boundary tests only. Confirm a revoked domain name can be registered again (disable then enable, and a transfer).
