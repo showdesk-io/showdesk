@@ -271,6 +271,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.organizations.tasks.purge_expired_otp_codes",
         "schedule": 60 * 60 * 24,
     },
+    "check-sending-domains": {
+        "task": "apps.email_channel.tasks.check_sending_domains",
+        "schedule": 60 * 15,
+    },
     "requeue-sending-removals": {
         "task": "apps.email_channel.tasks.requeue_sending_removals",
         "schedule": 60 * 60,

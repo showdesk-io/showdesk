@@ -241,3 +241,55 @@ def requeue_sending_removals() -> int:
         remove_sending_registration.delay(removal_id)
         count += 1
     return count
+
+
+@shared_task
+def check_sending_domains() -> int:
+    """Check the sending domains due for it, each on its own (§7.3).
+
+    Pending ones every run; verified ones once a day, to notice a regression;
+    failed ones only when an admin asks. Nothing without a provider. Returns
+    how many were checked.
+    """
+    from django.db.models import Q
+
+    from apps.email_channel.sending.providers import (
+        SendingProviderError,
+        sending_enabled,
+    )
+    from apps.email_channel.sending.services import (
+        SENDING_RECHECK_HOURS,
+        check_sending,
+        provider,
+    )
+    from apps.organizations.models import OrganizationDomain
+
+    if not sending_enabled():
+        return 0
+    try:
+        sender = provider()
+    except SendingProviderError:
+        return 0  # Logged by `provider()`.
+    Sending = OrganizationDomain.SendingStatus
+    recheck_before = timezone.now() - timedelta(hours=SENDING_RECHECK_HOURS)
+    due = (
+        OrganizationDomain.objects.filter(status=OrganizationDomain.Status.VERIFIED)
+        .exclude(sending_provider_ref="")
+        .filter(
+            Q(sending_status=Sending.PENDING)
+            | Q(sending_status=Sending.VERIFIED)
+            & (
+                Q(sending_last_checked_at__isnull=True)
+                | Q(sending_last_checked_at__lt=recheck_before)
+            )
+        )
+    )
+    count = 0
+    for row in list(due):
+        try:
+            check_sending(row, sender=sender)
+        except Exception:
+            logger.exception("Sending check of %s failed", row.domain)
+            continue
+        count += 1
+    return count

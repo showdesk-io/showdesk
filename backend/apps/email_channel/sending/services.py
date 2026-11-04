@@ -14,7 +14,9 @@ until the provider confirmed the removal, retried by
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
+from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
@@ -22,7 +24,11 @@ from django.db.models import F
 from django.utils import timezone
 
 from apps.email_channel.models import SendingRemoval
-from apps.organizations.models import OrganizationDomain, is_public_email_domain
+from apps.organizations.models import (
+    OrganizationDomain,
+    User,
+    is_public_email_domain,
+)
 
 from .providers import (
     AlreadyRegisteredError,
@@ -45,6 +51,10 @@ CHECK_NOW_SECONDS = 30
 MAX_ERROR_LENGTH = 500
 # Tries of a removal before its task gives up; the hourly sweep tries again.
 MAX_REMOVAL_ATTEMPTS = 8
+# A pending cycle that hasn't reached verified after this long fails (§7.3).
+SENDING_DOMAIN_PENDING_HOURS = 72
+# A verified domain is checked again this often by the periodic check.
+SENDING_RECHECK_HOURS = 24
 
 Ownership = OrganizationDomain.Status
 Sending = OrganizationDomain.SendingStatus
@@ -300,15 +310,84 @@ def check_sending(
     return result.status
 
 
-def next_sending_status(current: str, result: CheckStatus) -> str:
-    """The sending status after a check: the one place transitions are decided."""
+def next_sending_status(
+    current: str, result: CheckStatus, *, expired: bool = False
+) -> str:
+    """The sending status after a check: the one place transitions are decided.
+
+    `expired`: the current pending cycle is older than
+    SENDING_DOMAIN_PENDING_HOURS.
+    """
     if result == CheckStatus.VERIFIED:
         return Sending.VERIFIED
     if result == CheckStatus.FAILED:
         return Sending.FAILED
     if result == CheckStatus.PENDING and current == Sending.VERIFIED:
         return Sending.PENDING  # A regression.
+    if result == CheckStatus.PENDING and current == Sending.PENDING and expired:
+        return Sending.FAILED
     return current
+
+
+def _pending_expired(row: OrganizationDomain, now) -> bool:
+    started = row.sending_requested_at
+    return started is not None and now - started > timedelta(
+        hours=SENDING_DOMAIN_PENDING_HOURS
+    )
+
+
+# The admins' mail for each transition, by the state reached (see
+# `_transition_mail`).
+STATUS_MAIL_SUBJECTS = {
+    "verified": "You now send from {domain}",
+    "regressed": (
+        "Sending from {domain} stopped: we will keep checking for "
+        f"{SENDING_DOMAIN_PENDING_HOURS} hours"
+    ),
+    "failed": "Sending from {domain} failed",
+}
+
+
+def _transition_mail(previous: str, current: str) -> str | None:
+    """Which mail a transition sends the admins, if any."""
+    if previous == current:
+        return None
+    if current == Sending.VERIFIED:
+        return "verified"
+    if current == Sending.PENDING and previous == Sending.VERIFIED:
+        return "regressed"
+    if current == Sending.FAILED:
+        return "failed"
+    return None
+
+
+def notify_sending_status(row: OrganizationDomain, state: str) -> None:
+    """Mail the row's organization's active admins where its sending stands."""
+    from apps.core.email import send_branded_email
+
+    organization = row.organization
+    recipients = list(
+        organization.users.filter(role=User.Role.ADMIN, is_active=True).values_list(
+            "email", flat=True
+        )
+    )
+    if not recipients:
+        return
+    send_branded_email(
+        template="sending_domain_status",
+        subject=STATUS_MAIL_SUBJECTS[state].format(domain=row.domain),
+        to=recipients,
+        organization=organization,
+        context={
+            "state": state,
+            "domain": row.domain,
+            "org_name": organization.name,
+            "error": row.sending_last_error,
+            "pending_hours": SENDING_DOMAIN_PENDING_HOURS,
+            "settings_url": f"{getattr(settings, 'SITE_URL', '')}/settings",
+        },
+        fail_silently=True,
+    )
 
 
 def apply_check(
@@ -317,8 +396,9 @@ def apply_check(
     """Store a check's outcome on the row, unless the row moved on meanwhile.
 
     Returns the sending status before and after, None if nothing was stored;
-    `row` is updated in place. Transitions go through `next_sending_status`,
-    and a regression starts a new pending cycle.
+    `row` is updated in place. Transitions go through `next_sending_status`;
+    a regression starts a new pending cycle, and each transition mails the
+    admins once committed.
     """
     now = timezone.now()
     with transaction.atomic():
@@ -336,13 +416,23 @@ def apply_check(
         locked.sending_last_checked_at = now
         fields = ["sending_last_checked_at"]
         if result.status != CheckStatus.UNKNOWN:
-            locked.sending_status = next_sending_status(previous, result.status)
+            expired = _pending_expired(locked, now)
+            locked.sending_status = next_sending_status(
+                previous, result.status, expired=expired
+            )
             if (
                 previous == Sending.VERIFIED
                 and locked.sending_status == Sending.PENDING
             ):
                 locked.sending_requested_at = now
-            locked.sending_last_error = result.error[:MAX_ERROR_LENGTH]
+            error = result.error
+            if result.status == CheckStatus.PENDING and (
+                locked.sending_status == Sending.FAILED
+            ):
+                error = (
+                    f"Not verified within {SENDING_DOMAIN_PENDING_HOURS} hours. {error}"
+                ).strip()
+            locked.sending_last_error = error[:MAX_ERROR_LENGTH]
             fields += ["sending_status", "sending_requested_at", "sending_last_error"]
             if result.records:
                 locked.sending_dns_records = result.records
@@ -355,6 +445,9 @@ def apply_check(
                 previous or "none",
                 locked.sending_status,
             )
+        state = _transition_mail(previous, locked.sending_status)
+        if state is not None:
+            transaction.on_commit(lambda: notify_sending_status(locked, state))
     for field in fields:
         setattr(row, field, getattr(locked, field))
     return previous, locked.sending_status
