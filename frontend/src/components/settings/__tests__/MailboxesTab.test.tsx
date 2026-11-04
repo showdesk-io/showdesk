@@ -29,6 +29,7 @@ function mailbox(overrides: Partial<Mailbox> = {}): Mailbox {
     local_part: "acme-x7k2m9abcd",
     inbound_address: "acme-x7k2m9abcd@in.example.com",
     public_address: "support@acme.com",
+    sends_from_public_address: false,
     default_team: null,
     is_active: true,
     created_at: "2026-11-01T00:00:00Z",
