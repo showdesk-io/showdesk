@@ -490,16 +490,26 @@ inbound provider.
   `provider_conflict` and an operator would have to clear the name.
 
 - Mailjet keeps the senders it deletes: a domain set up again (by any
-  organization) reuses its sender, deleted or not, and validation
-  reactivates it once the ownership TXT is published. A sender created at
-  Mailjet whose answer was lost (a timeout after the `POST`) is found
-  again the same way at the next setup.
+  organization) reuses its sender when it is inactive or deleted, and
+  validation activates it once the ownership TXT is published (Mailjet
+  says so for a deleted one; not observed yet: a deleted sender left
+  deleted is logged as an error). An active sender is never reused: the
+  domain is answered 409 `provider_conflict`. A sender created at Mailjet
+  whose answer was lost (a timeout after the `POST`) is found again the
+  same way at the next setup.
+
+- Deleting a domain's sender by hand in Mailjet is no kill switch: the next
+  check asks Mailjet to validate it again, which (Mailjet says)
+  reactivates it. To stop sending from a domain, disable sending in
+  Showdesk.
 
 - A Mailjet account holds at most 100 senders (active and inactive; deleted
   ones don't count): one Mailjet account serves about 100 customer domains,
   less the operator's own senders. More need Mailjet sub-accounts, i.e.
   another Showdesk instance or keys per account, which Showdesk doesn't
-  handle.
+  handle. Once reached, setting up a domain is refused ("The sending
+  service's limit of sender domains is reached. Contact your Showdesk
+  administrator."), logged as an error.
 
 - A wrong `MAILJET_API_URL` (a US account on the EU host, or the reverse)
   makes every Mailjet call fail: domains can't be set up, and checks stay
@@ -654,24 +664,30 @@ these choices beyond this design. Each one is pinned by a test.
 | 17 | A public webmail domain is refused on create for every purpose (branding, routing, sending), by DNS or admin email alike. | Nobody owns `gmail.com`, whatever the row is for. |
 | 18 | An admin-email verification of a domain the organization already has adds the asked purposes to the row and keeps the others, and leaves its sending state alone. | Verifying again must not drop a purpose, nor stop sending. |
 | 19 | A DNS win clears the token of the other organizations' rows of the domain (the previous owner's and any pending one): their admins regenerate a token to claim it again. | The previous owner's TXT, left published, would otherwise win the domain straight back. |
-| 20 | `mailjet` (added after PR 3; matched to a real account on 2026-11-05): a domain is a domain sender `*@<domain>` of the account Anymail sends with; its ref is the sender's numeric id. The records are Mailjet's ownership token, SPF (`merge`) and DKIM, all TXT, fully qualified, read from the sender's DNS entry by its `DNSID` (a new sender has one even while inactive). Registering a domain Mailjet already has (a 400 "already existing … sender", inactive or deleted) reuses that sender, found with `GET /sender?Email=*@<domain>&ShowDeleted=true`; when its DNS entry is gone (a deleted sender), the ownership TXT (`mailjet._<token[:8]>.<domain>`, the token being the sender's `Filename` without `.txt`) and SPF are shown, DKIM comes with the first check after reactivation. `check`: a missing sender (404) is FAILED; an inactive or deleted one is asked to validate (which reactivates a deleted one), its DNS validation error (else the global one) being shown, never the file one; once active, Mailjet checks DKIM and SPF. VERIFIED only when the sender is active and both are `OK`, otherwise PENDING with Mailjet's error texts. `remove` reads the sender first and deletes it unless it is missing or `Deleted`; a 404 on delete, or a 400 after which the sender reads `Deleted`, counts as removed. A DNS entry read whose domain isn't the sender's counts as not found. | Mailjet only sends from an active sender of the sending account, and DKIM and SPF are what DMARC alignment needs; Mailjet keeps deleted senders and refuses to create them again. |
+| 20 | `mailjet` (added after PR 3; matched to a real account on 2026-11-05): a domain is a domain sender `*@<domain>` of the account Anymail sends with; its ref is the sender's numeric id. The records are Mailjet's ownership token, SPF (`merge`) and DKIM, all TXT, fully qualified, read from the sender's DNS entry by its `DNSID` (a new sender has one even while inactive). Registering a domain Mailjet already has (a 400 "already existing … sender") reuses that sender, found with `GET /sender?Email=*@<domain>&ShowDeleted=true` (a non-deleted one first), only when it is `Inactive` or `Deleted`: an `Active` one is someone's in use (the operator's own, one set up by hand) and is refused as already registered (409 `provider_conflict`, or `removal_pending` while a removal of ours waits). When a reused sender's DNS entry is gone (a deleted sender), the ownership TXT (`mailjet._<token[:8]>.<domain>`, the token being the sender's `Filename` without `.txt`) and SPF are shown, DKIM comes with the first check after reactivation. A 400 mentioning a limit or maximum is the account's sender limit: logged as an error, admins are told to contact their administrator. `check`: a missing sender (404) is FAILED; an inactive or deleted one is asked to validate (Mailjet says this reactivates a deleted one; to confirm, not observed yet). After a `validate` answering 2xx, the sender read again decides: active, Mailjet checks DKIM and SPF; otherwise its DNS validation error (else the global one) is shown, never the file one, and a deleted sender left deleted without error is logged as an error and shown as "Mailjet didn't reactivate this domain's previous sender; contact your Showdesk administrator.". VERIFIED only when the sender is active and both are `OK`, otherwise PENDING with Mailjet's error texts. `remove` reads the sender first and deletes it unless it is missing or `Deleted`; a 404 on delete, or a 400 after which the sender reads `Deleted`, counts as removed. A DNS entry read whose domain isn't the sender's counts as not found. | Mailjet only sends from an active sender of the sending account, and DKIM and SPF are what DMARC alignment needs; Mailjet keeps deleted senders and refuses to create them again. |
 
 What admins have:
 
 - `POST /api/v1/organization-domains/{id}/sending/`: registers the domain and
   checks it once; 200 with the row, 400 `not_owned` (ownership not verified)
-  or `public_domain`, 409 `removal_pending`, `provider_conflict` (the
-  provider already holds the name with no removal of ours: logged as an
-  error) or `in_progress` (a setup of the domain is running), 502
-  `provider_error`.
-- `POST …/sending/check/`: 200 with the row, 400 `not_owned` or
+  or `public_domain`, or `operator_domain` (the domain of
+  `DEFAULT_FROM_EMAIL`, the host of `SITE_URL`, or `INBOUND_EMAIL_DOMAIN`
+  and its subdomains: "This domain is used by the Showdesk instance
+  itself.", whatever the provider; check and disable refuse it too, and
+  such a row is never sendable), 409 `removal_pending`, `provider_conflict`
+  (the provider already holds the name with no removal of ours: logged as
+  an error; for `mailjet`, Mailjet already has an `Active` sender for the
+  domain, `Inactive` and `Deleted` ones being reused) or `in_progress` (a
+  setup of the domain is running), 502 `provider_error`.
+- `POST …/sending/check/`: 200 with the row, 400 `not_owned`, `operator_domain` or
   `not_registered`, 429 `too_soon`. `DELETE …/sending/`: stop sending, 200
   with the row (409 `in_progress` while a setup of the domain runs).
 - Refusals are `{detail, code}`.
 - All three are 404 while `SENDING_DOMAIN_PROVIDER=none`, and 403 for agents.
   A domain can be created with `is_sending` (DNS or admin email) only while a
   provider is configured; the sending state is read-only and the provider's
-  ref is never exposed.
+  ref is never exposed. No organization can claim `INBOUND_EMAIL_DOMAIN` or
+  a subdomain of it (by DNS or admin email): it is the instance's.
 - Settings → Email: each mailbox card says "Replies are sent from" its public
   or inbound address, and admins get a "Send from your domain" wizard:
   (1) address and ownership (DNS TXT or the admin's own email), saving the
