@@ -5,11 +5,14 @@ whose keys Anymail sends with (`MAILJET_API_KEY`, `MAILJET_SECRET_KEY`):
 Mailjet only sends from a sender of its own account, once it is validated.
 Mailjet gives the records to publish in the domain's DNS entry: its
 ownership token, which validates the sender, then SPF and DKIM. `check`
-asks Mailjet to validate a sender that isn't active (validation also
-reactivates a deleted one), then to check the entry's DKIM and SPF.
+asks Mailjet to validate a sender that isn't active, then to check the
+entry's DKIM and SPF.
 
 What Mailjet's API does was confirmed on a real account: see
-docs/plans/2026-11-05-mailjet-sending-provider-plan.md.
+docs/plans/2026-11-05-mailjet-sending-provider-plan.md. One thing wasn't
+observed yet: Mailjet says (in its 400 to a duplicate sender) that
+`validate` reactivates a deleted sender; to confirm. Until then, a deleted
+sender `validate` leaves deleted is logged as an error.
 
 The keys travel in the basic auth header only: they are never logged nor put
 in an error message, and Mailjet's own words are scrubbed of them.
@@ -27,6 +30,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 from .providers import (
+    AlreadyRegisteredError,
     CheckStatus,
     DomainCheck,
     RegisteredDomain,
@@ -41,6 +45,11 @@ TIMEOUT_SECONDS = 10
 SPF_VALUE = "v=spf1 include:spf.mailjet.com ?all"
 # Each error text Mailjet gives is cut to this length.
 MAX_ERROR_TEXT = 200
+# Shown while a deleted sender Mailjet should have reactivated stays deleted.
+NOT_REACTIVATED = (
+    "Mailjet didn't reactivate this domain's previous sender; contact your "
+    "Showdesk administrator."
+)
 
 # Mailjet's sender ids and DNS ids are numbers; anything else must not reach
 # a URL. A domain name only does when it looks like one.
@@ -145,10 +154,22 @@ class MailjetProvider:
                 json={"Email": f"*@{domain}", "EmailType": "transactional"},
             )
         except _HTTPError as exc:
-            # Mailjet keeps a sender once created, deleted ones too: it is
-            # reused, and validating it reactivates it.
-            if exc.status_code == 400 and "already exist" in exc.detail.lower():
+            detail = exc.detail.lower()
+            # Mailjet keeps a sender once created, deleted ones too: an
+            # inactive or deleted one is reused, validating it activates it.
+            if exc.status_code == 400 and "already exist" in detail:
                 sender = self._existing_sender(domain)
+            elif exc.status_code == 400 and ("limit" in detail or "maximum" in detail):
+                logger.error(
+                    "Mailjet refused a sender for %s, the account's limit of "
+                    "senders being reached: %s",
+                    domain,
+                    exc.detail,
+                )
+                raise SendingProviderError(
+                    "The sending service's limit of sender domains is reached. "
+                    "Contact your Showdesk administrator."
+                ) from None
             else:
                 raise
         ref = _id(sender.get("ID"))
@@ -165,21 +186,36 @@ class MailjetProvider:
         return RegisteredDomain(ref=ref, records=_records(entry, sender, domain))
 
     def _existing_sender(self, domain: str) -> dict:
-        """The account's sender of this domain, deleted or not."""
+        """The account's sender of this domain, if it is inactive or deleted.
+
+        One not deleted is preferred, should Mailjet list several. An active
+        one is in use (the operator's own, or one set up by hand): taking it
+        over would make it ours to delete, so AlreadyRegisteredError.
+        """
         if not _DOMAIN_RE.match(domain):
             raise SendingProviderError("This domain name can't be sent to Mailjet.")
         data = self._call("GET", f"/sender?Email=*@{domain}&ShowDeleted=true").get(
             "Data"
         )
-        for sender in data if isinstance(data, list) else []:
-            if isinstance(sender, dict) and _sender_domain(sender) == domain:
-                return sender
-        logger.warning(
-            "Mailjet says it has a sender for %s, but none is listed.", domain
-        )
-        raise SendingProviderError(
-            "Mailjet already has this domain but didn't give it back."
-        )
+        found = [
+            sender
+            for sender in (data if isinstance(data, list) else [])
+            if isinstance(sender, dict) and _sender_domain(sender) == domain
+        ]
+        if not found:
+            logger.warning(
+                "Mailjet says it has a sender for %s, but none is listed.", domain
+            )
+            raise SendingProviderError(
+                "Mailjet already has this domain but didn't give it back."
+            )
+        sender = next((s for s in found if s.get("Status") != "Deleted"), found[0])
+        if sender.get("Status") not in ("Inactive", "Deleted"):
+            raise AlreadyRegisteredError(
+                f"Mailjet has a sender for {domain} with the status "
+                f"{sender.get('Status')!r}."
+            )
+        return sender
 
     def _dns_entry(self, sender: dict, domain: str) -> dict | None:
         """The sender's DNS entry, or None if Mailjet has none (any more).
@@ -226,13 +262,16 @@ class MailjetProvider:
 
         errors: list[str] = []
         if status != "Active":
-            # Validation activates an inactive sender, and reactivates a
-            # deleted one, once its ownership token is published.
-            errors = self._validate(ref)
-            if not errors:
+            # Validation activates an inactive sender once its ownership token
+            # is published (and, Mailjet says, reactivates a deleted one).
+            # Whatever its answer says, the sender read after it decides.
+            answered, texts = self._validate(ref)
+            if not answered:
+                errors = texts
+            else:
                 sender = self._first("GET", path)
                 if sender.get("Status") != "Active":
-                    errors = ["Mailjet hasn't validated this domain yet."]
+                    errors = texts or self._not_validated(ref, sender, domain)
 
         entry = self._dns_entry(sender, domain)
         records = _records(entry, sender, domain) or None
@@ -245,8 +284,9 @@ class MailjetProvider:
             return DomainCheck(CheckStatus.PENDING, " ".join(errors), records)
         return DomainCheck(CheckStatus.VERIFIED, "", records)
 
-    def _validate(self, ref: str) -> list[str]:
-        """Ask Mailjet to validate the sender: why it didn't, if it says.
+    def _validate(self, ref: str) -> tuple[bool, list[str]]:
+        """Ask Mailjet to validate the sender: whether it answered (2xx), and
+        why it didn't validate it, if it says.
 
         Of its errors, the DNS one (else the global one) is shown: the file
         on the website root is a way of validating Showdesk doesn't offer.
@@ -256,7 +296,7 @@ class MailjetProvider:
         except _HTTPError as exc:
             if exc.status_code >= 500:
                 raise
-            return [exc.detail or "Mailjet couldn't validate this domain yet."]
+            return False, [exc.detail or "Mailjet couldn't validate this domain yet."]
         data = result.get("Data")
         if isinstance(data, list) and data and isinstance(data[0], dict):
             result = data[0]
@@ -267,7 +307,18 @@ class MailjetProvider:
         texts = texts or _texts(result.get("GlobalError"))
         if not texts and errors:
             texts = ["Mailjet couldn't validate this domain yet."]
-        return [self._scrub(text) for text in texts]
+        return True, [self._scrub(text) for text in texts]
+
+    def _not_validated(self, ref: str, sender: dict, domain: str) -> list[str]:
+        """Why a sender `validate` gave no error for still isn't active."""
+        if sender.get("Status") == "Deleted":
+            # Mailjet says validation reactivates a deleted sender: not
+            # observed yet, so the operator must hear of it if it doesn't.
+            logger.error(
+                "Mailjet didn't reactivate deleted sender %s of %s.", ref, domain
+            )
+            return [NOT_REACTIVATED]
+        return ["Mailjet hasn't validated this domain yet."]
 
     def _check_dns(self, entry: dict) -> list[str]:
         """Ask Mailjet to check the entry's DKIM and SPF: what isn't right."""
