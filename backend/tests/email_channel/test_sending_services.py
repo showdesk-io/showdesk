@@ -288,6 +288,89 @@ class TestEnable:
         assert not SendingRemoval.objects.exists()
 
 
+def test_the_instance_own_domains_are_never_sent_from(
+    provider, organization, settings
+) -> None:
+    """The From domain, the site's host, the inbound domain and its subdomains
+    are the instance's: a row of one (made before that was refused) can't be
+    set up, checked, disabled, nor sent from."""
+    settings.DEFAULT_FROM_EMAIL = "Showdesk <noreply@mail.showdesk.test>"
+    settings.SITE_URL = "https://app.showdesk.test"
+    settings.INBOUND_EMAIL_DOMAIN = "in.showdesk.test"
+    for domain in (
+        "mail.showdesk.test",
+        "app.showdesk.test",
+        "in.showdesk.test",
+        "eu.in.showdesk.test",
+    ):
+        row = domain_row(organization, domain=domain)
+        with pytest.raises(services.OperatorDomainError) as refused:
+            services.enable_sending(row)
+        assert (refused.value.code, refused.value.http_status) == (
+            "operator_domain",
+            400,
+        )
+        assert str(refused.value) == (
+            "This domain is used by the Showdesk instance itself."
+        )
+        row.delete()
+        registered = registered_row(
+            organization, domain=domain, sending_status=Sending.VERIFIED
+        )
+        mailbox = MailboxFactory(
+            organization=organization, public_address=f"help@{domain}"
+        )
+        for service in (
+            services.check_sending,
+            services.check_now,
+            services.disable_sending,
+        ):
+            with pytest.raises(services.OperatorDomainError):
+                service(registered)
+        assert services.sendable_domains(organization.id) == set()
+        assert services.sendable_address(mailbox) is None
+        registered.delete()
+        mailbox.delete()
+    assert provider.calls == []
+
+    # Only the inbound domain's subdomains: the others may be a customer's.
+    services.enable_sending(domain_row(organization, domain="showdesk.test"))
+    assert provider.calls[0] == ("register", "showdesk.test")
+
+
+def test_the_instance_own_domains_are_read_as_written(settings) -> None:
+    """A trailing dot, capitals, a SITE_URL without its scheme, a Unicode name:
+    still the instance's."""
+    settings.DEFAULT_FROM_EMAIL = '"Show, desk" <noreply@Mail.Showdesk.Test.>'
+    settings.SITE_URL = "app.bücher.test/"
+    assert services.is_operator_domain("mail.showdesk.test")
+    assert services.is_operator_domain("app.xn--bcher-kva.test")
+    assert not services.is_operator_domain("showdesk.test")
+
+
+def test_a_registration_on_the_instance_own_domain_is_never_removed(
+    provider, organization, settings, caplog
+) -> None:
+    """Whatever lets go of it (here: the row deleted), the instance's own
+    sender stays: no removal recorded, an error logged."""
+    settings.DEFAULT_FROM_EMAIL = "noreply@mail.showdesk.test"
+    row = registered_row(
+        organization, domain="mail.showdesk.test", sending_status=Sending.VERIFIED
+    )
+
+    row.delete()
+
+    assert not SendingRemoval.objects.exists()
+    assert services.record_removal("mail.showdesk.test", "ref") is None
+    assert not SendingRemoval.objects.exists()
+    assert any(
+        r.levelname == "ERROR"
+        and "not removing the sending registration of the instance's own domain"
+        in r.getMessage().lower()
+        for r in caplog.records
+    )
+
+
 class TestCheck:
     def test_transitions(self, provider, organization) -> None:
         row = registered_row(organization)
@@ -798,3 +881,136 @@ def test_only_the_configured_provider_rows_are_sendable(provider, organization):
         expected = mailbox.public_address if domain == "acme.com" else None
         assert services.sendable_address(mailbox, domains) == expected
         assert services.sendable_address(mailbox) == expected
+
+
+class FakeMailjet:
+    """Mailjet's sender and DNS API, as observed, for one account."""
+
+    def __init__(self) -> None:
+        self.senders: dict[int, dict] = {}
+
+    def add(self, domain: str, status: str) -> int:
+        sender_id = 4242 + len(self.senders)
+        self.senders[sender_id] = {
+            "ID": sender_id,
+            "DNSID": sender_id + 1000,
+            "Email": f"*@{domain}",
+            "Filename": "a1b2c3d4e5f60718293a4b5c6d7e8f90.txt",
+            "Status": status,
+        }
+        return sender_id
+
+    def __call__(self, method: str, url: str, **kwargs):
+        import json
+
+        import requests
+
+        path = url.removeprefix("https://api.mailjet.com/v3/REST")
+        status, body = self.answer(method, path, kwargs.get("json"))
+        response = requests.Response()
+        response.status_code = status
+        response._content = b"" if body is None else json.dumps(body).encode()
+        return response
+
+    def answer(self, method: str, path: str, data):
+        import re
+
+        listing = re.fullmatch(r"/sender\?Email=\*@(.+)&ShowDeleted=true", path)
+        one = re.fullmatch(r"/sender/(\d+)(/validate)?", path)
+        dns = re.fullmatch(r"/dns/(\d+)(/check)?", path)
+        if (method, path) == ("POST", "/sender"):
+            domain = data["Email"][2:]
+            for sender in self.senders.values():
+                if sender["Email"] == data["Email"]:
+                    return 400, {
+                        "ErrorMessage": "There is an already existing "
+                        f"{sender['Status'].lower()} sender with the same email."
+                    }
+            return 201, {"Data": [self.senders[self.add(domain, "Inactive")]]}
+        if listing:
+            found = [
+                s for s in self.senders.values() if s["Email"] == f"*@{listing[1]}"
+            ]
+            return 200, {"Data": found}
+        if one:
+            sender = self.senders.get(int(one[1]))
+            if sender is None:
+                return 404, {"ErrorMessage": "Object not found"}
+            if method == "DELETE":
+                sender["Status"] = "Deleted"
+                return 204, None
+            if one[2]:  # Its ownership TXT is published.
+                sender["Status"] = "Active"
+                return 200, {"Errors": {}, "GlobalError": ""}
+            return 200, {"Data": [sender]}
+        if dns:
+            sender = next(s for s in self.senders.values() if s["DNSID"] == int(dns[1]))
+            if sender["Status"] == "Deleted":
+                return 404, {"ErrorMessage": "Object not found"}
+            if dns[2]:
+                return 200, {"Data": [{"DKIMStatus": "OK", "SPFStatus": "OK"}]}
+            return 200, {
+                "Data": [
+                    {
+                        "ID": sender["DNSID"],
+                        "Domain": sender["Email"][2:],
+                        "OwnerShipToken": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+                        "OwnerShipTokenRecordName": "mailjet._a1b2c3d4",
+                        "SPFRecordValue": "v=spf1 include:spf.mailjet.com ?all",
+                        "DKIMRecordName": "mailjet._domainkey",
+                        "DKIMRecordValue": "k=rsa; p=MIIB",
+                    }
+                ]
+            }
+        raise AssertionError(f"Unexpected Mailjet call {method} {path}")
+
+
+def test_a_domain_changing_hands_under_mailjet(
+    organization, settings, django_capture_on_commit_callbacks
+):
+    """The loser's sender is deleted before the winner may set the domain
+    up, which then reuses it."""
+    from apps.organizations import services as domains
+
+    settings.SENDING_DOMAIN_PROVIDER = "mailjet"
+    settings.ANYMAIL = {
+        **settings.ANYMAIL,
+        "MAILJET_API_KEY": "key",
+        "MAILJET_SECRET_KEY": "secret",
+    }
+    settings.MAILJET_API_URL = "https://api.mailjet.com"
+    mailjet = FakeMailjet()
+    previous = registered_row(
+        OrganizationFactory(),
+        sending_status=Sending.VERIFIED,
+        sending_provider="mailjet",
+        sending_provider_ref=str(mailjet.add("acme.com", "Active")),
+    )
+    challenge = domains.start_dns_challenge(
+        organization=organization, domain="acme.com", is_branding=True
+    )
+    with (
+        mock.patch("apps.email_channel.sending.mailjet.requests.request", mailjet),
+        mock.patch(
+            "apps.organizations.dns_verification.lookup_txt",
+            return_value=[challenge.txt_record_value],
+        ),
+        mock.patch("apps.email_channel.tasks.remove_sending_registration.delay"),
+    ):
+        with django_capture_on_commit_callbacks(execute=True):
+            assert domains.perform_dns_check(challenge) is True
+        removal = SendingRemoval.objects.get(ref=previous.sending_provider_ref)
+        challenge.refresh_from_db()
+
+        with pytest.raises(services.RemovalPendingError) as refused:
+            services.enable_sending(challenge)
+        assert refused.value.http_status == 409
+
+        services.run_removal(removal.pk)
+        assert mailjet.senders[4242]["Status"] == "Deleted"
+
+        row = services.enable_sending(challenge)
+
+    assert list(mailjet.senders) == [4242]  # Reused, not created again.
+    assert mailjet.senders[4242]["Status"] == "Active"
+    assert (row.sending_provider_ref, row.sending_status) == ("4242", Sending.VERIFIED)

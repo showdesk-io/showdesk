@@ -383,6 +383,16 @@ MJ_SECRET = "mj-private-key-not-to-leak"
 MJ = "https://api.mailjet.com/v3/REST"
 MJ_SENDER_ID = 4242
 MJ_DNS_ID = 77
+MJ_TOKEN = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+MJ_SENDER = ("GET", f"{MJ}/sender/{MJ_SENDER_ID}")
+MJ_VALIDATE = ("POST", f"{MJ}/sender/{MJ_SENDER_ID}/validate")
+MJ_DNS = ("GET", f"{MJ}/dns/{MJ_DNS_ID}")
+MJ_DNS_CHECK = ("POST", f"{MJ}/dns/{MJ_DNS_ID}/check")
+MJ_FIND = ("GET", f"{MJ}/sender?Email=*@acme.com&ShowDeleted=true")
+MJ_GONE = (
+    404,
+    {"ErrorInfo": "", "ErrorMessage": "Object not found", "StatusCode": 404},
+)
 
 
 def mj(*items: dict) -> dict:
@@ -390,12 +400,18 @@ def mj(*items: dict) -> dict:
     return {"Count": len(items), "Total": len(items), "Data": list(items)}
 
 
-def mj_sender(status: str, dns_id: int = -1) -> dict:
+def mj_sender(status: str, dns_id: int = MJ_DNS_ID) -> dict:
+    # As Mailjet gives it: a real DNSID even while inactive, the ownership
+    # token as the validation file's name.
     return {
-        "ID": MJ_SENDER_ID,
+        "CreatedAt": "2026-11-05T09:12:44Z",
         "DNSID": dns_id,
         "Email": "*@acme.com",
         "EmailType": "transactional",
+        "Filename": f"{MJ_TOKEN}.txt",
+        "ID": MJ_SENDER_ID,
+        "IsDefaultSender": False,
+        "Name": "",
         "Status": status,
     }
 
@@ -404,31 +420,48 @@ def mj_dns(domain: str = "acme.com", dns_id: int = MJ_DNS_ID) -> dict:
     return {
         "ID": dns_id,
         "Domain": domain,
-        # One name relative to the domain, one fully qualified with its dot.
-        "OwnerShipTokenRecordName": "mailjet._a1b2c3d4",
-        "OwnerShipToken": "a1b2c3d4e5f6",
-        "SPFRecordValue": "v=spf1 include:spf.mailjet.com ~all",
+        "OwnerShipToken": MJ_TOKEN,
+        "OwnerShipTokenRecordName": f"mailjet._a1b2c3d4.{domain}.",
+        "SPFRecordValue": "v=spf1 include:spf.mailjet.com ?all",
         "SPFStatus": "Not checked",
         "DKIMRecordName": f"mailjet._domainkey.{domain}.",
-        "DKIMRecordValue": "k=rsa; p=MIGfMA0GCSqGSIb3",
+        "DKIMRecordValue": "k=rsa; p=MIIBIjANBgkqhkiG9w0B",
         "DKIMStatus": "Not checked",
     }
 
 
+def mj_validation(dns_error: str = "", global_error: str = "") -> dict:
+    """`validate`'s answer, as it is: not wrapped in Data."""
+    errors = {}
+    if dns_error:
+        errors = {
+            "FileValidationError": "File verification failed as the server is "
+            "not accessible.",
+            "DNSValidationError": dns_error,
+        }
+    return {"ValidationMethod": "", "Errors": errors, "GlobalError": global_error}
+
+
+NO_TXT = (
+    "DNS record verification failed as no TXT record for that ownership token "
+    "was found on the remote server."
+)
 MJ_RECORDS = [
-    {"type": "TXT", "name": "mailjet._a1b2c3d4.acme.com", "value": "a1b2c3d4e5f6"},
+    {"type": "TXT", "name": "mailjet._a1b2c3d4.acme.com", "value": MJ_TOKEN},
     {
         "type": "TXT",
         "name": "acme.com",
-        "value": "v=spf1 include:spf.mailjet.com ~all",
+        "value": "v=spf1 include:spf.mailjet.com ?all",
         "merge": True,
     },
     {
         "type": "TXT",
         "name": "mailjet._domainkey.acme.com",
-        "value": "k=rsa; p=MIGfMA0GCSqGSIb3",
+        "value": "k=rsa; p=MIIBIjANBgkqhkiG9w0B",
     },
 ]
+# Without the DNS entry (a deleted sender's): ownership and SPF, no DKIM.
+MJ_DERIVED_RECORDS = MJ_RECORDS[:2]
 
 
 @pytest.fixture
@@ -447,15 +480,18 @@ def mailjet_answering(routes: dict):
     return answering(routes, module="mailjet")
 
 
+def calls_of(fake) -> list:
+    return [call[:2] for call in fake.calls]
+
+
 class TestMailjet:
     def test_register_creates_a_domain_sender_and_returns_its_records(
         self, mailjet
     ) -> None:
-        # An inactive sender has no DNSID yet: its entry is found by domain.
         patcher, fake = mailjet_answering(
             {
                 ("POST", f"{MJ}/sender"): (201, mj(mj_sender("Inactive"))),
-                ("GET", f"{MJ}/dns/acme.com"): (200, mj(mj_dns())),
+                MJ_DNS: (200, mj(mj_dns())),
             }
         )
         with patcher:
@@ -466,39 +502,78 @@ class TestMailjet:
         assert kwargs["json"] == {"Email": "*@acme.com", "EmailType": "transactional"}
         assert kwargs["auth"] == (MJ_KEY, MJ_SECRET)
         assert kwargs["timeout"] == 10
-        assert lookup[:2] == ("GET", f"{MJ}/dns/acme.com")
+        assert lookup[:2] == MJ_DNS
         assert registered.ref == str(MJ_SENDER_ID)
         assert registered.records == MJ_RECORDS
 
-        # Without a lookup by name, the account's entries are scanned.
-        patcher, fake = mailjet_answering(
-            {
-                ("POST", f"{MJ}/sender"): (201, mj(mj_sender("Inactive"))),
-                ("GET", f"{MJ}/dns/acme.com"): (404, {"ErrorMessage": "Not found"}),
-                ("GET", f"{MJ}/dns?Limit=1000&Offset=0"): (
-                    200,
-                    mj(mj_dns("other.org", 12), mj_dns("ACME.com")),
-                ),
-            }
-        )
-        with patcher:
-            assert mailjet.register("acme.com").records == MJ_RECORDS
+    def test_register_reuses_the_sender_mailjet_already_has(self, mailjet) -> None:
+        def register(state: str, dns_answer: tuple, listed=None):
+            patcher, fake = mailjet_answering(
+                {
+                    ("POST", f"{MJ}/sender"): (
+                        400,
+                        {
+                            "ErrorInfo": "",
+                            "ErrorMessage": f"There is an already existing {state} "
+                            'sender with the same email. You can use "validate" '
+                            "action in order to activate it.",
+                            "StatusCode": 400,
+                        },
+                    ),
+                    MJ_FIND: (
+                        200,
+                        mj(*(listed or [mj_sender(state.capitalize())])),
+                    ),
+                    MJ_DNS: dns_answer,
+                }
+            )
+            with patcher:
+                return mailjet.register("acme.com"), calls_of(fake)
+
+        registered, calls = register("inactive", (200, mj(mj_dns())))
+        assert MJ_FIND in calls
+        assert (registered.ref, registered.records) == (str(MJ_SENDER_ID), MJ_RECORDS)
+
+        # A deleted sender has no DNS entry any more: its ownership token and
+        # SPF are known anyway, DKIM comes once validation reactivates it.
+        registered = register("deleted", MJ_GONE)[0]
+        assert registered.ref == str(MJ_SENDER_ID)
+        assert registered.records == MJ_DERIVED_RECORDS
+
+        # Of several, the one not deleted.
+        older = {**mj_sender("Deleted"), "ID": 1001}
+        registered = register(
+            "inactive", (200, mj(mj_dns())), [older, mj_sender("Inactive")]
+        )[0]
+        assert registered.ref == str(MJ_SENDER_ID)
+
+        # An active sender is somebody's in use (the operator's own, one set
+        # up by hand): never taken over.
+        with pytest.raises(AlreadyRegisteredError):
+            register("active", (200, mj(mj_dns())), [older, mj_sender("Active")])
+        # Even listed with an inactive one.
+        inactive = {**mj_sender("Inactive"), "ID": 1002}
+        with pytest.raises(AlreadyRegisteredError):
+            register("inactive", (200, mj(mj_dns())), [inactive, mj_sender("Active")])
 
     def test_register_errors(self, mailjet, caplog) -> None:
+        refused = {"ErrorMessage": "MJ03 Email is invalid", "StatusCode": 400}
+        patcher, _fake = mailjet_answering({("POST", f"{MJ}/sender"): (400, refused)})
+        with patcher, pytest.raises(SendingProviderError) as error:
+            mailjet.register("acme.com")
+        assert not isinstance(error.value, AlreadyRegisteredError)
+
+        # Said to exist, yet not found.
         patcher, _fake = mailjet_answering(
             {
                 ("POST", f"{MJ}/sender"): (
                     400,
-                    {
-                        "ErrorInfo": "",
-                        "ErrorMessage": 'MJ18 A Sender resource with value "*@acme.com" '
-                        "for Email already exists.",
-                        "StatusCode": 400,
-                    },
-                )
+                    {"ErrorMessage": "There is an already existing inactive sender"},
+                ),
+                MJ_FIND: (200, mj()),
             }
         )
-        with patcher, pytest.raises(AlreadyRegisteredError):
+        with patcher, pytest.raises(SendingProviderError):
             mailjet.register("acme.com")
 
         patcher, _fake = mailjet_answering(
@@ -509,6 +584,32 @@ class TestMailjet:
         assert str(error.value) == "The sending service answered 503."
         assert MJ_KEY not in caplog.text and MJ_SECRET not in caplog.text
 
+        # The account's limit of senders reached: the operator's to solve.
+        patcher, _fake = mailjet_answering(
+            {
+                ("POST", f"{MJ}/sender"): (
+                    400,
+                    {"ErrorMessage": "Maximum number of senders reached."},
+                )
+            }
+        )
+        caplog.clear()
+        with patcher, pytest.raises(SendingProviderError) as error:
+            mailjet.register("acme.com")
+        assert str(error.value) == (
+            "The sending service's limit of sender domains is reached. "
+            "Contact your Showdesk administrator."
+        )
+        assert any(r.levelname == "ERROR" for r in caplog.records)
+
+        # A limit that isn't about senders is another refusal.
+        patcher, _fake = mailjet_answering(
+            {("POST", f"{MJ}/sender"): (400, {"ErrorMessage": "Rate limit hit."})}
+        )
+        with patcher, pytest.raises(SendingProviderError) as error:
+            mailjet.register("acme.com")
+        assert "limit of sender domains" not in str(error.value)
+
         # A sender without an id can't be stored.
         patcher, _fake = mailjet_answering(
             {("POST", f"{MJ}/sender"): (201, mj({"Status": "Inactive"}))}
@@ -516,168 +617,220 @@ class TestMailjet:
         with patcher, pytest.raises(SendingProviderError):
             mailjet.register("acme.com")
 
-    def test_check_asks_mailjet_to_validate_an_inactive_sender(self, mailjet) -> None:
-        validate = ("POST", f"{MJ}/sender/{MJ_SENDER_ID}/validate")
+    def test_register_keeps_the_sender_when_its_records_cant_be_read(
+        self, mailjet
+    ) -> None:
+        for dns_answer in (
+            (503, b"Service Unavailable"),
+            (200, mj(mj_dns("other.org"))),
+        ):
+            patcher, _fake = mailjet_answering(
+                {
+                    ("POST", f"{MJ}/sender"): (201, mj(mj_sender("Inactive"))),
+                    MJ_DNS: dns_answer,
+                }
+            )
+            with patcher:
+                registered = mailjet.register("acme.com")
+            assert registered.ref == str(MJ_SENDER_ID)
+            assert registered.records == MJ_DERIVED_RECORDS
+
+    @pytest.mark.parametrize("status", ["Inactive", "Deleted"])
+    def test_check_asks_mailjet_to_validate_a_sender_not_active(
+        self, mailjet, status
+    ) -> None:
         patcher, fake = mailjet_answering(
             {
-                ("GET", f"{MJ}/sender/{MJ_SENDER_ID}"): (
+                MJ_SENDER: (200, mj(mj_sender(status))),
+                MJ_VALIDATE: (
                     200,
-                    mj(mj_sender("Inactive")),
-                ),
-                validate: (
-                    201,
-                    mj(
-                        {
-                            "ValidationMethod": "",
-                            "Errors": {"DNSValidationError": "No TXT record found."},
-                            "GlobalError": "",
-                        }
+                    mj_validation(
+                        NO_TXT,
+                        "Neither the file at your domain root nor "
+                        "the DNS TXT record have been found to validate this sender.",
                     ),
                 ),
-                ("GET", f"{MJ}/dns/acme.com"): (200, mj(mj_dns())),
-                ("POST", f"{MJ}/dns/{MJ_DNS_ID}/check"): (
-                    201,
-                    mj({"DKIMStatus": "OK", "SPFStatus": "OK"}),
-                ),
+                MJ_DNS: (200, mj(mj_dns())) if status == "Inactive" else MJ_GONE,
             }
         )
         with patcher:
             result = mailjet.check(str(MJ_SENDER_ID))
-        assert validate in [call[:2] for call in fake.calls]
         assert result.status == CheckStatus.PENDING
-        assert "No TXT record found." in result.error
-        assert result.records == MJ_RECORDS
+        assert result.error == NO_TXT
+        # DKIM and SPF are checked once the sender is active.
+        assert MJ_DNS_CHECK not in calls_of(fake)
+        expected = MJ_RECORDS if status == "Inactive" else MJ_DERIVED_RECORDS
+        assert result.records == expected
+
+        # Without Mailjet's DNS error, its global one.
+        patcher, _fake = mailjet_answering(
+            {
+                MJ_SENDER: (200, mj(mj_sender(status))),
+                MJ_VALIDATE: (200, mj_validation(global_error="Not found.")),
+                MJ_DNS: MJ_GONE,
+            }
+        )
+        with patcher:
+            assert mailjet.check(str(MJ_SENDER_ID)).error == "Not found."
 
     def test_check_of_an_active_sender_reads_dkim_and_spf(self, mailjet) -> None:
         def check(dns_check: dict):
             patcher, fake = mailjet_answering(
                 {
-                    ("GET", f"{MJ}/sender/{MJ_SENDER_ID}"): (
-                        200,
-                        mj(mj_sender("Active", MJ_DNS_ID)),
-                    ),
-                    ("GET", f"{MJ}/dns/{MJ_DNS_ID}"): (200, mj(mj_dns())),
-                    ("POST", f"{MJ}/dns/{MJ_DNS_ID}/check"): (201, mj(dns_check)),
+                    MJ_SENDER: (200, mj(mj_sender("Active"))),
+                    MJ_DNS: (200, mj(mj_dns())),
+                    MJ_DNS_CHECK: (200, mj(dns_check)),
                 }
             )
             with patcher:
-                return mailjet.check(str(MJ_SENDER_ID)), [c[:2] for c in fake.calls]
+                return mailjet.check(str(MJ_SENDER_ID)), calls_of(fake)
 
         result, calls = check({"DKIMStatus": "OK", "SPFStatus": "OK"})
         assert (result.status, result.error) == (CheckStatus.VERIFIED, "")
         assert result.records == MJ_RECORDS
-        assert ("POST", f"{MJ}/sender/{MJ_SENDER_ID}/validate") not in calls
+        assert MJ_VALIDATE not in calls
 
         result, _calls = check(
             {
+                "DKIMErrors": ["no DKIM record", "wrong key"],
+                "DKIMRecordCurrentValue": "",
                 "DKIMStatus": "Error",
-                "DKIMErrors": ["No DKIM record found."],
-                "SPFStatus": "OK",
                 "SPFErrors": [],
+                "SPFRecordsCurrentValues": [],
+                "SPFStatus": "OK",
             }
         )
         assert result.status == CheckStatus.PENDING
-        assert "DKIM" in result.error and "No DKIM record found." in result.error
-        assert "SPF" not in result.error
+        assert result.error == "DKIM: no DKIM record; wrong key"
 
-    def test_check_verifies_a_sender_mailjet_validates(self, mailjet) -> None:
-        sender = ("GET", f"{MJ}/sender/{MJ_SENDER_ID}")
+        result, _calls = check(
+            {"DKIMStatus": "OK", "SPFStatus": "Error", "SPFErrors": "Host not found."}
+        )
+        assert result.error == "SPF: Host not found."
+
+    def test_check_verifies_a_sender_mailjet_validates(self, mailjet, caplog) -> None:
+        # `validate` as Mailjet gives it, or wrapped in Data.
+        for validation in (mj_validation(), mj(mj_validation())):
+            patcher, fake = mailjet_answering(
+                {
+                    MJ_SENDER: [
+                        (200, mj(mj_sender("Deleted"))),
+                        (200, mj(mj_sender("Active"))),
+                    ],
+                    MJ_VALIDATE: (200, validation),
+                    MJ_DNS: (200, mj(mj_dns())),
+                    MJ_DNS_CHECK: (200, mj({"DKIMStatus": "OK", "SPFStatus": "OK"})),
+                }
+            )
+            with patcher:
+                result = mailjet.check(str(MJ_SENDER_ID))
+            assert (result.status, result.error) == (CheckStatus.VERIFIED, "")
+            assert result.records == MJ_RECORDS
+            assert calls_of(fake).count(MJ_SENDER) == 2
+
+        # The sender read after validating decides, whatever the answer
+        # says: Mailjet may answer errors (the file one) and validate anyway.
         patcher, fake = mailjet_answering(
             {
-                sender: [
+                MJ_SENDER: [
                     (200, mj(mj_sender("Inactive"))),
-                    (200, mj(mj_sender("Active", MJ_DNS_ID))),
+                    (200, mj(mj_sender("Active"))),
                 ],
-                ("POST", f"{MJ}/sender/{MJ_SENDER_ID}/validate"): (
-                    201,
-                    mj({"ValidationMethod": "DNS", "Errors": {}, "GlobalError": ""}),
+                MJ_VALIDATE: (
+                    200,
+                    {
+                        "ValidationMethod": "DNS",
+                        "Errors": {"FileValidationError": "No file found."},
+                        "GlobalError": "",
+                    },
                 ),
-                ("GET", f"{MJ}/dns/{MJ_DNS_ID}"): (200, mj(mj_dns())),
-                ("POST", f"{MJ}/dns/{MJ_DNS_ID}/check"): (
-                    201,
-                    mj({"DKIMStatus": "OK", "SPFStatus": "OK"}),
-                ),
+                MJ_DNS: (200, mj(mj_dns())),
+                MJ_DNS_CHECK: (200, mj({"DKIMStatus": "OK", "SPFStatus": "OK"})),
             }
         )
         with patcher:
             result = mailjet.check(str(MJ_SENDER_ID))
         assert (result.status, result.error) == (CheckStatus.VERIFIED, "")
-        assert result.records == MJ_RECORDS
-        assert [call[:2] for call in fake.calls].count(sender) == 2
+        assert MJ_DNS_CHECK in calls_of(fake)
 
-    def test_register_keeps_the_sender_when_its_records_cant_be_read(
-        self, mailjet
-    ) -> None:
+        # Validated without error, yet not active: pending.
         patcher, _fake = mailjet_answering(
             {
-                ("POST", f"{MJ}/sender"): (201, mj(mj_sender("Inactive"))),
-                ("GET", f"{MJ}/dns/acme.com"): (503, b"Service Unavailable"),
+                MJ_SENDER: (200, mj(mj_sender("Inactive"))),
+                MJ_VALIDATE: (200, mj_validation()),
+                MJ_DNS: (200, mj(mj_dns())),
             }
         )
         with patcher:
-            registered = mailjet.register("acme.com")
-        assert (registered.ref, registered.records) == (str(MJ_SENDER_ID), [])
+            assert mailjet.check(str(MJ_SENDER_ID)).status == CheckStatus.PENDING
 
-    def test_dns_entry_of_another_domain_is_not_used(self, mailjet) -> None:
-        # By name: Mailjet answering with another domain's entry is a miss.
+        # A deleted sender Mailjet doesn't reactivate: the operator must know.
         patcher, _fake = mailjet_answering(
             {
-                ("POST", f"{MJ}/sender"): (201, mj(mj_sender("Inactive"))),
-                ("GET", f"{MJ}/dns/acme.com"): (200, mj(mj_dns("other.org", 12))),
-                ("GET", f"{MJ}/dns?Limit=1000&Offset=0"): (
-                    200,
-                    mj(mj_dns("other.org", 12)),
-                ),
-            }
-        )
-        with patcher:
-            assert mailjet.register("acme.com").records == []
-
-        # By DNSID: an entry of another domain isn't checked.
-        patcher, fake = mailjet_answering(
-            {
-                ("GET", f"{MJ}/sender/{MJ_SENDER_ID}"): (
-                    200,
-                    mj(mj_sender("Active", 12)),
-                ),
-                ("GET", f"{MJ}/dns/12"): (200, mj(mj_dns("other.org", 12))),
-                ("GET", f"{MJ}/dns/acme.com"): (404, {"ErrorMessage": "Not found"}),
-                ("GET", f"{MJ}/dns?Limit=1000&Offset=0"): (200, mj()),
+                MJ_SENDER: (200, mj(mj_sender("Deleted"))),
+                MJ_VALIDATE: (200, mj_validation()),
+                MJ_DNS: MJ_GONE,
             }
         )
         with patcher:
             result = mailjet.check(str(MJ_SENDER_ID))
         assert result.status == CheckStatus.PENDING
-        assert ("POST", f"{MJ}/dns/12/check") not in [c[:2] for c in fake.calls]
+        assert result.error == (
+            "Mailjet didn't reactivate this domain's previous sender; contact "
+            "your Showdesk administrator."
+        )
+        assert any(
+            r.levelname == "ERROR" and "reactivate" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_dns_entry_of_another_domain_is_not_used(self, mailjet) -> None:
+        patcher, fake = mailjet_answering(
+            {
+                MJ_SENDER: (200, mj(mj_sender("Active", 12))),
+                ("GET", f"{MJ}/dns/12"): (200, mj(mj_dns("other.org", 12))),
+            }
+        )
+        with patcher:
+            result = mailjet.check(str(MJ_SENDER_ID))
+        assert result.status == CheckStatus.PENDING
+        assert result.records == MJ_DERIVED_RECORDS
+        assert ("POST", f"{MJ}/dns/12/check") not in calls_of(fake)
 
     def test_check_of_a_missing_or_strange_sender(self, mailjet) -> None:
-        sender = ("GET", f"{MJ}/sender/{MJ_SENDER_ID}")
-        patcher, _fake = mailjet_answering(
-            {sender: (404, {"ErrorMessage": "Object not found"})}
-        )
+        patcher, _fake = mailjet_answering({MJ_SENDER: MJ_GONE})
         with patcher:
             assert mailjet.check(str(MJ_SENDER_ID)).status == CheckStatus.FAILED
 
-        patcher, _fake = mailjet_answering({sender: (200, mj(mj_sender("Suspended")))})
+        patcher, _fake = mailjet_answering(
+            {MJ_SENDER: (200, mj(mj_sender("Suspended")))}
+        )
         with patcher:
             assert mailjet.check(str(MJ_SENDER_ID)).status == CheckStatus.UNKNOWN
 
     def test_mailjet_echoing_the_keys_is_masked(self, mailjet, caplog) -> None:
         basic = base64.b64encode(f"{MJ_KEY}:{MJ_SECRET}".encode()).decode()
         echo = f"Bad auth {MJ_KEY} / {MJ_SECRET} (Basic {basic})"
+        for validation in ((200, mj_validation(echo)), (400, {"ErrorMessage": echo})):
+            patcher, _fake = mailjet_answering(
+                {
+                    MJ_SENDER: (200, mj(mj_sender("Inactive"))),
+                    MJ_VALIDATE: validation,
+                    MJ_DNS: (200, mj(mj_dns())),
+                }
+            )
+            with patcher:
+                result = mailjet.check(str(MJ_SENDER_ID))
+            assert "Bad auth" in result.error
+            for secret in (MJ_KEY, MJ_SECRET, basic):
+                assert secret not in result.error and secret not in caplog.text
+
         patcher, _fake = mailjet_answering(
             {
-                ("GET", f"{MJ}/sender/{MJ_SENDER_ID}"): (
+                MJ_SENDER: (200, mj(mj_sender("Active"))),
+                MJ_DNS: (200, mj(mj_dns())),
+                MJ_DNS_CHECK: (
                     200,
-                    mj(mj_sender("Inactive")),
-                ),
-                ("POST", f"{MJ}/sender/{MJ_SENDER_ID}/validate"): (
-                    400,
-                    {"ErrorMessage": echo},
-                ),
-                ("GET", f"{MJ}/dns/acme.com"): (200, mj(mj_dns())),
-                ("POST", f"{MJ}/dns/{MJ_DNS_ID}/check"): (
-                    201,
                     mj(
                         {"DKIMStatus": "Error", "DKIMErrors": [echo], "SPFStatus": "OK"}
                     ),
@@ -688,7 +841,7 @@ class TestMailjet:
             result = mailjet.check(str(MJ_SENDER_ID))
         assert "Bad auth" in result.error
         for secret in (MJ_KEY, MJ_SECRET, basic):
-            assert secret not in result.error and secret not in caplog.text
+            assert secret not in result.error
 
         patcher, _fake = mailjet_answering(
             {("POST", f"{MJ}/sender"): (401, {"ErrorMessage": echo})}
@@ -698,18 +851,10 @@ class TestMailjet:
         for secret in (MJ_KEY, MJ_SECRET, basic):
             assert secret not in str(error.value) and secret not in caplog.text
 
-    def test_check_of_a_deleted_sender_fails(self, mailjet) -> None:
-        patcher, fake = mailjet_answering(
-            {("GET", f"{MJ}/sender/{MJ_SENDER_ID}"): (200, mj(mj_sender("Deleted")))}
-        )
-        with patcher:
-            assert mailjet.check(str(MJ_SENDER_ID)).status == CheckStatus.FAILED
-        assert len(fake.calls) == 1
-
     def test_check_that_cannot_conclude_raises(self, mailjet, caplog) -> None:
         patcher, _fake = mailjet_answering(
             {
-                ("GET", f"{MJ}/sender/{MJ_SENDER_ID}"): requests.ConnectionError(
+                MJ_SENDER: requests.ConnectionError(
                     f"https://{MJ_KEY}:{MJ_SECRET}@api.mailjet.com refused"
                 )
             }
@@ -726,31 +871,24 @@ class TestMailjet:
         assert fake.calls == []
 
     def test_remove_deletes_the_sender(self, mailjet) -> None:
-        sender = ("GET", f"{MJ}/sender/{MJ_SENDER_ID}")
         delete = ("DELETE", f"{MJ}/sender/{MJ_SENDER_ID}")
         patcher, fake = mailjet_answering(
-            {sender: (200, mj(mj_sender("Active", MJ_DNS_ID))), delete: (204, None)}
+            {MJ_SENDER: (200, mj(mj_sender("Active"))), delete: (204, None)}
         )
         with patcher:
             mailjet.remove(str(MJ_SENDER_ID))
-        assert [call[:2] for call in fake.calls] == [sender, delete]
+        assert calls_of(fake) == [MJ_SENDER, delete]
 
         # Already gone, or deleted: removed, nothing to delete.
-        for answer in (
-            (404, {"ErrorMessage": "Not found"}),
-            (200, mj(mj_sender("Deleted"))),
-        ):
-            patcher, fake = mailjet_answering({sender: answer})
+        for answer in (MJ_GONE, (200, mj(mj_sender("Deleted")))):
+            patcher, fake = mailjet_answering({MJ_SENDER: answer})
             with patcher:
                 mailjet.remove(str(MJ_SENDER_ID))
-            assert [call[:2] for call in fake.calls] == [sender]
+            assert calls_of(fake) == [MJ_SENDER]
 
         # Gone between the read and the delete.
         patcher, _fake = mailjet_answering(
-            {
-                sender: (200, mj(mj_sender("Inactive"))),
-                delete: (404, {"ErrorMessage": "Gone"}),
-            }
+            {MJ_SENDER: (200, mj(mj_sender("Inactive"))), delete: MJ_GONE}
         )
         with patcher:
             mailjet.remove(str(MJ_SENDER_ID))
@@ -758,8 +896,8 @@ class TestMailjet:
         # A 400 on delete is fine when the sender reads as deleted after it.
         patcher, fake = mailjet_answering(
             {
-                sender: [
-                    (200, mj(mj_sender("Active", MJ_DNS_ID))),
+                MJ_SENDER: [
+                    (200, mj(mj_sender("Active"))),
                     (200, mj(mj_sender("Deleted"))),
                 ],
                 delete: (400, {"ErrorMessage": "Sender already deleted"}),
@@ -767,12 +905,12 @@ class TestMailjet:
         )
         with patcher:
             mailjet.remove(str(MJ_SENDER_ID))
-        assert [call[:2] for call in fake.calls] == [sender, delete, sender]
+        assert calls_of(fake) == [MJ_SENDER, delete, MJ_SENDER]
 
         # Otherwise it isn't removed.
         patcher, _fake = mailjet_answering(
             {
-                sender: (200, mj(mj_sender("Active", MJ_DNS_ID))),
+                MJ_SENDER: (200, mj(mj_sender("Active"))),
                 delete: (400, {"ErrorMessage": "Cannot delete"}),
             }
         )

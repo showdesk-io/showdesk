@@ -318,6 +318,31 @@ class TestSendingPurposeAPI:
         assert "domain" in response.data
         assert not OrganizationDomain.objects.filter(domain="gmail.com").exists()
 
+    def test_the_inbound_domain_can_never_be_claimed(
+        self, admin_client, organization, settings
+    ) -> None:
+        """Nor any subdomain of it: the instance's, nobody else's."""
+        settings.INBOUND_EMAIL_DOMAIN = "in.showdesk.test"
+        for domain in ("in.showdesk.test", "eu.in.showdesk.test"):
+            response = admin_client.post(
+                "/api/v1/organization-domains/",
+                {"domain": domain, "is_branding": True},
+                format="json",
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST
+            assert "domain" in response.data
+
+            AdminFactory(
+                organization=organization, email=f"ann@{domain}", is_verified=True
+            )
+            with pytest.raises(services.CannotAutoVerifyError):
+                services.try_admin_email_autoverify(
+                    organization=organization, domain=domain
+                )
+        assert not OrganizationDomain.objects.filter(
+            domain__endswith="in.showdesk.test"
+        ).exists()
+
     def test_sending_state_is_read_only(self, admin_client, organization) -> None:
         """Sending is set up through its own endpoints, never by a PATCH."""
         d = OrganizationDomain.objects.create(

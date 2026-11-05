@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import timedelta
+from email.utils import parseaddr
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.cache import cache
@@ -30,6 +32,7 @@ from apps.organizations import dns_verification
 from apps.organizations.models import (
     OrganizationDomain,
     User,
+    is_inbound_email_domain,
     is_public_email_domain,
 )
 
@@ -81,6 +84,11 @@ class PublicDomainError(SendingError):
     http_status = 400
 
 
+class OperatorDomainError(SendingError):
+    code = "operator_domain"
+    http_status = 400
+
+
 class NotRegisteredError(SendingError):
     code = "not_registered"
     http_status = 400
@@ -111,6 +119,49 @@ class ProviderError(SendingError):
     http_status = 502
 
 
+def is_operator_domain(domain: str) -> bool:
+    """Whether the domain is the instance's own, never an organization's to
+    send from, whatever the provider.
+
+    The domain of `DEFAULT_FROM_EMAIL` and the host of `SITE_URL`, exactly:
+    their parent and sibling domains may well be a customer's (an instance
+    at `support.acme.com` serving Acme). `INBOUND_EMAIL_DOMAIN` and every
+    subdomain of it: the instance's mailboxes live there, nobody else's.
+    """
+    domain = _normalized_domain(domain)
+    if not domain:
+        return False
+    from_domain = parseaddr(settings.DEFAULT_FROM_EMAIL or "")[1].rpartition("@")[2]
+    site_url = (getattr(settings, "SITE_URL", "") or "").strip()
+    if site_url and "//" not in site_url:
+        site_url = f"//{site_url}"  # A bare host: no scheme to find it after.
+    try:
+        site_host = urlsplit(site_url).hostname or ""
+    except ValueError:
+        site_host = ""
+    own = {_normalized_domain(from_domain), _normalized_domain(site_host)} - {""}
+    if domain in own:
+        return True
+    return is_inbound_email_domain(domain)
+
+
+def _normalized_domain(name: str) -> str:
+    """A domain as rows store it: lowercase ASCII, without a trailing dot."""
+    name = name.strip().rstrip(".")
+    try:
+        name = name.encode("idna").decode()
+    except UnicodeError:
+        pass  # Not a name IDNA encodes: compared as written.
+    return name.lower()
+
+
+def _require_not_operator(domain: str) -> None:
+    if is_operator_domain(domain):
+        raise OperatorDomainError(
+            "This domain is used by the Showdesk instance itself."
+        )
+
+
 def sendable_domains(organization_id) -> set[str]:
     """The organization's domains mail may go out from now (§7.1).
 
@@ -124,7 +175,7 @@ def sendable_domains(organization_id) -> set[str]:
         for domain in _sendable_rows()
         .filter(organization_id=organization_id)
         .values_list("domain", flat=True)
-        if not is_public_email_domain(domain)
+        if not (is_public_email_domain(domain) or is_operator_domain(domain))
     }
 
 
@@ -139,7 +190,7 @@ def sendable_address(mailbox, domains: set[str] | None = None) -> str | None:
     if not (sending_enabled() and address):
         return None
     domain = address.rpartition("@")[2]
-    if is_public_email_domain(domain):
+    if is_public_email_domain(domain) or is_operator_domain(domain):
         return None  # Nobody's, even if verified before that was refused.
     if domains is None:
         sendable = (
@@ -318,7 +369,9 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
 
 
 def _require_owned(row: OrganizationDomain) -> None:
-    """Refuse a webmail domain, or one the row's organization doesn't own."""
+    """Refuse a webmail domain, the instance's own, or one the row's
+    organization doesn't own."""
+    _require_not_operator(row.domain)
     if is_public_email_domain(row.domain):
         raise PublicDomainError("Mail can't be sent from a public webmail domain.")
     if row.status != Ownership.VERIFIED:
@@ -442,6 +495,7 @@ def check_now(row: OrganizationDomain) -> OrganizationDomain:
 
 
 def _require_checkable(row: OrganizationDomain) -> None:
+    _require_not_operator(row.domain)
     if row.status != Ownership.VERIFIED:
         raise NotOwnedError(f"Verify {row.domain} for your organization first.")
     if row.sending_status == Sending.NONE or not row.sending_provider_ref:
@@ -759,8 +813,19 @@ def record_removal(domain: str, ref: str, made_by: str = "") -> SendingRemoval |
     when that provider's registrations exist nowhere but on our row
     (`manual`): nothing to remove, nothing to wait for. Made while no
     provider is configured, the record's provider is unknown (""): the next
-    one configured removes it.
+    one configured removes it. None as well for the instance's own domains:
+    never removed, whatever lets go of them.
     """
+    if is_operator_domain(domain):
+        # The instance's own sender (or one made before that was refused):
+        # it sends the instance's mail, nobody's to take away.
+        logger.error(
+            "Not removing the sending registration of the instance's own domain "
+            "%s (ref %s): remove it by hand if it is really unused.",
+            domain,
+            ref,
+        )
+        return None
     configured = settings.SENDING_DOMAIN_PROVIDER
     name = made_by or configured
     if name == "none":

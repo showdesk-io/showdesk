@@ -25,6 +25,7 @@ from .models import (
     Organization,
     OrganizationDomain,
     User,
+    is_inbound_email_domain,
     is_public_email_domain,
 )
 
@@ -89,7 +90,7 @@ def try_admin_email_autoverify(
     """Create or upgrade a row to verified via admin_email.
 
     Refuses for public webmail providers (whatever the purpose: nobody owns
-    them), when no eligible admin exists,
+    them) and the instance's inbound domain, when no eligible admin exists,
     or when another org has already claimed the domain. The caller is
     expected to surface those refusals to the user with the structured
     `code` from the raised exception.
@@ -99,6 +100,10 @@ def try_admin_email_autoverify(
     if is_public_email_domain(domain):
         raise CannotAutoVerifyError(
             "A public webmail domain can't be verified for an organization."
+        )
+    if is_inbound_email_domain(domain):
+        raise CannotAutoVerifyError(
+            "This domain is used by the Showdesk instance itself."
         )
 
     if not has_eligible_admin(organization, domain):

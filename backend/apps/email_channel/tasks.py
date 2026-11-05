@@ -277,6 +277,7 @@ def check_sending_domains() -> int:
         SENDING_RECHECK_HOURS,
         check_sending,
         drop_switched_registration,
+        is_operator_domain,
         provider,
     )
     from apps.organizations.models import OrganizationDomain
@@ -315,7 +316,9 @@ def check_sending_domains() -> int:
         )
     )
     count = 0
-    for row in list(due):
+    # The instance's own (rows made before that was refused): never checked,
+    # `check_sending` would refuse them on every run.
+    for row in [r for r in due if not is_operator_domain(r.domain)]:
         try:
             check_sending(row, sender=sender)
         except Exception:
