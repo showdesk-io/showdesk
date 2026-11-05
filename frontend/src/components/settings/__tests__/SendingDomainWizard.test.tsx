@@ -335,6 +335,21 @@ describe("SendingDomainWizard", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Sending from acme.com: Pending");
   });
 
+  it("says the service gave no records yet when only the ownership one is there", async () => {
+    const ownership = {
+      type: "TXT",
+      name: "_showdesk-verify.acme.com",
+      value: "showdesk-verify=tok",
+    };
+    domains = [domain({ sending_status: "pending", sending_dns_records: [ownership] })];
+    await renderWizard();
+
+    expect(await screen.findByText("showdesk-verify=tok")).toBeInTheDocument();
+    expect(
+      screen.getByText("The sending service returned no records yet. Check again in a minute."),
+    ).toBeInTheDocument();
+  });
+
   it("shows what the API says when it refuses", async () => {
     domains = [domain()];
     const user = await renderWizard();
