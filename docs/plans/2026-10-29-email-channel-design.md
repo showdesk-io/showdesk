@@ -498,6 +498,15 @@ inbound provider.
   account's entries), and checking that entry before the sender is
   validated.
 
+- A sender created at Mailjet whose answer is lost (a timeout after
+  the `POST`) leaves no ref. Setting the domain up again then answers a
+  conflict (409 `provider_conflict`) until an operator deletes the sender in
+  Mailjet.
+
+- A wrong `MAILJET_API_URL` (a US account on the EU host, or the reverse)
+  makes every Mailjet call fail: domains can't be set up, and checks stay
+  inconclusive, until it is fixed.
+
 - A public address saved while its domain changes hands: the address is
   validated against the domain's owner, then saved, and a verification by
   another organization in between frees the addresses saved before it only.
@@ -647,7 +656,7 @@ these choices beyond this design. Each one is pinned by a test.
 | 17 | A public webmail domain is refused on create for every purpose (branding, routing, sending), by DNS or admin email alike. | Nobody owns `gmail.com`, whatever the row is for. |
 | 18 | An admin-email verification of a domain the organization already has adds the asked purposes to the row and keeps the others, and leaves its sending state alone. | Verifying again must not drop a purpose, nor stop sending. |
 | 19 | A DNS win clears the token of the other organizations' rows of the domain (the previous owner's and any pending one): their admins regenerate a token to claim it again. | The previous owner's TXT, left published, would otherwise win the domain straight back. |
-| 20 | `mailjet` (added after PR 3): a domain is a domain sender `*@<domain>` of the account Anymail sends with; its ref is the sender's numeric id. The records are Mailjet's ownership token, SPF (`merge`) and DKIM, all TXT, fully qualified, read from the sender's DNS entry (by `DNSID`, else by domain name while the sender is inactive). `check`: a deleted (or missing) sender is FAILED; an inactive one is asked to validate; then Mailjet checks DKIM and SPF. VERIFIED only when the sender is active and both are `OK`, otherwise PENDING with Mailjet's error texts. A 400 saying the sender already exists is "already registered" (409). `remove` deletes the sender; 404 counts as removed. | Mailjet only sends from an active sender of the sending account, and DKIM and SPF are what DMARC alignment needs. |
+| 20 | `mailjet` (added after PR 3): a domain is a domain sender `*@<domain>` of the account Anymail sends with; its ref is the sender's numeric id. The records are Mailjet's ownership token, SPF (`merge`) and DKIM, all TXT, fully qualified, read from the sender's DNS entry (by `DNSID`, else by domain name while the sender is inactive). `check`: a deleted (or missing) sender is FAILED; an inactive one is asked to validate; then Mailjet checks DKIM and SPF. VERIFIED only when the sender is active and both are `OK`, otherwise PENDING with Mailjet's error texts. A 400 saying the sender already exists is "already registered" (409). `remove` reads the sender first and deletes it unless it is missing or `Deleted`; a 404 on delete, or a 400 after which the sender reads `Deleted`, counts as removed. A DNS entry read whose domain isn't the sender's counts as not found. | Mailjet only sends from an active sender of the sending account, and DKIM and SPF are what DMARC alignment needs. |
 
 What admins have:
 
@@ -680,8 +689,10 @@ What operators set (§8):
 
 - `SENDING_DOMAIN_PROVIDER`: `none` (default, feature hidden), `manual`,
   `scaleway_tem` or `mailjet`. A misconfigured provider is logged, and admins only see
-  that sending from their domain is unavailable; so are a provider's own
-  error messages (admins see "The sending service answered 503."). Changing
+  that sending from their domain is unavailable. A provider's failed HTTP
+  call only shows admins its status ("The sending service answered 503.");
+  what a check finds wrong (TEM's last error; Mailjet's validation, DKIM
+  and SPF texts, cleaned of credentials and trimmed) is shown to them. Changing
   it makes every domain set up under the previous one fall back, to be set
   up again (choice 15).
 - `manual`: `SENDING_DOMAIN_SPF_INCLUDE` and `SENDING_DOMAIN_DKIM_SELECTOR`,
