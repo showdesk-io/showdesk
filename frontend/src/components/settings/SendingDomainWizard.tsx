@@ -634,7 +634,9 @@ function RecordsTable({ records }: { records: SendingRecord[] }) {
               >
                 {record.type}
               </td>
-              <td role="cell" className="block sm:table-cell sm:px-3 sm:py-2">
+              {/* A share of the width: the DKIM value is long enough to squeeze the
+                  names into a few characters a line. */}
+              <td role="cell" className="block sm:table-cell sm:w-2/5 sm:px-3 sm:py-2">
                 <span className={mobileLabelClass}>Name</span>
                 <div className="flex items-start gap-2">
                   <code className="min-w-0 flex-1 break-all font-mono text-xs text-gray-800">
