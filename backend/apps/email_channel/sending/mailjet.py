@@ -14,6 +14,7 @@ in an error message, and Mailjet's own words are scrubbed of them.
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
 from typing import Any
@@ -74,8 +75,13 @@ class MailjetProvider:
             )
 
     def _scrub(self, text: str) -> str:
-        """Mailjet's words, trimmed, without our keys should it echo them."""
-        for secret in (self.api_key, self.secret_key):
+        """Mailjet's words, trimmed, without our keys should it echo them.
+
+        The basic auth header's base64 of `key:secret` is masked too, first,
+        as it doesn't contain the keys as they are.
+        """
+        basic = base64.b64encode(f"{self.api_key}:{self.secret_key}".encode()).decode()
+        for secret in (basic, self.api_key, self.secret_key):
             text = text.replace(secret, "***")
         return text.strip()[:MAX_ERROR_TEXT]
 
@@ -102,7 +108,9 @@ class MailjetProvider:
                 response.status_code,
                 detail,
             )
-            # Mailjet's own words stay in the log: admins see the status only.
+            # An HTTP failure shows admins its status only; Mailjet's words
+            # stay in the log. What a check finds wrong (the validation, DKIM
+            # and SPF texts, cleaned and trimmed) is shown to them.
             raise _HTTPError(
                 f"The sending service answered {response.status_code}.",
                 response.status_code,
@@ -160,17 +168,24 @@ class MailjetProvider:
 
         By the sender's DNSID when it has one; an inactive sender has none
         (-1), so then by domain name, then by scanning the account's entries.
+        An entry read whose domain isn't this one is taken as not found.
         """
         dns_id = _id(sender.get("DNSID"))
         if dns_id is not None:
-            return self._first("GET", f"/dns/{dns_id}")
+            entry = self._first("GET", f"/dns/{dns_id}")
+            if _same_domain(entry.get("Domain"), domain):
+                return entry
+            logger.warning("Mailjet DNS entry %s isn't %s's.", dns_id, domain)
         if not _DOMAIN_RE.match(domain):
             return None
         try:
-            return self._first("GET", f"/dns/{domain}")
+            entry = self._first("GET", f"/dns/{domain}")
         except _HTTPError as exc:
             if exc.status_code not in (400, 404):
                 raise
+        else:
+            if _same_domain(entry.get("Domain"), domain):
+                return entry
         for page in range(DNS_MAX_PAGES):
             query = f"Limit={DNS_PAGE_SIZE}&Offset={page * DNS_PAGE_SIZE}"
             data = self._call("GET", f"/dns?{query}").get("Data")
@@ -267,11 +282,29 @@ class MailjetProvider:
         return errors
 
     def remove(self, ref: str) -> None:
+        """Delete the sender, unless Mailjet has it no more or deleted it."""
+        path = self._sender_path(ref)
+        if self._is_removed(path):
+            return
         try:
-            self._call("DELETE", self._sender_path(ref))
+            self._call("DELETE", path)
         except _HTTPError as exc:
-            if exc.status_code != 404:  # Already gone.
-                raise
+            if exc.status_code == 404:  # Gone since.
+                return
+            # Mailjet may refuse to delete a sender it deleted meanwhile.
+            if exc.status_code == 400 and self._is_removed(path):
+                return
+            raise
+
+    def _is_removed(self, path: str) -> bool:
+        """Whether Mailjet has no such sender, or a deleted one."""
+        try:
+            sender = self._first("GET", path)
+        except _HTTPError as exc:
+            if exc.status_code == 404:
+                return True
+            raise
+        return sender.get("Status") == "Deleted"
 
 
 def _error_message(response: requests.Response) -> str:
