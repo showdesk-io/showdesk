@@ -5,8 +5,11 @@ whose keys Anymail sends with (`MAILJET_API_KEY`, `MAILJET_SECRET_KEY`):
 Mailjet only sends from a sender of its own account, once it is validated.
 Mailjet gives the records to publish in the domain's DNS entry: its
 ownership token, which validates the sender, then SPF and DKIM. `check`
-asks Mailjet to validate a sender that isn't yet, then to check the
-entry's DKIM and SPF.
+asks Mailjet to validate a sender that isn't active (validation also
+reactivates a deleted one), then to check the entry's DKIM and SPF.
+
+What Mailjet's API does was confirmed on a real account: see
+docs/plans/2026-11-05-mailjet-sending-provider-plan.md.
 
 The keys travel in the basic auth header only: they are never logged nor put
 in an error message, and Mailjet's own words are scrubbed of them.
@@ -24,7 +27,6 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 from .providers import (
-    AlreadyRegisteredError,
     CheckStatus,
     DomainCheck,
     RegisteredDomain,
@@ -35,10 +37,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_API_URL = "https://api.mailjet.com"
 TIMEOUT_SECONDS = 10
-# Scanning the account's DNS entries for a domain: entries per page, and the
-# most pages read, so that a huge account can't make a check endless.
-DNS_PAGE_SIZE = 1000
-DNS_MAX_PAGES = 10
+# The SPF record Mailjet asks for, shown while its DNS entry can't be read.
+SPF_VALUE = "v=spf1 include:spf.mailjet.com ?all"
 # Each error text Mailjet gives is cut to this length.
 MAX_ERROR_TEXT = 200
 
@@ -145,60 +145,60 @@ class MailjetProvider:
                 json={"Email": f"*@{domain}", "EmailType": "transactional"},
             )
         except _HTTPError as exc:
+            # Mailjet keeps a sender once created, deleted ones too: it is
+            # reused, and validating it reactivates it.
             if exc.status_code == 400 and "already exist" in exc.detail.lower():
-                raise AlreadyRegisteredError(
-                    f"{domain} is already registered with Mailjet."
-                ) from None
-            raise
+                sender = self._existing_sender(domain)
+            else:
+                raise
         ref = _id(sender.get("ID"))
         if ref is None:
-            logger.warning("Mailjet created a sender for %s without its id.", domain)
+            logger.warning("Mailjet gave a sender for %s without its id.", domain)
             raise SendingProviderError("Mailjet gave an unreadable answer.")
         # The sender exists now: failing here would lose its ref. Without its
-        # entry, the records come with the first check.
+        # entry, the records known anyway are shown; DKIM comes with a check.
         try:
             entry = self._dns_entry(sender, domain)
         except SendingProviderError as exc:
             logger.warning("Mailjet: no DNS entry read for %s yet: %s", domain, exc)
             entry = None
-        return RegisteredDomain(ref=ref, records=_records(entry, domain))
+        return RegisteredDomain(ref=ref, records=_records(entry, sender, domain))
+
+    def _existing_sender(self, domain: str) -> dict:
+        """The account's sender of this domain, deleted or not."""
+        if not _DOMAIN_RE.match(domain):
+            raise SendingProviderError("This domain name can't be sent to Mailjet.")
+        data = self._call("GET", f"/sender?Email=*@{domain}&ShowDeleted=true").get(
+            "Data"
+        )
+        for sender in data if isinstance(data, list) else []:
+            if isinstance(sender, dict) and _sender_domain(sender) == domain:
+                return sender
+        logger.warning(
+            "Mailjet says it has a sender for %s, but none is listed.", domain
+        )
+        raise SendingProviderError(
+            "Mailjet already has this domain but didn't give it back."
+        )
 
     def _dns_entry(self, sender: dict, domain: str) -> dict | None:
-        """The sender's DNS entry, or None if Mailjet has none for its domain.
+        """The sender's DNS entry, or None if Mailjet has none (any more).
 
-        By the sender's DNSID when it has one; an inactive sender has none
-        (-1), so then by domain name, then by scanning the account's entries.
-        An entry read whose domain isn't this one is taken as not found.
+        By the sender's DNSID; a deleted sender's entry is gone (404). An
+        entry whose domain isn't this one is taken as not found.
         """
         dns_id = _id(sender.get("DNSID"))
-        if dns_id is not None:
-            entry = self._first("GET", f"/dns/{dns_id}")
-            if _same_domain(entry.get("Domain"), domain):
-                return entry
-            logger.warning("Mailjet DNS entry %s isn't %s's.", dns_id, domain)
-        if not _DOMAIN_RE.match(domain):
+        if dns_id is None:
             return None
         try:
-            entry = self._first("GET", f"/dns/{domain}")
+            entry = self._first("GET", f"/dns/{dns_id}")
         except _HTTPError as exc:
-            if exc.status_code not in (400, 404):
-                raise
-        else:
-            if _same_domain(entry.get("Domain"), domain):
-                return entry
-        for page in range(DNS_MAX_PAGES):
-            query = f"Limit={DNS_PAGE_SIZE}&Offset={page * DNS_PAGE_SIZE}"
-            data = self._call("GET", f"/dns?{query}").get("Data")
-            if not isinstance(data, list):
+            if exc.status_code == 404:
                 return None
-            for entry in data:
-                if isinstance(entry, dict) and _same_domain(
-                    entry.get("Domain"), domain
-                ):
-                    return entry
-            if len(data) < DNS_PAGE_SIZE:
-                return None
-        logger.warning("Mailjet: %s not among the first DNS entries scanned.", domain)
+            raise
+        if _same_domain(entry.get("Domain"), domain):
+            return entry
+        logger.warning("Mailjet DNS entry %s isn't %s's.", dns_id, domain)
         return None
 
     def _sender_path(self, ref: str, action: str = "") -> str:
@@ -216,9 +216,7 @@ class MailjetProvider:
                 return DomainCheck(CheckStatus.FAILED, "Mailjet no longer has it.")
             raise
         status = sender.get("Status")
-        if status == "Deleted":
-            return DomainCheck(CheckStatus.FAILED, "Mailjet deleted this sender.")
-        if status not in ("Active", "Inactive"):
+        if status not in ("Active", "Inactive", "Deleted"):
             logger.warning("Mailjet sender %s has the status %r.", ref, status)
             return DomainCheck(CheckStatus.UNKNOWN)
         domain = _sender_domain(sender)
@@ -227,42 +225,48 @@ class MailjetProvider:
             return DomainCheck(CheckStatus.UNKNOWN)
 
         errors: list[str] = []
-        if status == "Inactive":
+        if status != "Active":
+            # Validation activates an inactive sender, and reactivates a
+            # deleted one, once its ownership token is published.
             errors = self._validate(ref)
             if not errors:
                 sender = self._first("GET", path)
                 if sender.get("Status") != "Active":
                     errors = ["Mailjet hasn't validated this domain yet."]
-        active = not errors
 
         entry = self._dns_entry(sender, domain)
-        if entry is None:
-            return DomainCheck(
-                CheckStatus.PENDING,
-                " ".join([*errors, f"Mailjet has no DNS entry for {domain} yet."]),
-            )
-        records = _records(entry, domain) or None
-        try:
-            dns_errors = self._check_dns(entry)
-        except SendingProviderError:
-            if active:
-                raise
-            # Not validated anyway: what stops it is said already.
-            dns_errors = []
-        errors += dns_errors
-        if active and not errors:
-            return DomainCheck(CheckStatus.VERIFIED, "", records)
-        return DomainCheck(CheckStatus.PENDING, " ".join(errors), records)
+        records = _records(entry, sender, domain) or None
+        if not errors:
+            if entry is None:
+                errors = [f"Mailjet has no DNS entry for {domain} yet."]
+            else:
+                errors = self._check_dns(entry)
+        if errors:
+            return DomainCheck(CheckStatus.PENDING, " ".join(errors), records)
+        return DomainCheck(CheckStatus.VERIFIED, "", records)
 
     def _validate(self, ref: str) -> list[str]:
-        """Ask Mailjet to validate the sender: why it didn't, if it says."""
+        """Ask Mailjet to validate the sender: why it didn't, if it says.
+
+        Of its errors, the DNS one (else the global one) is shown: the file
+        on the website root is a way of validating Showdesk doesn't offer.
+        """
         try:
-            result = self._first("POST", self._sender_path(ref, "/validate"))
+            result = self._call("POST", self._sender_path(ref, "/validate"))
         except _HTTPError as exc:
             if exc.status_code >= 500:
                 raise
             return [exc.detail or "Mailjet couldn't validate this domain yet."]
-        texts = _texts(result.get("Errors")) + _texts(result.get("GlobalError"))
+        data = result.get("Data")
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            result = data[0]
+        errors = result.get("Errors")
+        texts = _texts(
+            errors.get("DNSValidationError") if isinstance(errors, dict) else None
+        )
+        texts = texts or _texts(result.get("GlobalError"))
+        if not texts and errors:
+            texts = ["Mailjet couldn't validate this domain yet."]
         return [self._scrub(text) for text in texts]
 
     def _check_dns(self, entry: dict) -> list[str]:
@@ -278,7 +282,7 @@ class MailjetProvider:
             texts = _texts(result.get(f"{name}Errors")) or [
                 f"Mailjet found it {result.get(f'{name}Status') or 'unchecked'}."
             ]
-            errors.append(f"{name}: " + " ".join(self._scrub(t) for t in texts))
+            errors.append(f"{name}: " + "; ".join(self._scrub(t) for t in texts))
         return errors
 
     def remove(self, ref: str) -> None:
@@ -334,11 +338,9 @@ def _id(value: Any) -> str | None:
 
 
 def _texts(value: Any) -> list[str]:
-    """The non-empty strings in an error field: a string, a list or a dict."""
+    """The non-empty strings in an error field: a string or a list."""
     if isinstance(value, str):
         return [value] if value.strip() else []
-    if isinstance(value, dict):
-        value = list(value.values())
     if isinstance(value, list):
         return [text for item in value for text in _texts(item)]
     return []
@@ -356,20 +358,28 @@ def _sender_domain(sender: dict) -> str | None:
     return email[2:].strip().rstrip(".").lower() or None
 
 
-def _records(entry: dict | None, domain: str) -> list[dict[str, Any]]:
+def _records(entry: dict | None, sender: dict, domain: str) -> list[dict[str, Any]]:
     """Mailjet's records as [{type, name, value, merge?}], names fully qualified.
 
     In this order: the ownership token validating the sender, SPF (merged
     into an existing one), DKIM. A record Mailjet gives no value for is left
-    out.
+    out. Without the DNS entry (a deleted sender has none), the token is
+    the sender's `Filename` without `.txt`, published at
+    `mailjet._<its first 8 characters>`, and SPF is Mailjet's usual one:
+    DKIM comes once the entry is back.
     """
-    if not entry:
-        return []
-    wanted = [
-        (entry.get("OwnerShipTokenRecordName"), entry.get("OwnerShipToken"), False),
-        (domain, entry.get("SPFRecordValue"), True),
-        (entry.get("DKIMRecordName"), entry.get("DKIMRecordValue"), False),
-    ]
+    if entry:
+        wanted = [
+            (entry.get("OwnerShipTokenRecordName"), entry.get("OwnerShipToken"), False),
+            (domain, entry.get("SPFRecordValue"), True),
+            (entry.get("DKIMRecordName"), entry.get("DKIMRecordValue"), False),
+        ]
+    else:
+        filename = sender.get("Filename")
+        token = filename.removesuffix(".txt") if isinstance(filename, str) else ""
+        if not re.fullmatch(r"[0-9a-f]{8,64}", token):
+            token = ""
+        wanted = [(f"mailjet._{token[:8]}", token, False), (domain, SPF_VALUE, True)]
     records = []
     for name, value, merge in wanted:
         if not isinstance(name, str) or not name.strip():
