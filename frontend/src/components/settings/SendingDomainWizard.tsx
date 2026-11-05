@@ -571,9 +571,9 @@ function RecordsStep({ row }: { row: OrganizationDomain }) {
       <p className="text-sm text-gray-700">
         The first record proves your organization controls the domain.
       </p>
-      {row.sending_dns_records.length > 0 ? (
-        <RecordsTable records={row.sending_dns_records} />
-      ) : (
+      {row.sending_dns_records.length > 0 && <RecordsTable records={row.sending_dns_records} />}
+      {/* The ownership record is ours: without others, the service gave none yet. */}
+      {!row.sending_dns_records.some((record) => record.name !== row.txt_record_name) && (
         <p className="text-sm text-gray-500">
           The sending service returned no records yet. Check again in a minute.
         </p>

@@ -409,6 +409,11 @@ Selected by `SENDING_DOMAIN_PROVIDER`:
   config + SPF include, trigger check, read status). Settings
   `SCW_TEM_SECRET_KEY`, `SCW_TEM_PROJECT_ID`, `SCW_TEM_REGION` (default
   `fr-par`).
+- `mailjet`: Mailjet Email API v3 (create a domain sender `*@<domain>`, show
+  the ownership token, SPF and DKIM of its DNS entry, ask Mailjet to validate
+  the sender and check its DKIM and SPF, delete the sender). It uses the
+  account Anymail sends with (`MAILJET_API_KEY`, `MAILJET_SECRET_KEY`) and
+  `MAILJET_API_URL` (default `https://api.mailjet.com`).
 
 ### 7.3 Checks
 
@@ -450,9 +455,10 @@ All new variables are documented in `.env.example` with safe defaults.
 | `INBOUND_EMAIL_LOG_RETENTION_DAYS` | 90 | 2 | Log of received mails (rows), purged daily; pending or failed ones stay. |
 | `WIDGET_UNREAD_EMAIL_DELAY_MINUTES` | 5 | 2 | Delay before emailing an unread widget reply. |
 | `CONVERSATION_LINK_MAX_AGE_DAYS` | 30 | 2 | Conversation link lifetime. |
-| `SENDING_DOMAIN_PROVIDER` | `none` | 3 | `none`, `manual`, `scaleway_tem`. |
+| `SENDING_DOMAIN_PROVIDER` | `none` | 3 | `none`, `manual`, `scaleway_tem`, `mailjet`. |
 | `SENDING_DOMAIN_SPF_INCLUDE`, `SENDING_DOMAIN_DKIM_SELECTOR` | empty | 3 | `manual` adapter: the SPF include customers add, and the selector of the operator's DKIM key, published at `<selector>._domainkey.<INBOUND_EMAIL_DOMAIN>`, which customers point to with a CNAME. |
 | `SCW_TEM_SECRET_KEY`, `SCW_TEM_PROJECT_ID`, `SCW_TEM_REGION` | empty / `fr-par` | 3 | `scaleway_tem` adapter. |
+| `MAILJET_API_URL` | `https://api.mailjet.com` | 3 | `mailjet` adapter: the account's API host (`https://api.us.mailjet.com` for a US account). Its keys are Anymail's `MAILJET_API_KEY`, `MAILJET_SECRET_KEY`. |
 
 Operators must publish SPF/DKIM for `INBOUND_EMAIL_DOMAIN` with their sending
 service, since fallback mail is sent from that domain, and point its MX to the
@@ -482,6 +488,24 @@ inbound provider.
   registrable again under the same name; that is not confirmed until tested
   with a real key. If TEM refused, enabling would answer 409
   `provider_conflict` and an operator would have to clear the name.
+
+- The `mailjet` adapter follows Mailjet's API reference, but some of its
+  behaviour is only confirmed with a real account: the record names and
+  values (read from the API, never hard-coded), the answer to a domain
+  sender that already exists (taken as "already registered" when a 400 says
+  it already exists), registering a deleted domain again, finding an inactive
+  sender's DNS entry by domain name (`/dns/<domain>`, else a scan of the
+  account's entries), and checking that entry before the sender is
+  validated.
+
+- A sender created at Mailjet whose answer is lost (a timeout after
+  the `POST`) leaves no ref. Setting the domain up again then answers a
+  conflict (409 `provider_conflict`) until an operator deletes the sender in
+  Mailjet.
+
+- A wrong `MAILJET_API_URL` (a US account on the EU host, or the reverse)
+  makes every Mailjet call fail: domains can't be set up, and checks stay
+  inconclusive, until it is fixed.
 
 - A public address saved while its domain changes hands: the address is
   validated against the domain's owner, then saved, and a verification by
@@ -632,6 +656,7 @@ these choices beyond this design. Each one is pinned by a test.
 | 17 | A public webmail domain is refused on create for every purpose (branding, routing, sending), by DNS or admin email alike. | Nobody owns `gmail.com`, whatever the row is for. |
 | 18 | An admin-email verification of a domain the organization already has adds the asked purposes to the row and keeps the others, and leaves its sending state alone. | Verifying again must not drop a purpose, nor stop sending. |
 | 19 | A DNS win clears the token of the other organizations' rows of the domain (the previous owner's and any pending one): their admins regenerate a token to claim it again. | The previous owner's TXT, left published, would otherwise win the domain straight back. |
+| 20 | `mailjet` (added after PR 3): a domain is a domain sender `*@<domain>` of the account Anymail sends with; its ref is the sender's numeric id. The records are Mailjet's ownership token, SPF (`merge`) and DKIM, all TXT, fully qualified, read from the sender's DNS entry (by `DNSID`, else by domain name while the sender is inactive). `check`: a deleted (or missing) sender is FAILED; an inactive one is asked to validate; then Mailjet checks DKIM and SPF. VERIFIED only when the sender is active and both are `OK`, otherwise PENDING with Mailjet's error texts. A 400 saying the sender already exists is "already registered" (409). `remove` reads the sender first and deletes it unless it is missing or `Deleted`; a 404 on delete, or a 400 after which the sender reads `Deleted`, counts as removed. A DNS entry read whose domain isn't the sender's counts as not found. | Mailjet only sends from an active sender of the sending account, and DKIM and SPF are what DMARC alignment needs. |
 
 What admins have:
 
@@ -662,10 +687,12 @@ What admins have:
 
 What operators set (§8):
 
-- `SENDING_DOMAIN_PROVIDER`: `none` (default, feature hidden), `manual` or
-  `scaleway_tem`. A misconfigured provider is logged, and admins only see
-  that sending from their domain is unavailable; so are a provider's own
-  error messages (admins see "The sending service answered 503."). Changing
+- `SENDING_DOMAIN_PROVIDER`: `none` (default, feature hidden), `manual`,
+  `scaleway_tem` or `mailjet`. A misconfigured provider is logged, and admins only see
+  that sending from their domain is unavailable. A provider's failed HTTP
+  call only shows admins its status ("The sending service answered 503.");
+  what a check finds wrong (TEM's last error; Mailjet's validation, DKIM
+  and SPF texts, cleaned of credentials and trimmed) is shown to them. Changing
   it makes every domain set up under the previous one fall back, to be set
   up again (choice 15).
 - `manual`: `SENDING_DOMAIN_SPF_INCLUDE` and `SENDING_DOMAIN_DKIM_SELECTOR`,
@@ -675,5 +702,10 @@ What operators set (§8):
 - `scaleway_tem`: `SCW_TEM_SECRET_KEY` (a key restricted to Transactional
   Email), `SCW_TEM_PROJECT_ID` (the project the domains are registered in),
   `SCW_TEM_REGION` (`fr-par`).
+- `mailjet`: `MAILJET_API_KEY` and `MAILJET_SECRET_KEY` (Anymail's), and
+  `MAILJET_API_URL` (`https://api.mailjet.com`). Outbound mail must go
+  through that same account (`EMAIL_BACKEND=anymail.backends.mailjet.EmailBackend`),
+  and `INBOUND_EMAIL_DOMAIN` must be a validated sender domain of it, since
+  fallback mail is sent from it.
 - Celery beat runs `check-sending-domains` every 15 min and
   `requeue-sending-removals` hourly, on the `default` queue.

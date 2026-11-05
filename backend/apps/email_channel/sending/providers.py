@@ -8,7 +8,8 @@ chosen by `SENDING_DOMAIN_PROVIDER`:
   mailbox's inbound address;
 - `manual`: the operator's own sending service signs every customer domain
   with one DKIM key; Showdesk checks the records itself (see `manual`);
-- `scaleway_tem`: Scaleway Transactional Email (see `scaleway_tem`).
+- `scaleway_tem`: Scaleway Transactional Email (see `scaleway_tem`);
+- `mailjet`: Mailjet, the account Anymail sends with (see `mailjet`).
 """
 
 from __future__ import annotations
@@ -117,8 +118,13 @@ def provider_class(name: str) -> type[SendingDomainProvider]:
         from .scaleway_tem import ScalewayTEMProvider
 
         return ScalewayTEMProvider
+    if name == "mailjet":
+        from .mailjet import MailjetProvider
+
+        return MailjetProvider
     raise ImproperlyConfigured(
-        f"Unknown SENDING_DOMAIN_PROVIDER {name!r}: use none, manual or scaleway_tem."
+        f"Unknown SENDING_DOMAIN_PROVIDER {name!r}: "
+        "use none, manual, scaleway_tem or mailjet."
     )
 
 

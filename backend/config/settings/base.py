@@ -446,8 +446,8 @@ CONVERSATION_LINK_MAX_AGE_DAYS = config(
 # =============================================================================
 # Sending domains: mail from an organization's own verified domain
 # =============================================================================
-# Who sets up a customer domain for sending: none (feature off), manual or
-# scaleway_tem. See apps.email_channel.sending.
+# Who sets up a customer domain for sending: none (feature off), manual,
+# scaleway_tem or mailjet. See apps.email_channel.sending.
 SENDING_DOMAIN_PROVIDER = (
     config("SENDING_DOMAIN_PROVIDER", default="none").strip().lower()
 )
@@ -461,6 +461,9 @@ SENDING_DOMAIN_DKIM_SELECTOR = config("SENDING_DOMAIN_DKIM_SELECTOR", default=""
 SCW_TEM_SECRET_KEY = config("SCW_TEM_SECRET_KEY", default="")
 SCW_TEM_PROJECT_ID = config("SCW_TEM_PROJECT_ID", default="")
 SCW_TEM_REGION = config("SCW_TEM_REGION", default="fr-par")
+# mailjet: the API host of the Mailjet account whose keys are MAILJET_API_KEY
+# and MAILJET_SECRET_KEY above (https://api.us.mailjet.com for US accounts).
+MAILJET_API_URL = config("MAILJET_API_URL", default="https://api.mailjet.com")
 
 # Frontend URL for links in emails
 SITE_URL = config("SITE_URL", default="http://localhost")
