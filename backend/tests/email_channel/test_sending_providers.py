@@ -551,6 +551,10 @@ class TestMailjet:
         # up by hand): never taken over.
         with pytest.raises(AlreadyRegisteredError):
             register("active", (200, mj(mj_dns())), [older, mj_sender("Active")])
+        # Even listed with an inactive one.
+        inactive = {**mj_sender("Inactive"), "ID": 1002}
+        with pytest.raises(AlreadyRegisteredError):
+            register("inactive", (200, mj(mj_dns())), [inactive, mj_sender("Active")])
 
     def test_register_errors(self, mailjet, caplog) -> None:
         refused = {"ErrorMessage": "MJ03 Email is invalid", "StatusCode": 400}
@@ -597,6 +601,14 @@ class TestMailjet:
             "Contact your Showdesk administrator."
         )
         assert any(r.levelname == "ERROR" for r in caplog.records)
+
+        # A limit that isn't about senders is another refusal.
+        patcher, _fake = mailjet_answering(
+            {("POST", f"{MJ}/sender"): (400, {"ErrorMessage": "Rate limit hit."})}
+        )
+        with patcher, pytest.raises(SendingProviderError) as error:
+            mailjet.register("acme.com")
+        assert "limit of sender domains" not in str(error.value)
 
         # A sender without an id can't be stored.
         patcher, _fake = mailjet_answering(

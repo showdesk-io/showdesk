@@ -159,7 +159,13 @@ class MailjetProvider:
             # inactive or deleted one is reused, validating it activates it.
             if exc.status_code == 400 and "already exist" in detail:
                 sender = self._existing_sender(domain)
-            elif exc.status_code == 400 and ("limit" in detail or "maximum" in detail):
+            # Mailjet's wording for a full account is unobserved: a limit or
+            # maximum, said of senders, is taken as one.
+            elif (
+                exc.status_code == 400
+                and "sender" in detail
+                and ("limit" in detail or "maximum" in detail)
+            ):
                 logger.error(
                     "Mailjet refused a sender for %s, the account's limit of "
                     "senders being reached: %s",
@@ -190,7 +196,8 @@ class MailjetProvider:
 
         One not deleted is preferred, should Mailjet list several. An active
         one is in use (the operator's own, or one set up by hand): taking it
-        over would make it ours to delete, so AlreadyRegisteredError.
+        over would make it ours to delete, so AlreadyRegisteredError, even
+        listed with an inactive or deleted one.
         """
         if not _DOMAIN_RE.match(domain):
             raise SendingProviderError("This domain name can't be sent to Mailjet.")
@@ -209,6 +216,8 @@ class MailjetProvider:
             raise SendingProviderError(
                 "Mailjet already has this domain but didn't give it back."
             )
+        if any(s.get("Status") == "Active" for s in found):
+            raise AlreadyRegisteredError(f"Mailjet has an active sender for {domain}.")
         sender = next((s for s in found if s.get("Status") != "Deleted"), found[0])
         if sender.get("Status") not in ("Inactive", "Deleted"):
             raise AlreadyRegisteredError(

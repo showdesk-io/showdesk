@@ -250,3 +250,16 @@ def test_a_registration_left_behind_waits_for_its_provider(
     removal = SendingRemoval.objects.get(ref="tem-id")
     assert (removal.domain, removal.provider) == ("acme.com", "scaleway_tem")
     assert provider.checked == []
+
+
+def test_the_instance_own_domains_are_not_checked(
+    provider, organization, settings, caplog, django_capture_on_commit_callbacks
+) -> None:
+    """A row of the From domain (made before that was refused) is left alone,
+    instead of failing every run."""
+    settings.DEFAULT_FROM_EMAIL = "noreply@mail.showdesk.test"
+    sending_row(organization, Sending.PENDING, domain="mail.showdesk.test")
+
+    assert run_task(django_capture_on_commit_callbacks) == 0
+    assert provider.checked == []
+    assert not any(r.levelname == "ERROR" for r in caplog.records)

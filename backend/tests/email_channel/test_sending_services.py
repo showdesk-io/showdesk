@@ -338,6 +338,39 @@ def test_the_instance_own_domains_are_never_sent_from(
     assert provider.calls[0] == ("register", "showdesk.test")
 
 
+def test_the_instance_own_domains_are_read_as_written(settings) -> None:
+    """A trailing dot, capitals, a SITE_URL without its scheme, a Unicode name:
+    still the instance's."""
+    settings.DEFAULT_FROM_EMAIL = '"Show, desk" <noreply@Mail.Showdesk.Test.>'
+    settings.SITE_URL = "app.bücher.test/"
+    assert services.is_operator_domain("mail.showdesk.test")
+    assert services.is_operator_domain("app.xn--bcher-kva.test")
+    assert not services.is_operator_domain("showdesk.test")
+
+
+def test_a_registration_on_the_instance_own_domain_is_never_removed(
+    provider, organization, settings, caplog
+) -> None:
+    """Whatever lets go of it (here: the row deleted), the instance's own
+    sender stays: no removal recorded, an error logged."""
+    settings.DEFAULT_FROM_EMAIL = "noreply@mail.showdesk.test"
+    row = registered_row(
+        organization, domain="mail.showdesk.test", sending_status=Sending.VERIFIED
+    )
+
+    row.delete()
+
+    assert not SendingRemoval.objects.exists()
+    assert services.record_removal("mail.showdesk.test", "ref") is None
+    assert not SendingRemoval.objects.exists()
+    assert any(
+        r.levelname == "ERROR"
+        and "not removing the sending registration of the instance's own domain"
+        in r.getMessage().lower()
+        for r in caplog.records
+    )
+
+
 class TestCheck:
     def test_transitions(self, provider, organization) -> None:
         row = registered_row(organization)

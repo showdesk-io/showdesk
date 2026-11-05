@@ -269,3 +269,26 @@ def test_a_transfer_under_manual_leaves_nothing_to_remove(
         response = admin_client.post(url(row))
     assert response.status_code == 200, response.data
     assert response.data["sending_status"] == "pending"
+
+
+def test_the_instance_own_domain_is_still_an_organization_brand(
+    admin_client, organization, settings
+):
+    """An organization owning the From domain proves it for its branding, but
+    can't send from it: it is the instance's."""
+    settings.DEFAULT_FROM_EMAIL = "Acme support <noreply@acme.com>"
+    response = admin_client.post(
+        "/api/v1/organization-domains/",
+        {"domain": "acme.com", "is_branding": True},
+        format="json",
+    )
+    assert response.status_code == 201, response.data
+    row = OrganizationDomain.objects.get(pk=response.data["id"])
+    with mock.patch("apps.organizations.services.verify_domain_dns", return_value=True):
+        response = admin_client.post(f"/api/v1/organization-domains/{row.id}/verify/")
+    assert response.data["status"] == "verified"
+
+    response = admin_client.post(url(row))
+
+    assert response.status_code == 400
+    assert response.data["code"] == "operator_domain"

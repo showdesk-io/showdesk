@@ -128,14 +128,31 @@ def is_operator_domain(domain: str) -> bool:
     at `support.acme.com` serving Acme). `INBOUND_EMAIL_DOMAIN` and every
     subdomain of it: the instance's mailboxes live there, nobody else's.
     """
-    domain = domain.lower().rstrip(".")
+    domain = _normalized_domain(domain)
     if not domain:
         return False
-    from_domain = parseaddr(settings.DEFAULT_FROM_EMAIL)[1].rpartition("@")[2]
-    site_host = urlsplit(getattr(settings, "SITE_URL", "") or "").hostname or ""
-    if domain in (from_domain.lower(), site_host.lower()):
+    from_domain = parseaddr(settings.DEFAULT_FROM_EMAIL or "")[1].rpartition("@")[2]
+    site_url = (getattr(settings, "SITE_URL", "") or "").strip()
+    if site_url and "//" not in site_url:
+        site_url = f"//{site_url}"  # A bare host: no scheme to find it after.
+    try:
+        site_host = urlsplit(site_url).hostname or ""
+    except ValueError:
+        site_host = ""
+    own = {_normalized_domain(from_domain), _normalized_domain(site_host)} - {""}
+    if domain in own:
         return True
     return is_inbound_email_domain(domain)
+
+
+def _normalized_domain(name: str) -> str:
+    """A domain as rows store it: lowercase ASCII, without a trailing dot."""
+    name = name.strip().rstrip(".")
+    try:
+        name = name.encode("idna").decode()
+    except UnicodeError:
+        pass  # Not a name IDNA encodes: compared as written.
+    return name.lower()
 
 
 def _require_not_operator(domain: str) -> None:
@@ -796,8 +813,19 @@ def record_removal(domain: str, ref: str, made_by: str = "") -> SendingRemoval |
     when that provider's registrations exist nowhere but on our row
     (`manual`): nothing to remove, nothing to wait for. Made while no
     provider is configured, the record's provider is unknown (""): the next
-    one configured removes it.
+    one configured removes it. None as well for the instance's own domains:
+    never removed, whatever lets go of them.
     """
+    if is_operator_domain(domain):
+        # The instance's own sender (or one made before that was refused):
+        # it sends the instance's mail, nobody's to take away.
+        logger.error(
+            "Not removing the sending registration of the instance's own domain "
+            "%s (ref %s): remove it by hand if it is really unused.",
+            domain,
+            ref,
+        )
+        return None
     configured = settings.SENDING_DOMAIN_PROVIDER
     name = made_by or configured
     if name == "none":

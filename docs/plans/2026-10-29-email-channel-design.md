@@ -496,7 +496,9 @@ inbound provider.
   deleted is logged as an error). An active sender is never reused: the
   domain is answered 409 `provider_conflict`. A sender created at Mailjet
   whose answer was lost (a timeout after the `POST`) is found again the
-  same way at the next setup.
+  same way at the next setup. An inactive sender created by hand in
+  Mailjet, for a domain an organization then proves it owns, is adopted
+  the same way, and deleted if that organization stops sending from it.
 
 - Deleting a domain's sender by hand in Mailjet is no kill switch: the next
   check asks Mailjet to validate it again, which (Mailjet says)
