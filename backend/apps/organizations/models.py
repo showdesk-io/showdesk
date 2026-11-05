@@ -79,6 +79,17 @@ def is_public_email_domain(domain: str) -> bool:
     return domain.lower() in PUBLIC_EMAIL_DOMAINS
 
 
+def is_inbound_email_domain(domain: str) -> bool:
+    """Whether the domain is `INBOUND_EMAIL_DOMAIN` or one of its subdomains.
+
+    The instance's own: its mailboxes' addresses live there and its operator
+    holds the DNS of every name under it. No organization may claim one.
+    """
+    inbound = (settings.INBOUND_EMAIL_DOMAIN or "").lower()
+    domain = domain.lower().rstrip(".")
+    return bool(inbound) and (domain == inbound or domain.endswith(f".{inbound}"))
+
+
 def is_end_user_account(role: str | None, is_superuser: bool | None) -> bool:
     """Tell if an account counts as an end user, from those two of its columns.
 

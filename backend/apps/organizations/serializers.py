@@ -17,6 +17,7 @@ from .models import (
     OrgJoinRequest,
     Team,
     User,
+    is_inbound_email_domain,
     is_public_email_domain,
 )
 
@@ -411,6 +412,10 @@ class OrganizationDomainSerializer(serializers.ModelSerializer):
         if self.instance is None and is_public_email_domain(attrs.get("domain", "")):
             raise serializers.ValidationError(
                 {"domain": "A public webmail domain can't be verified."}
+            )
+        if self.instance is None and is_inbound_email_domain(attrs.get("domain", "")):
+            raise serializers.ValidationError(
+                {"domain": "This domain is used by the Showdesk instance itself."}
             )
         return attrs
 

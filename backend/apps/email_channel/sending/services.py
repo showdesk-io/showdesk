@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import timedelta
+from email.utils import parseaddr
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.cache import cache
@@ -30,6 +32,7 @@ from apps.organizations import dns_verification
 from apps.organizations.models import (
     OrganizationDomain,
     User,
+    is_inbound_email_domain,
     is_public_email_domain,
 )
 
@@ -81,6 +84,11 @@ class PublicDomainError(SendingError):
     http_status = 400
 
 
+class OperatorDomainError(SendingError):
+    code = "operator_domain"
+    http_status = 400
+
+
 class NotRegisteredError(SendingError):
     code = "not_registered"
     http_status = 400
@@ -111,6 +119,32 @@ class ProviderError(SendingError):
     http_status = 502
 
 
+def is_operator_domain(domain: str) -> bool:
+    """Whether the domain is the instance's own, never an organization's to
+    send from, whatever the provider.
+
+    The domain of `DEFAULT_FROM_EMAIL` and the host of `SITE_URL`, exactly:
+    their parent and sibling domains may well be a customer's (an instance
+    at `support.acme.com` serving Acme). `INBOUND_EMAIL_DOMAIN` and every
+    subdomain of it: the instance's mailboxes live there, nobody else's.
+    """
+    domain = domain.lower().rstrip(".")
+    if not domain:
+        return False
+    from_domain = parseaddr(settings.DEFAULT_FROM_EMAIL)[1].rpartition("@")[2]
+    site_host = urlsplit(getattr(settings, "SITE_URL", "") or "").hostname or ""
+    if domain in (from_domain.lower(), site_host.lower()):
+        return True
+    return is_inbound_email_domain(domain)
+
+
+def _require_not_operator(domain: str) -> None:
+    if is_operator_domain(domain):
+        raise OperatorDomainError(
+            "This domain is used by the Showdesk instance itself."
+        )
+
+
 def sendable_domains(organization_id) -> set[str]:
     """The organization's domains mail may go out from now (§7.1).
 
@@ -124,7 +158,7 @@ def sendable_domains(organization_id) -> set[str]:
         for domain in _sendable_rows()
         .filter(organization_id=organization_id)
         .values_list("domain", flat=True)
-        if not is_public_email_domain(domain)
+        if not (is_public_email_domain(domain) or is_operator_domain(domain))
     }
 
 
@@ -139,7 +173,7 @@ def sendable_address(mailbox, domains: set[str] | None = None) -> str | None:
     if not (sending_enabled() and address):
         return None
     domain = address.rpartition("@")[2]
-    if is_public_email_domain(domain):
+    if is_public_email_domain(domain) or is_operator_domain(domain):
         return None  # Nobody's, even if verified before that was refused.
     if domains is None:
         sendable = (
@@ -318,7 +352,9 @@ def enable_sending(row: OrganizationDomain) -> OrganizationDomain:
 
 
 def _require_owned(row: OrganizationDomain) -> None:
-    """Refuse a webmail domain, or one the row's organization doesn't own."""
+    """Refuse a webmail domain, the instance's own, or one the row's
+    organization doesn't own."""
+    _require_not_operator(row.domain)
     if is_public_email_domain(row.domain):
         raise PublicDomainError("Mail can't be sent from a public webmail domain.")
     if row.status != Ownership.VERIFIED:
@@ -442,6 +478,7 @@ def check_now(row: OrganizationDomain) -> OrganizationDomain:
 
 
 def _require_checkable(row: OrganizationDomain) -> None:
+    _require_not_operator(row.domain)
     if row.status != Ownership.VERIFIED:
         raise NotOwnedError(f"Verify {row.domain} for your organization first.")
     if row.sending_status == Sending.NONE or not row.sending_provider_ref:
