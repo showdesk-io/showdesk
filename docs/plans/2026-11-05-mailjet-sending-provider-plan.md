@@ -27,6 +27,23 @@
 - `DELETE /v3/REST/sender/{id}` → 204.
 - Undocumented, so handled defensively and confirmed on a real account: the literal record values (read from the API, never hard-coded), the answer to a duplicate sender, re-adding a deleted domain, and whether `/dns/{domain}` accepts a domain name.
 
+## Confirmed on a real account (2026-11-05)
+
+What Mailjet actually does, which the reference didn't say or said otherwise (values shortened, example domain):
+
+- `POST /v3/REST/sender` `{"Email": "*@acme.com", "EmailType": "transactional"}` → 201, `Data[0]`: `CreatedAt`, `DNSID`, `Email`, `EmailType`, `Filename` (`<token>.txt`), `ID`, `IsDefaultSender`, `Name`, `Status: "Inactive"`. **`DNSID` is a real id even while the sender is inactive** (not `-1`).
+- The same `POST` when the account already has a sender for the domain → 400 "There is an already existing inactive sender with the same email. You can use \"validate\" action in order to activate it." (or "…already existing deleted sender…"). Mailjet keeps deleted senders.
+- `GET /v3/REST/sender?Email=*@acme.com` lists the non-deleted senders only; with `&ShowDeleted=true`, the deleted ones too. A `Domain` filter doesn't work.
+- `GET /v3/REST/sender/{id}` → 200, `Data[0]` with the same fields; a deleted sender still reads, `Status: "Deleted"`.
+- `GET /v3/REST/dns/{DNSID}` → 200, `Data[0]`: `Domain`, `DKIMRecordName` (`mailjet._domainkey.acme.com.`), `DKIMRecordValue` (`k=rsa; p=…`), `DKIMStatus`, `SPFRecordValue` (`v=spf1 include:spf.mailjet.com ?all`), `SPFStatus`, `OwnerShipToken`, `OwnerShipTokenRecordName` (`mailjet._<token[:8]>.acme.com.`). Names may end with a dot. Once the sender is deleted: 404 `{"ErrorInfo": "", "ErrorMessage": "Object not found", "StatusCode": 404}`. `GET /v3/REST/dns/{domain name}` is always 404: not supported.
+- `POST /v3/REST/dns/{DNSID}/check` → **200**, `Data[0]`: `DKIMErrors` and `SPFErrors` are **lists** (`["no DKIM record"]`), `DKIMRecordCurrentValue`, `SPFRecordsCurrentValues`, `DKIMStatus` / `SPFStatus` `Error` or `OK`.
+- `POST /v3/REST/sender/{id}/validate` → **200, not wrapped in `Data`**: `{"ValidationMethod": "", "Errors": {"FileValidationError": "…", "DNSValidationError": "DNS record verification failed as no TXT record for that ownership token was found on the remote server."}, "GlobalError": "Neither the file at your domain root nor the DNS TXT record have been found to validate this sender."}`. On success, presumably `Errors` empty and `GlobalError` `""`, the sender then reading `Active`. Per Mailjet's 400 above, `validate` also reactivates a deleted or inactive existing sender.
+- `DELETE /v3/REST/sender/{id}` → 204, and 204 again on a sender already deleted.
+- The ownership token equals `Filename` without `.txt`; its record is `mailjet._<first 8 characters of the token>.<domain>`.
+- Mailjet's documented limit: at most 100 senders (active and inactive, deleted ones not counted) per account.
+
+So the adapter now (superseding M3, M5 and M6 below): reads the DNS entry by `DNSID` only; reuses an existing sender on that 400 (found with `ShowDeleted=true`, any status), its records read from `/dns/{DNSID}`, or, when that 404s, the ownership TXT derived from `Filename` and the SPF record (`merge`), DKIM coming with the first check after reactivation (an unexpected 400 stays an error; `AlreadyRegisteredError` is no longer raised); `check` validates an inactive **or deleted** sender (FAILED only when the sender reads 404), shows `DNSValidationError` (else `GlobalError`), never the file text, and checks DKIM and SPF once the sender is active. 200 and 201 are both accepted; error fields as a list are joined with "; ".
+
 ## Choices beyond the design
 
 | # | Choice | Why |
