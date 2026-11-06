@@ -190,6 +190,45 @@ def test_a_reply_reopens_a_recently_closed_ticket(mailbox, agent, deliver, _real
     assert "replied" in mail.outbox[0].body
 
 
+@pytest.mark.parametrize("mail_sent", ["resolved", "conversation_link"])
+def test_a_reply_to_the_resolved_or_link_mail_lands_on_its_ticket(
+    mailbox, agent, deliver, mail_sent
+):
+    from apps.email_channel.tasks import send_conversation_link
+    from apps.tickets.tasks import send_ticket_resolved_email
+
+    contact = ContactFactory(organization=mailbox.organization, email="ann@example.org")
+    ticket = TicketFactory(
+        organization=mailbox.organization,
+        mailbox=mailbox,
+        contact=contact,
+        requester=None,
+        requester_email=contact.email,
+        source=Ticket.Source.EMAIL,
+        status=Ticket.Status.RESOLVED,
+        resolved_at=timezone.now(),
+    )
+    TicketMessageFactory(ticket=ticket, external_id="<sent-1@in.example.com>")
+    mail.outbox.clear()
+    if mail_sent == "resolved":
+        send_ticket_resolved_email(ticket.id)
+    else:
+        send_conversation_link(str(ticket.id))
+    [sent] = mail.outbox
+    assert sent.extra_headers["In-Reply-To"] == "<sent-1@in.example.com>"
+
+    # Answered from a client keeping In-Reply-To only, nor the [SD-123].
+    inbound = deliver(
+        build(
+            Subject="Re: thanks",
+            Message_ID="<9@mail.example.org>",
+            In_Reply_To=sent.extra_headers["Message-ID"],
+        )
+    )
+
+    assert inbound.ticket == ticket
+
+
 def test_a_reply_to_a_ticket_closed_long_ago_opens_one_naming_it(
     mailbox, agent, deliver, settings
 ):

@@ -3,6 +3,7 @@
 Signed values are verifiable without a lookup, and unforgeable without SECRET_KEY.
 """
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -16,6 +17,11 @@ from django.utils.crypto import constant_time_compare, salted_hmac
 _REPLY_SALT = "showdesk.email_channel.reply"
 _CONVERSATION_SALT = "showdesk.email_channel.conversation"
 _EMAIL_HASH_SALT = "showdesk.email_channel.email_hash"
+# The Message-IDs of the mail sending no message: a ticket's resolution, a link.
+_TICKET_MAIL_ID = re.compile(
+    r"<(?:resolved|link)-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})-[0-9a-z]{1,64}"
+    r"@([^<>@\s]+)>"
+)
 # How old a link may be and still get a new one mailed. Past that, ask support.
 RENEWABLE_FOR = timedelta(days=180)
 
@@ -146,3 +152,24 @@ def resolution_message_id(ticket) -> str:
     resolved_at = ticket.resolved_at
     stamp = int(resolved_at.timestamp()) if resolved_at else 0
     return f"<resolved-{ticket.id}-{stamp}@{_outbound_domain()}>"
+
+
+def conversation_link_message_id(ticket, key: str) -> str:
+    """The Message-ID of a mail of ``ticket``'s conversation link.
+
+    ``key`` tells one mail from another: the same on its retries.
+    """
+    key = re.sub(r"[^0-9a-z]", "", key.lower())[:64] or uuid.uuid4().hex
+    return f"<link-{ticket.id}-{key}@{_outbound_domain()}>"
+
+
+def ticket_id_from_message_id(message_id: str) -> uuid.UUID | None:
+    """The ticket a mail of ours sending no message was about, or None.
+
+    A ticket's resolution, a conversation link: replies to them reference these.
+    Only names a ticket, which a match still looks for in the mail's organization.
+    """
+    match = _TICKET_MAIL_ID.fullmatch(message_id.strip().lower())
+    if match is None or match.group(2) != _outbound_domain().lower():
+        return None
+    return uuid.UUID(match.group(1))
