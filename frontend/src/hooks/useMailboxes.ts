@@ -9,7 +9,6 @@ import {
   fetchMailboxInbound,
   regenerateMailboxAddress,
   replayInboundEmail,
-  resetMailboxForwarding,
   updateMailbox,
   type MailboxCreate,
   type MailboxUpdate,
@@ -45,10 +44,6 @@ export function useUpdateMailbox() {
 
 export function useRegenerateMailboxAddress() {
   return useInvalidatingMutation((id: string) => regenerateMailboxAddress(id));
-}
-
-export function useResetMailboxForwarding() {
-  return useInvalidatingMutation((id: string) => resetMailboxForwarding(id));
 }
 
 export function useMailboxInbound(mailboxId: string, page: number) {

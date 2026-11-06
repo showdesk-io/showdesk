@@ -31,6 +31,7 @@ function mailbox(overrides: Partial<Mailbox> = {}): Mailbox {
     public_address: "support@acme.com",
     sends_from_public_address: false,
     forwarding_verified_at: null,
+    reply_to_public_address: false,
     default_team: null,
     is_active: true,
     created_at: "2026-11-01T00:00:00Z",
@@ -297,34 +298,36 @@ describe("MailboxesTab", () => {
     );
   });
 
-  it("says where customers reply, and lets an admin reset it", async () => {
+  it("says where customers reply, and lets an admin choose", async () => {
+    const proven = { sends_from_public_address: true, forwarding_verified_at: "2026-11-05T10:00:00Z" };
     mailboxes = [
       mailbox(),
       mailbox({ id: "m2", name: "Sales", public_address: "sales@acme.com", sends_from_public_address: true }),
-      mailbox({
-        id: "m3",
-        name: "Billing",
-        public_address: "billing@acme.com",
-        sends_from_public_address: true,
-        forwarding_verified_at: "2026-11-05T10:00:00Z",
-      }),
+      mailbox({ id: "m3", name: "Billing", public_address: "billing@acme.com", ...proven }),
+      mailbox({ id: "m4", name: "Help", public_address: "help@acme.com", reply_to_public_address: true, ...proven }),
     ];
     const user = await renderTab();
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
+    const sales = screen.getByRole("region", { name: "Sales" });
+    const billing = screen.getByRole("region", { name: "Billing" });
+    const help = screen.getByRole("region", { name: "Help" });
 
     expect(screen.getByRole("region", { name: "Support" })).not.toHaveTextContent("Customers reply");
-    expect(screen.getByRole("region", { name: "Sales" })).toHaveTextContent(
-      "Customers reply to a reply address of Showdesk (forward sales@acme.com here to have them reply to it)",
+    expect(sales).toHaveTextContent(
+      "Customers reply to a Showdesk reply address. Forward sales@acme.com to acme-x7k2m9abcd@in.example.com to let them reply to it.",
     );
-    const billing = screen.getByRole("region", { name: "Billing" });
-    expect(billing).toHaveTextContent("Customers reply to billing@acme.com");
-    expect(within(screen.getByRole("region", { name: "Sales" })).queryByRole("button", { name: "Reset" })).toBeNull();
+    expect(within(sales).queryByRole("button", { name: /reply/ })).toBeNull();
+    expect(billing).toHaveTextContent("Customers reply to a Showdesk reply address. (forwarding confirmed");
+    expect(help).toHaveTextContent("Customers reply to help@acme.com (forwarding confirmed");
 
-    await user.click(within(billing).getByRole("button", { name: "Reset" }));
-    expect(client.post).not.toHaveBeenCalled();
+    await user.click(within(billing).getByRole("button", { name: "Have customers reply to billing@acme.com" }));
+    expect(client.patch).toHaveBeenLastCalledWith("/mailboxes/m3/", { reply_to_public_address: true });
+    const useOurs = within(help).getByRole("button", { name: "Use Showdesk's reply address instead" });
+    await user.click(useOurs);
+    expect(client.patch).toHaveBeenCalledTimes(1);
     confirm.mockReturnValueOnce(true);
-    await user.click(within(billing).getByRole("button", { name: "Reset" }));
-    expect(client.post).toHaveBeenCalledWith("/mailboxes/m3/reset-forwarding/");
+    await user.click(useOurs);
+    expect(client.patch).toHaveBeenLastCalledWith("/mailboxes/m4/", { reply_to_public_address: false });
   });
 
   it("opens the send-from-your-domain wizard when the server can send from it", async () => {
@@ -365,15 +368,19 @@ describe("MailboxesTab", () => {
     expect(screen.queryByRole("button", { name: "Replay" })).not.toBeInTheDocument();
   });
 
-  it("shows agents where customers reply, without a reset", async () => {
+  it("shows agents where customers reply, without a choice", async () => {
     mailboxes = [
-      mailbox({ sends_from_public_address: true, forwarding_verified_at: "2026-11-05T10:00:00Z" }),
+      mailbox({
+        sends_from_public_address: true,
+        forwarding_verified_at: "2026-11-05T10:00:00Z",
+        reply_to_public_address: true,
+      }),
     ];
     await renderTab({ isAdmin: false });
 
     expect(screen.getByRole("region", { name: "Support" })).toHaveTextContent(
       "Customers reply to support@acme.com",
     );
-    expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reply/ })).not.toBeInTheDocument();
   });
 });

@@ -25,7 +25,6 @@ import {
   useMailboxInbound,
   useRegenerateMailboxAddress,
   useReplayInboundEmail,
-  useResetMailboxForwarding,
   useUpdateMailbox,
 } from "@/hooks/useMailboxes";
 import type { ForwardingConfirmation, Mailbox, Team } from "@/types";
@@ -144,6 +143,56 @@ export function MailboxesTab({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
+/** Where customers' replies go, for a mailbox sending from its public address (§5.1). */
+function ReplyDestination({
+  mailbox,
+  isAdmin,
+  disabled,
+  onChoose,
+}: {
+  mailbox: Mailbox;
+  isAdmin: boolean;
+  disabled: boolean;
+  onChoose: (replyToPublicAddress: boolean) => void;
+}) {
+  const proven = mailbox.forwarding_verified_at;
+  if (!proven) {
+    return (
+      <p className="mt-1 text-sm text-gray-600">
+        Customers reply to a Showdesk reply address. Forward {mailbox.public_address} to{" "}
+        {mailbox.inbound_address} to let them reply to it.
+      </p>
+    );
+  }
+  return (
+    <p className="mt-1 flex flex-wrap items-baseline gap-x-2 text-sm text-gray-600">
+      {mailbox.reply_to_public_address ? (
+        <span>
+          Customers reply to{" "}
+          <span className="font-medium text-gray-800">{mailbox.public_address}</span>
+        </span>
+      ) : (
+        <span>Customers reply to a Showdesk reply address.</span>
+      )}{" "}
+      <span className="text-xs text-gray-500">
+        (forwarding confirmed {formatDistanceToNow(new Date(proven), { addSuffix: true })})
+      </span>
+      {isAdmin && (
+        <button
+          type="button"
+          onClick={() => onChoose(!mailbox.reply_to_public_address)}
+          disabled={disabled}
+          className={SMALL_BUTTON_CLASS}
+        >
+          {mailbox.reply_to_public_address
+            ? "Use Showdesk's reply address instead"
+            : `Have customers reply to ${mailbox.public_address}`}
+        </button>
+      )}
+    </p>
+  );
+}
+
 function MailboxCard({
   mailbox,
   teamName,
@@ -160,7 +209,6 @@ function MailboxCard({
 }) {
   const update = useUpdateMailbox();
   const regenerate = useRegenerateMailboxAddress();
-  const resetForwarding = useResetMailboxForwarding();
   const [showLog, setShowLog] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const wizardId = useId();
@@ -194,18 +242,31 @@ function MailboxCard({
     });
   };
 
-  const resetReplies = () => {
+  const setReplyToPublicAddress = (replyToPublicAddress: boolean) => {
     if (
+      !replyToPublicAddress &&
       !window.confirm(
-        `Have customers reply to a reply address of Showdesk again? They will reply to ${mailbox.public_address} once a mail forwarded from it comes in.`,
+        `Have customers reply to a Showdesk reply address instead of ${mailbox.public_address}?`,
       )
     ) {
       return;
     }
-    resetForwarding.mutate(mailbox.id, {
-      onSuccess: () => toast.success("Customers now reply to a reply address of Showdesk."),
-      onError: () => toast.error("Could not reset where customers reply."),
-    });
+    update.mutate(
+      { id: mailbox.id, reply_to_public_address: replyToPublicAddress },
+      {
+        onSuccess: () =>
+          toast.success(
+            replyToPublicAddress
+              ? `Customers now reply to ${mailbox.public_address}.`
+              : "Customers now reply to a Showdesk reply address.",
+          ),
+        onError: (error) =>
+          toast.error(
+            fieldErrors(error, "reply_to_public_address").join(" ") ||
+              "Could not change where customers reply.",
+          ),
+      },
+    );
   };
 
   return (
@@ -300,34 +361,14 @@ function MailboxCard({
           </span>
         </p>
       )}
-      {mailbox.sends_from_public_address &&
-        (mailbox.forwarding_verified_at ? (
-          <p className="mt-1 flex flex-wrap items-baseline gap-x-2 text-sm text-gray-600">
-            <span>
-              Customers reply to{" "}
-              <span className="font-medium text-gray-800">{mailbox.public_address}</span>
-            </span>
-            <span className="text-xs text-gray-500">
-              (forwarding confirmed{" "}
-              {formatDistanceToNow(new Date(mailbox.forwarding_verified_at), { addSuffix: true })})
-            </span>
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={resetReplies}
-                disabled={resetForwarding.isPending}
-                className={SMALL_BUTTON_CLASS}
-              >
-                Reset
-              </button>
-            )}
-          </p>
-        ) : (
-          <p className="mt-1 text-sm text-gray-600">
-            Customers reply to a reply address of Showdesk (forward {mailbox.public_address} here
-            to have them reply to it)
-          </p>
-        ))}
+      {mailbox.sends_from_public_address && (
+        <ReplyDestination
+          mailbox={mailbox}
+          isAdmin={isAdmin}
+          disabled={update.isPending}
+          onChoose={setReplyToPublicAddress}
+        />
+      )}
 
       {canSendFromDomain && showWizard && (
         <SendingDomainWizard

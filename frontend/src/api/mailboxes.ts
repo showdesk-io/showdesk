@@ -10,7 +10,10 @@ export type MailboxCreate = Pick<Mailbox, "name"> &
   Partial<Pick<Mailbox, "public_address" | "default_team">>;
 
 export type MailboxUpdate = Partial<
-  Pick<Mailbox, "name" | "public_address" | "default_team" | "is_active">
+  Pick<
+    Mailbox,
+    "name" | "public_address" | "default_team" | "is_active" | "reply_to_public_address"
+  >
 >;
 
 export async function fetchMailboxes(): Promise<Mailbox[]> {
@@ -31,12 +34,6 @@ export async function updateMailbox(id: string, data: MailboxUpdate): Promise<Ma
 /** Mail forwarded to the previous address is refused from then on. */
 export async function regenerateMailboxAddress(id: string): Promise<Mailbox> {
   const response = await apiClient.post<Mailbox>(`/mailboxes/${id}/regenerate-address/`);
-  return response.data;
-}
-
-/** Forgets the proof of forwarding: customers reply to a reply address again. */
-export async function resetMailboxForwarding(id: string): Promise<Mailbox> {
-  const response = await apiClient.post<Mailbox>(`/mailboxes/${id}/reset-forwarding/`);
   return response.data;
 }
 
