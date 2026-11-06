@@ -136,3 +136,35 @@ def stored_recipient(inbound, message) -> Recipient | None:
     own = {mailbox.inbound_address.lower(), mailbox.public_address} - {""}
     address = next((address for address in addresses if address in own), "")
     return Recipient(mailbox, None, address)
+
+
+def proves_forwarding(inbound, message, mailbox: Mailbox | None) -> bool:
+    """Tell if a mail shows that the mailbox's public address forwards to it.
+
+    The provider delivered it to the mailbox's inbound address (the envelope,
+    which the sender doesn't write), from an envelope sender on the public
+    address's domain, as its server's forward gets (OVH ``support+_redir+…@``,
+    Gmail ``…+caf_=…@``, Microsoft's SRS), while its headers name the public
+    address, as a forward keeps them. A mail also addressed to the inbound
+    address itself, in ``To`` or ``Cc``, reached it directly and proves nothing.
+    """
+    if mailbox is None or not mailbox.public_address:
+        return False
+    inbound_address = mailbox.inbound_address.lower()
+    if _addresses([inbound.envelope_recipient]) != [inbound_address]:
+        return False
+    _, at, sender_domain = inbound.envelope_sender.strip().lower().rpartition("@")
+    if not at or sender_domain != mailbox.public_address.rpartition("@")[2]:
+        return False
+    if inbound_address in _addresses(
+        [str(value) for name in ("To", "Cc") for value in message.get_all(name, [])]
+    ):
+        return False
+    named = _addresses(
+        [
+            str(value)
+            for name in RECIPIENT_HEADERS
+            for value in message.get_all(name, [])
+        ]
+    )
+    return mailbox.public_address in named

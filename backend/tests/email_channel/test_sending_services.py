@@ -661,7 +661,10 @@ class TestOwnershipVerified:
             OrganizationFactory(), sending_status=Sending.VERIFIED
         )
         theirs = MailboxFactory(
-            organization=previous.organization, public_address="support@acme.com"
+            organization=previous.organization,
+            public_address="support@acme.com",
+            forwarding_verified_at=timezone.now(),
+            reply_to_public_address=True,
         )
         elsewhere = MailboxFactory(
             organization=previous.organization, public_address="help@other.com"
@@ -686,6 +689,8 @@ class TestOwnershipVerified:
         elsewhere.refresh_from_db()
         previous.refresh_from_db()
         assert theirs.public_address == ""
+        assert theirs.forwarding_verified_at is None
+        assert theirs.reply_to_public_address is False
         assert elsewhere.public_address == "help@other.com"
         assert previous.status == OrganizationDomain.Status.FAILED
         assert previous.sending_status == ""

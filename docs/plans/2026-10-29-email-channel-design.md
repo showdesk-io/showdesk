@@ -3,6 +3,7 @@
 > Date: 2026-10-29
 > Status: Validated. PR 2 built on `feat/email-channel` (2026-11-03), see §10.
 > PR 3 built on `feat/sending-domains` (2026-11-04), see §11.
+> Reply-To public address built on `feat/reply-to-public-address` (2026-11-06), see §11.
 > Phase: 3.5 (Channels & Integrations)
 > Research input: `docs/brainstorm/multi-channel-communication.md` (§1, §6)
 > Depends on: `docs/plans/2026-10-29-contacts-design.md`
@@ -168,7 +169,10 @@ Ignored and rejected emails are listed in the Mailbox settings.
 ### 4.3 Threading
 
 1. `In-Reply-To` / `References` matching a stored `TicketMessage.external_id`
-   of the same organization.
+   of the same organization, or the Message-ID of one of our mails sending no
+   message (`<resolved-{ticket}-{stamp}-{signature}@…>`,
+   `<link-{ticket}-{key}-{signature}@…>`), which names its ticket when its
+   signature checks (an HMAC of kind, ticket and stamp, as the reply token's).
 2. Reply token.
 3. `[SD-123]` in the subject, **only** if the sender is the ticket's contact.
 4. Otherwise a new ticket. A `Fwd:` / `Tr:` / `WG:` subject without matching
@@ -253,7 +257,11 @@ template:
 
 - `From`: `"{email_from_name or org name}" <{local_part}@{INBOUND_EMAIL_DOMAIN}>`
   (PR 3: `public_address` when its domain is verified for sending).
-- `Reply-To`: tokenised reply address.
+- `Reply-To`: tokenised reply address. The public address instead when mail
+  goes out from it, its forwarding to the mailbox is proven, and an admin chose
+  it (§11, reply-to choices): customers see and reply to the organization's own
+  address, and their replies come back through the forwarding, threaded by
+  `In-Reply-To` / `References` (§4.3), then `[SD-123]` from the contact.
 - `Message-ID` stored in `external_id`; `In-Reply-To`/`References` built from
   the ticket's `external_id` chain so mail clients thread correctly.
 - Subject `Re: [SD-123] {title}`.
@@ -531,6 +539,24 @@ inbound provider.
   still needs its DNS (the `_showdesk` TXT), which nobody but the provider
   has. Add such providers to the list.
 
+- Customers reply to the public address once an admin chose it, which a
+  forwarded mail allows. If the organization later breaks that forwarding
+  (turns it off, or its mail server starts refusing it), their replies stay in
+  the organization's own mailbox and no longer reach Showdesk until an admin
+  turns the choice off. The mailbox card shows the date of the last forward.
+
+- Replying to the public address, a reply comes back with no reply address
+  to tell its ticket. One whose client stripped `In-Reply-To` / `References`
+  and whose subject lost `[SD-123]`, or sent from another address than the
+  ticket's contact's, opens a new ticket.
+
+- An autoresponder on the public address (an out-of-office, a "we got your
+  mail") now answers every customer's reply, not only their first mail.
+
+- Anyone may send to the inbound address with a forged envelope sender on the
+  organization's domain, which refreshes the proof of forwarding. It can't turn
+  the choice on: only an admin does.
+
 - Two checks of the same domain (the periodic one and a "Check now") may
   finish out of order, the older result written last. That is rare (checks
   take seconds, "Check now" is rate-limited) and bounded: the next check, at
@@ -700,6 +726,29 @@ What admins have:
   purpose and status on the domain while a provider is configured.
 - `manage.py seed` marks the demo mailbox's domain for sending, unregistered,
   when `INBOUND_EMAIL_DOMAIN` is set.
+
+Customers reply to the public address (added after PR 3, 2026-11-06; plan
+`docs/plans/2026-11-06-reply-to-public-address-plan.md`):
+
+| # | Choice | Why |
+|---|---|---|
+| R1 | A mailbox's forwarding is proven by a **processed** mail whose stored envelope recipient is its inbound address, whose envelope sender is on the public address's domain (exact, case-insensitive), whose `Delivered-To`, `X-Original-To`, `X-Forwarded-To`, `To` or `Cc` names its public address, and whose `To` / `Cc` don't name the inbound address. A mail without an envelope, with an empty envelope sender, to a reply address or to the public address directly, or ignored / rejected, proves nothing. | Headers are declarations; the envelope is what the provider delivered to. A forward by the domain's own server gets an envelope sender there (OVH `support+_redir+…@`, Gmail / Workspace `…+caf_=…@`, Microsoft 365 SRS); a customer writing `To: support@…` doesn't. A mail addressed to both addresses reaches the inbound one directly. |
+| R2 | `Mailbox.forwarding_verified_at` is stamped with such a mail's reception time, only while the public and inbound addresses are still the ones it went through, and not when the proof there is less than an hour older. | Admins see when forwarding last worked; a changed address doesn't inherit a proof; a busy mailbox isn't written at each mail. |
+| R3 | `Mailbox.reply_to_public_address` (default off) is an admin's choice, set by `PATCH` on the mailbox; turning it on is refused (400, "Forward support@acme.com to this mailbox first: a mail that came through it turns this on.") without a proof or while mail doesn't go out from the public address. A proof alone switches nothing. | Forwarding can be proven by mail the organization didn't mean as a switch, and a forged envelope sender can refresh the proof (Known limitations): the switch is the admin's. |
+| R4 | The proof and the choice are cleared together when the public address changes or is cleared (`Mailbox.save()` compares with the database; also when another organization's verification frees it, §11 choice 4) and when the inbound address is regenerated. Turning the choice off keeps the proof. | A proof is about one address forwarded to one inbound address. |
+| R5 | `Reply-To` is the public address iff `sendable_address(mailbox)` is truthy, `forwarding_verified_at` is set and `reply_to_public_address` is on, for the mailbox the `From` is taken from; otherwise the reply token. Decided at send time, for the reply, unread-reply, resolved and conversation-link mails. The reply marker stays, and reply addresses keep working. | A reply-to we don't send from would look odd, one we can't receive from would lose the reply; mail already sent keeps coming back. |
+| R6 | The resolved mail's Message-ID (`<resolved-{ticket}-{stamp}-{signature}@…>`) and the conversation-link mail's (`<link-{ticket}-{task id}-{signature}@…>`, now with the ticket's `In-Reply-To` / `References`) name their ticket in header matching (§4.3), within the mail's organization, only when the signature checks: 16 hex of an HMAC of kind, ticket and stamp, with its own salt, under `SECRET_KEY` or a fallback. | Without a reply address, a reply to them threads by its headers only. Parsed rather than stored: they send no message. Signed, as a ticket's id is no secret (reply addresses, links, URLs): unsigned, it would let anyone post into a ticket. |
+
+- The mailbox payload carries `forwarding_verified_at` (read-only, also in the
+  Django admin) and `reply_to_public_address` (admins write it).
+- Settings → Email, under "Replies are sent from …", for a mailbox sending from
+  its public address: "Customers reply to support@acme.com (forwarding
+  confirmed 2 days ago)" with, for admins, "Use Showdesk's reply address
+  instead" (confirmed first); with a proof but the choice off, "Customers reply
+  to a Showdesk reply address." with the date and, for admins, "Have customers
+  reply to support@acme.com"; without a proof, "Customers reply to a Showdesk
+  reply address. Forward support@acme.com to {inbound address} to let them
+  reply to it." Agents read the same without buttons.
 
 What operators set (§8):
 

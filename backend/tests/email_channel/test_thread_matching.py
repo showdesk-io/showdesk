@@ -13,7 +13,11 @@ from apps.email_channel.thread_matching import (
     find_ticket,
     is_forward,
 )
-from apps.email_channel.tokens import reply_address
+from apps.email_channel.tokens import (
+    conversation_link_message_id,
+    reply_address,
+    resolution_message_id,
+)
 from apps.tickets.models import Ticket
 from tests.email_channel.mails import build, parse
 from tests.factories import (
@@ -155,3 +159,39 @@ def test_an_id_on_several_tickets_prefers_ours_then_the_oldest(mailbox, ticket):
     match = _find(build(In_Reply_To="<sent-1@in.example.com>"), mailbox)
 
     assert match.ticket == ticket
+
+
+def _our_id(kind: str, ticket) -> str:
+    if kind == "resolved":
+        return resolution_message_id(ticket)
+    return conversation_link_message_id(ticket, "task-1")
+
+
+@pytest.mark.parametrize("kind", ["resolved", "link"])
+def test_our_signed_ids_name_their_ticket_a_forged_one_doesnt(mailbox, ticket, kind):
+    ticket.resolved_at = timezone.now()
+    our_id = _our_id(kind, ticket)
+    head, _, domain = our_id.strip("<>").rpartition("@")
+    unsigned = f"<{head.rpartition('-')[0]}@{domain}>"
+    forged = f"<{head.rpartition('-')[0]}-{'0' * 16}@{domain}>"
+
+    match = _find(build(In_Reply_To=our_id), mailbox)
+
+    assert (match.ticket, match.by) == (ticket, "headers")
+    # Knowing a ticket's id (in its links, its URLs) doesn't make one of our ids.
+    assert _find(build(In_Reply_To=forged), mailbox) is None
+    assert _find(build(In_Reply_To=unsigned), mailbox) is None
+
+
+def test_our_id_on_another_domain_names_no_ticket(mailbox, ticket):
+    head = resolution_message_id(ticket).strip("<>").rpartition("@")[0]
+
+    assert _find(build(In_Reply_To=f"<{head}@elsewhere.example.net>"), mailbox) is None
+
+
+def test_our_id_for_another_organizations_ticket_names_none(mailbox):
+    elsewhere = TicketFactory(organization=MailboxFactory().organization)
+
+    match = _find(build(In_Reply_To=resolution_message_id(elsewhere)), mailbox)
+
+    assert match is None

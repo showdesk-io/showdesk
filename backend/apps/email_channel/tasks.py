@@ -152,6 +152,7 @@ def send_conversation_link(self, ticket_id: str) -> None:
     """
     from apps.core.email import send_branded_email
     from apps.email_channel import outbound
+    from apps.email_channel.tokens import conversation_link_message_id
     from apps.tickets.models import Ticket
 
     ticket = (
@@ -173,6 +174,13 @@ def send_conversation_link(self, ticket_id: str) -> None:
             organization=ticket.organization,
             from_email=outbound.from_address(ticket),
             reply_to=outbound.reply_to(ticket),
+            headers={
+                # The task's id: the same on a retry.
+                "Message-ID": conversation_link_message_id(
+                    ticket, str(self.request.id or "")
+                ),
+                **outbound.threading_headers(ticket),
+            },
             context={"ticket": ticket, "conversation_url": url},
         )
     except Exception as exc:

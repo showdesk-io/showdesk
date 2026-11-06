@@ -5,6 +5,7 @@ and it never makes anyone a contact who works for the organization.
 """
 
 import logging
+from datetime import timedelta
 from email.utils import parseaddr
 
 from anymail.inbound import AnymailInboundMessage
@@ -13,6 +14,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.core.validators import validate_email
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.contacts.gdpr import PREVIOUS_TICKET_KEY
@@ -26,8 +28,12 @@ from apps.email_channel.content import (
     strip_history,
 )
 from apps.email_channel.filters import classify
-from apps.email_channel.models import InboundEmail
-from apps.email_channel.recipients import Recipient, stored_recipient
+from apps.email_channel.models import InboundEmail, Mailbox
+from apps.email_channel.recipients import (
+    Recipient,
+    proves_forwarding,
+    stored_recipient,
+)
 from apps.email_channel.thread_matching import (
     ReopenOutcome,
     apply_reopen_rule,
@@ -278,9 +284,28 @@ def _write(
     inbound.ticket = ticket
     inbound.ticket_message = ticket_message
     _finish(inbound, InboundEmail.Status.PROCESSED)
+    mailbox = recipient.mailbox
+    if proves_forwarding(inbound, message, mailbox):
+        _stamp_forwarding(mailbox, inbound.received_at)
     transaction.on_commit(
         lambda: _announce(ticket, ticket_message, created=created, reopened=reopened)
     )
+
+
+def _stamp_forwarding(mailbox: Mailbox, proven_at) -> None:
+    """Date the mailbox's proof of forwarding, by the mail just written.
+
+    Only while both addresses are still the ones the mail went through. A proof
+    less than an hour older is kept: no write for each mail of a busy mailbox.
+    """
+    Mailbox.objects.filter(
+        pk=mailbox.pk,
+        public_address=mailbox.public_address,
+        local_part=mailbox.local_part,
+    ).filter(
+        Q(forwarding_verified_at__isnull=True)
+        | Q(forwarding_verified_at__lte=proven_at - timedelta(hours=1))
+    ).update(forwarding_verified_at=proven_at)
 
 
 def _new_ticket(message, recipient, organization, name: str, address: str, body: str):

@@ -1,5 +1,6 @@
 """What agents and admins manage of the email channel: mailboxes, their log, mails."""
 
+import warnings
 from unittest import mock
 
 import pytest
@@ -7,6 +8,7 @@ from botocore.exceptions import ClientError
 from django.core.files.base import ContentFile
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.email_channel.models import InboundEmail, Mailbox
@@ -152,6 +154,9 @@ class TestMailboxes:
     ):
         url = f"/api/v1/mailboxes/{mailbox.id}/regenerate-address/"
         before = mailbox.local_part
+        mailbox.forwarding_verified_at = timezone.now()
+        mailbox.reply_to_public_address = True
+        mailbox.save()
 
         assert authenticated_client.post(url).status_code == 403
         response = admin_client.post(url)
@@ -160,6 +165,90 @@ class TestMailboxes:
         mailbox.refresh_from_db()
         assert mailbox.local_part != before
         assert response.data["local_part"] == mailbox.local_part
+        # The forwarding proven went to the previous address.
+        assert mailbox.forwarding_verified_at is None
+        assert mailbox.reply_to_public_address is False
+
+    def test_the_forwarding_proof_is_read_only_and_goes_with_its_address(
+        self, authenticated_client, admin_client, mailbox, organization
+    ):
+        verified_domain(organization)
+        proven = timezone.now()
+        mailbox.public_address = "support@acme.example.com"
+        mailbox.save()
+        mailbox.forwarding_verified_at = proven
+        mailbox.reply_to_public_address = True
+        mailbox.save()
+        url = f"/api/v1/mailboxes/{mailbox.id}/"
+
+        listed = authenticated_client.get(url)
+        renamed = admin_client.patch(
+            url, {"name": "Help", "forwarding_verified_at": None}, format="json"
+        )
+        mailbox.refresh_from_db()
+        assert listed.data["forwarding_verified_at"] is not None
+        assert renamed.status_code == 200
+        assert mailbox.forwarding_verified_at == proven
+
+        admin_client.patch(
+            url, {"public_address": "help@acme.example.com"}, format="json"
+        )
+        mailbox.refresh_from_db()
+        assert mailbox.forwarding_verified_at is None
+        assert mailbox.reply_to_public_address is False
+
+    def test_admins_have_customers_reply_to_a_proven_public_address(
+        self, authenticated_client, admin_client, mailbox, organization, settings
+    ):
+        settings.SENDING_DOMAIN_PROVIDER = "manual"
+        verified_domain(organization)
+        mailbox.public_address = "support@acme.example.com"
+        mailbox.save()
+        url = f"/api/v1/mailboxes/{mailbox.id}/"
+        on = {"reply_to_public_address": True}
+
+        unproven = admin_client.patch(url, on, format="json")
+        mailbox.forwarding_verified_at = timezone.now()
+        mailbox.save()
+        not_sent_from_it = admin_client.patch(url, on, format="json")
+        OrganizationDomain.objects.filter(organization=organization).update(
+            is_sending=True,
+            sending_status=OrganizationDomain.SendingStatus.VERIFIED,
+            sending_provider="manual",
+            sending_provider_ref="acme.example.com",
+        )
+        by_an_agent = authenticated_client.patch(url, on, format="json")
+        turned_on = admin_client.patch(url, on, format="json")
+
+        refused = (
+            "Forward support@acme.example.com to this mailbox first: a mail that "
+            "came through it turns this on."
+        )
+        assert unproven.status_code == not_sent_from_it.status_code == 400
+        assert unproven.data["reply_to_public_address"] == [refused]
+        assert not_sent_from_it.data["reply_to_public_address"] == [refused]
+        assert by_an_agent.status_code == 403
+        assert turned_on.status_code == 200
+        assert turned_on.data["reply_to_public_address"] is True
+        mailbox.refresh_from_db()
+        assert mailbox.reply_to_public_address is True
+
+    def test_a_mailbox_loaded_in_part_drops_the_choice_with_its_address(self, mailbox):
+        Mailbox.objects.filter(pk=mailbox.pk).update(
+            public_address="support@acme.example.com",
+            forwarding_verified_at=timezone.now(),
+            reply_to_public_address=True,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # Such as a ``from_db`` Django outgrew.
+            partial = Mailbox.objects.only("id", "public_address").get(pk=mailbox.pk)
+        partial.public_address = "help@acme.example.com"
+        partial.save()
+
+        mailbox.refresh_from_db()
+        assert mailbox.public_address == "help@acme.example.com"
+        assert mailbox.forwarding_verified_at is None
+        assert mailbox.reply_to_public_address is False
 
     def test_the_forwarding_confirmation_is_shown_to_admins_only(
         self, authenticated_client, admin_client, mailbox

@@ -769,7 +769,12 @@ def on_ownership_verified(row: OrganizationDomain) -> None:
         freed = (
             Mailbox.objects.filter(public_address__endswith=f"@{row.domain}")
             .exclude(organization_id=row.organization_id)
-            .update(public_address="", updated_at=timezone.now())
+            .update(
+                public_address="",
+                forwarding_verified_at=None,
+                reply_to_public_address=False,
+                updated_at=timezone.now(),
+            )
         )
         if freed:
             logger.info(

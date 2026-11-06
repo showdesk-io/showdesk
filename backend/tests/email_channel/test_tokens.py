@@ -11,11 +11,13 @@ from django.core import signing
 from django.test import override_settings
 
 from apps.email_channel.tokens import (
+    conversation_link_message_id,
     conversation_token,
     email_hash,
     outbound_message_id,
     read_conversation_token,
     reply_address,
+    ticket_id_from_message_id,
     ticket_id_from_reply_address,
 )
 from tests.email_channel.mails import INBOUND_DOMAIN
@@ -118,12 +120,14 @@ def test_addresses_and_links_survive_a_secret_key_rotation(settings):
     old_key = settings.SECRET_KEY
     address = reply_address(ticket)
     token = conversation_token(ticket, contact, "ann@example.org")
+    message_id = conversation_link_message_id(ticket, "task-1")
 
     settings.SECRET_KEY = "a-new-secret-key-" * 3
     settings.SECRET_KEY_FALLBACKS = [old_key]
 
     # Mail already sent, and links already mailed, keep working...
     assert ticket_id_from_reply_address(address) == ticket.id
+    assert ticket_id_from_message_id(message_id) == ticket.id
     claim = read_conversation_token(token)
     assert claim.holds("ann@example.org")
     # ...while new ones are signed with the new key.
@@ -132,4 +136,5 @@ def test_addresses_and_links_survive_a_secret_key_rotation(settings):
 
     settings.SECRET_KEY_FALLBACKS = []
     assert ticket_id_from_reply_address(address) is None
+    assert ticket_id_from_message_id(message_id) is None
     assert not claim.holds("ann@example.org")

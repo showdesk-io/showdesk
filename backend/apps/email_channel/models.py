@@ -58,6 +58,19 @@ class Mailbox(TimestampedModel):
         help_text="Link and code of a Gmail forwarding confirmation: {url, code, "
         "detected_at}. Taken from a mail whose sender can be forged.",
     )
+    forwarding_verified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When a mail last came in forwarded from the public address: "
+        "delivered to the inbound address by its domain's server, naming it. "
+        "Cleared with the public address or the inbound address.",
+    )
+    reply_to_public_address = models.BooleanField(
+        default=False,
+        help_text="Customers reply to the public address rather than to a reply "
+        "address, while mail goes out from it and its forwarding is proven. "
+        "An admin's choice, cleared with the proof.",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -95,18 +108,53 @@ class Mailbox(TimestampedModel):
 
     def save(self, *args, **kwargs) -> None:
         self.public_address = self.public_address.strip().lower()
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or "public_address" in update_fields:
+            self._forget_forwarding_of_a_changed_address(kwargs)
         if not self.local_part:
             self.local_part = _generate_local_part(self.organization.slug)
         super().save(*args, **kwargs)
+
+    def _forget_forwarding_of_a_changed_address(self, kwargs: dict) -> None:
+        """A proof of forwarding, and the choice it allows, are about one address.
+
+        Told against the database, whatever this instance was loaded with.
+        """
+        if self._state.adding or self.pk is None:
+            return
+        stored = (
+            Mailbox.objects.filter(pk=self.pk)
+            .values_list("public_address", flat=True)
+            .first()
+        )
+        if stored is None or stored == self.public_address:
+            return
+        self.forwarding_verified_at = None
+        self.reply_to_public_address = False
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = {
+                *kwargs["update_fields"],
+                "forwarding_verified_at",
+                "reply_to_public_address",
+            }
 
     def regenerate_address(self) -> None:
         """Give this mailbox a new inbound address.
 
         Mail the provider delivers to the previous one is then rejected, whatever
-        its headers say.
+        its headers say: forwarding to it no longer counts as proven.
         """
         self.local_part = _generate_local_part(self.organization.slug)
-        self.save(update_fields=["local_part", "updated_at"])
+        self.forwarding_verified_at = None
+        self.reply_to_public_address = False
+        self.save(
+            update_fields=[
+                "local_part",
+                "forwarding_verified_at",
+                "reply_to_public_address",
+                "updated_at",
+            ]
+        )
 
 
 class InboundEmail(TimestampedModel):

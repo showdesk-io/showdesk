@@ -16,6 +16,7 @@ from django.utils import timezone
 
 from apps.core.text import one_line
 from apps.email_channel.recipients import Recipient
+from apps.email_channel.tokens import ticket_id_from_message_id
 from apps.tickets.models import Ticket, TicketMessage
 
 _MESSAGE_ID = re.compile(r"<[^<>\s]{1,253}>")
@@ -69,7 +70,8 @@ def _by_headers(message, organization) -> Ticket | None:
     """The ticket of the first id referenced, in the order of ``_referenced_ids``.
 
     An id on several tickets (a customer can reuse one of ours as their own
-    Message-ID) goes to the ticket of our own message, then of the oldest.
+    Message-ID) goes to the ticket of our own message, then of the oldest. The id
+    of a mail of ours sending no message (a resolution, a link) names its ticket.
     """
     ids = _referenced_ids(message)
     if not ids:
@@ -93,6 +95,11 @@ def _by_headers(message, organization) -> Ticket | None:
     for message_id in ids:
         if message_id in found:
             return _continuable(organization).get(pk=found[message_id])
+        ticket_id = ticket_id_from_message_id(message_id)
+        if ticket_id is not None and (
+            ticket := _continuable(organization).filter(pk=ticket_id).first()
+        ):
+            return ticket
     return None
 
 
