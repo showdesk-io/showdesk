@@ -25,6 +25,7 @@ import {
   useMailboxInbound,
   useRegenerateMailboxAddress,
   useReplayInboundEmail,
+  useResetMailboxForwarding,
   useUpdateMailbox,
 } from "@/hooks/useMailboxes";
 import type { ForwardingConfirmation, Mailbox, Team } from "@/types";
@@ -159,6 +160,7 @@ function MailboxCard({
 }) {
   const update = useUpdateMailbox();
   const regenerate = useRegenerateMailboxAddress();
+  const resetForwarding = useResetMailboxForwarding();
   const [showLog, setShowLog] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const wizardId = useId();
@@ -189,6 +191,20 @@ function MailboxCard({
     regenerate.mutate(mailbox.id, {
       onSuccess: () => toast.success("New inbound address created."),
       onError: () => toast.error("Could not create a new address."),
+    });
+  };
+
+  const resetReplies = () => {
+    if (
+      !window.confirm(
+        `Have customers reply to a reply address of Showdesk again? They will reply to ${mailbox.public_address} once a mail forwarded from it comes in.`,
+      )
+    ) {
+      return;
+    }
+    resetForwarding.mutate(mailbox.id, {
+      onSuccess: () => toast.success("Customers now reply to a reply address of Showdesk."),
+      onError: () => toast.error("Could not reset where customers reply."),
     });
   };
 
@@ -284,6 +300,34 @@ function MailboxCard({
           </span>
         </p>
       )}
+      {mailbox.sends_from_public_address &&
+        (mailbox.forwarding_verified_at ? (
+          <p className="mt-1 flex flex-wrap items-baseline gap-x-2 text-sm text-gray-600">
+            <span>
+              Customers reply to{" "}
+              <span className="font-medium text-gray-800">{mailbox.public_address}</span>
+            </span>
+            <span className="text-xs text-gray-500">
+              (forwarding confirmed{" "}
+              {formatDistanceToNow(new Date(mailbox.forwarding_verified_at), { addSuffix: true })})
+            </span>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={resetReplies}
+                disabled={resetForwarding.isPending}
+                className={SMALL_BUTTON_CLASS}
+              >
+                Reset
+              </button>
+            )}
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-gray-600">
+            Customers reply to a reply address of Showdesk (forward {mailbox.public_address} here
+            to have them reply to it)
+          </p>
+        ))}
 
       {canSendFromDomain && showWizard && (
         <SendingDomainWizard

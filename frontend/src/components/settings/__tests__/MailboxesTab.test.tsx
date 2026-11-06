@@ -30,6 +30,7 @@ function mailbox(overrides: Partial<Mailbox> = {}): Mailbox {
     inbound_address: "acme-x7k2m9abcd@in.example.com",
     public_address: "support@acme.com",
     sends_from_public_address: false,
+    forwarding_verified_at: null,
     default_team: null,
     is_active: true,
     created_at: "2026-11-01T00:00:00Z",
@@ -296,6 +297,36 @@ describe("MailboxesTab", () => {
     );
   });
 
+  it("says where customers reply, and lets an admin reset it", async () => {
+    mailboxes = [
+      mailbox(),
+      mailbox({ id: "m2", name: "Sales", public_address: "sales@acme.com", sends_from_public_address: true }),
+      mailbox({
+        id: "m3",
+        name: "Billing",
+        public_address: "billing@acme.com",
+        sends_from_public_address: true,
+        forwarding_verified_at: "2026-11-05T10:00:00Z",
+      }),
+    ];
+    const user = await renderTab();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
+
+    expect(screen.getByRole("region", { name: "Support" })).not.toHaveTextContent("Customers reply");
+    expect(screen.getByRole("region", { name: "Sales" })).toHaveTextContent(
+      "Customers reply to a reply address of Showdesk (forward sales@acme.com here to have them reply to it)",
+    );
+    const billing = screen.getByRole("region", { name: "Billing" });
+    expect(billing).toHaveTextContent("Customers reply to billing@acme.com");
+    expect(within(screen.getByRole("region", { name: "Sales" })).queryByRole("button", { name: "Reset" })).toBeNull();
+
+    await user.click(within(billing).getByRole("button", { name: "Reset" }));
+    expect(client.post).not.toHaveBeenCalled();
+    confirm.mockReturnValueOnce(true);
+    await user.click(within(billing).getByRole("button", { name: "Reset" }));
+    expect(client.post).toHaveBeenCalledWith("/mailboxes/m3/reset-forwarding/");
+  });
+
   it("opens the send-from-your-domain wizard when the server can send from it", async () => {
     sendingDomainsEnabled = true;
     const user = await renderTab();
@@ -332,5 +363,17 @@ describe("MailboxesTab", () => {
     await user.click(screen.getByRole("button", { name: "Show received mail log" }));
     await screen.findByText("Out of office", { selector: "td" });
     expect(screen.queryByRole("button", { name: "Replay" })).not.toBeInTheDocument();
+  });
+
+  it("shows agents where customers reply, without a reset", async () => {
+    mailboxes = [
+      mailbox({ sends_from_public_address: true, forwarding_verified_at: "2026-11-05T10:00:00Z" }),
+    ];
+    await renderTab({ isAdmin: false });
+
+    expect(screen.getByRole("region", { name: "Support" })).toHaveTextContent(
+      "Customers reply to support@acme.com",
+    );
+    expect(screen.queryByRole("button", { name: "Reset" })).not.toBeInTheDocument();
   });
 });

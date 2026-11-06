@@ -34,6 +34,12 @@ export async function regenerateMailboxAddress(id: string): Promise<Mailbox> {
   return response.data;
 }
 
+/** Forgets the proof of forwarding: customers reply to a reply address again. */
+export async function resetMailboxForwarding(id: string): Promise<Mailbox> {
+  const response = await apiClient.post<Mailbox>(`/mailboxes/${id}/reset-forwarding/`);
+  return response.data;
+}
+
 /** The mailbox's ignored and failed mails, newest first. */
 export async function fetchMailboxInbound(
   id: string,

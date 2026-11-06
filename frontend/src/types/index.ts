@@ -57,6 +57,11 @@ export interface Mailbox {
   public_address: string;
   /** Whether replies go out from the public address now, rather than the inbound one. */
   sends_from_public_address: boolean;
+  /**
+   * When a mail last came in forwarded from the public address, null if never since
+   * it was set. With `sends_from_public_address`, customers reply to the public address.
+   */
+  forwarding_verified_at: string | null;
   default_team: string | null;
   is_active: boolean;
   /** Only sent to admins; empty until Gmail sends one. */

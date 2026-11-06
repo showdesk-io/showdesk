@@ -30,6 +30,7 @@ const MAILBOX: Mailbox = {
   inbound_address: "acme-x7k2m9abcd@in.example.com",
   public_address: "support@acme.com",
   sends_from_public_address: false,
+  forwarding_verified_at: null,
   default_team: null,
   is_active: true,
   created_at: "2026-11-01T00:00:00Z",
