@@ -7,6 +7,7 @@ from botocore.exceptions import ClientError
 from django.core.files.base import ContentFile
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.email_channel.models import InboundEmail, Mailbox
@@ -152,6 +153,8 @@ class TestMailboxes:
     ):
         url = f"/api/v1/mailboxes/{mailbox.id}/regenerate-address/"
         before = mailbox.local_part
+        mailbox.forwarding_verified_at = timezone.now()
+        mailbox.save()
 
         assert authenticated_client.post(url).status_code == 403
         response = admin_client.post(url)
@@ -160,6 +163,50 @@ class TestMailboxes:
         mailbox.refresh_from_db()
         assert mailbox.local_part != before
         assert response.data["local_part"] == mailbox.local_part
+        # The forwarding proven went to the previous address.
+        assert mailbox.forwarding_verified_at is None
+
+    def test_the_forwarding_proof_is_read_only_and_goes_with_its_address(
+        self, authenticated_client, admin_client, mailbox, organization
+    ):
+        verified_domain(organization)
+        proven = timezone.now()
+        mailbox.public_address = "support@acme.example.com"
+        mailbox.save()
+        mailbox.forwarding_verified_at = proven
+        mailbox.save()
+        url = f"/api/v1/mailboxes/{mailbox.id}/"
+
+        listed = authenticated_client.get(url)
+        renamed = admin_client.patch(
+            url, {"name": "Help", "forwarding_verified_at": None}, format="json"
+        )
+        mailbox.refresh_from_db()
+        assert listed.data["forwarding_verified_at"] is not None
+        assert renamed.status_code == 200
+        assert mailbox.forwarding_verified_at == proven
+
+        admin_client.patch(
+            url, {"public_address": "help@acme.example.com"}, format="json"
+        )
+        mailbox.refresh_from_db()
+        assert mailbox.forwarding_verified_at is None
+
+    def test_admins_reset_the_forwarding_proof(
+        self, authenticated_client, admin_client, stranger, mailbox
+    ):
+        mailbox.forwarding_verified_at = timezone.now()
+        mailbox.save()
+        url = f"/api/v1/mailboxes/{mailbox.id}/reset-forwarding/"
+
+        assert authenticated_client.post(url).status_code == 403
+        assert stranger.post(url).status_code == 404
+        response = admin_client.post(url)
+
+        assert response.status_code == 200
+        assert response.data["forwarding_verified_at"] is None
+        mailbox.refresh_from_db()
+        assert mailbox.forwarding_verified_at is None
 
     def test_the_forwarding_confirmation_is_shown_to_admins_only(
         self, authenticated_client, admin_client, mailbox

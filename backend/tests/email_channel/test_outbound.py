@@ -167,6 +167,37 @@ def test_a_reply_mail_comes_from_the_public_address_once_sendable(
     assert pending.from_email == f"Acme <{ticket.mailbox.inbound_address}>"
 
 
+def test_customers_reply_to_the_public_address_once_its_forwarding_is_proven(
+    ticket, agent, settings
+):
+    settings.SENDING_DOMAIN_PROVIDER = "manual"
+    ticket.mailbox = MailboxFactory(
+        organization=ticket.organization,
+        public_address="support@acme.com",
+        forwarding_verified_at=timezone.now(),
+    )
+    ticket.save()
+    row = _sending_domain(ticket.organization, sending_status="pending")
+
+    send_ticket_reply_email(_reply(ticket, agent).id)
+    row.sending_status = OrganizationDomain.SendingStatus.VERIFIED
+    row.save()
+    send_ticket_reply_email(_reply(ticket, agent).id)
+    ticket.status = Ticket.Status.RESOLVED
+    ticket.resolved_at = timezone.now()
+    ticket.save()
+    send_ticket_resolved_email(ticket.id)
+    ticket.mailbox.forwarding_verified_at = None
+    ticket.mailbox.save()
+    send_ticket_reply_email(_reply(ticket, agent).id)
+
+    not_sent_from_it, proven, resolved, unproven = mail.outbox
+    assert not_sent_from_it.reply_to == [reply_address(ticket)]
+    assert proven.reply_to == resolved.reply_to == ["support@acme.com"]
+    assert proven.body.startswith(REPLY_MARKER)
+    assert unproven.reply_to == [reply_address(ticket)]
+
+
 def test_the_inbound_address_is_used_without_ownership_or_provider(
     ticket, agent, settings
 ):

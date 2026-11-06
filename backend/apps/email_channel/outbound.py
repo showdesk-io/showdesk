@@ -221,12 +221,10 @@ def context_messages(first) -> list[TicketMessage]:
     return list(reversed(messages))
 
 
-def from_address(ticket) -> str | None:
-    """The ``From`` of the ticket's mail, None for ``DEFAULT_FROM_EMAIL`` (§5.1).
+def sending_mailbox(ticket) -> Mailbox | None:
+    """The mailbox the ticket's mail goes out from, while the inbound domain is set.
 
-    The ticket's mailbox, or else the organization's first active one, while the
-    inbound domain is set: its public address once mail may go out from it
-    (§7.1), else its inbound address.
+    The ticket's own, or else the organization's first active one.
     """
     if not settings.INBOUND_EMAIL_DOMAIN:
         return None
@@ -239,6 +237,16 @@ def from_address(ticket) -> str | None:
             .order_by("created_at")
             .first()
         )
+    return mailbox
+
+
+def from_address(ticket) -> str | None:
+    """The ``From`` of the ticket's mail, None for ``DEFAULT_FROM_EMAIL`` (§5.1).
+
+    From the sending mailbox: its public address once mail may go out from it
+    (§7.1), else its inbound address.
+    """
+    mailbox = sending_mailbox(ticket)
     if mailbox is None:
         return None
     organization = ticket.organization
@@ -247,8 +255,19 @@ def from_address(ticket) -> str | None:
 
 
 def reply_to(ticket) -> list[str] | None:
-    """Where a reply to the ticket's mail goes, while the inbound domain is set."""
-    return [reply_address(ticket)] if settings.INBOUND_EMAIL_DOMAIN else None
+    """Where a reply to the ticket's mail goes, while the inbound domain is set.
+
+    The sending mailbox's public address when mail goes out from it and its
+    forwarding to the mailbox is proven (§5.1); else the ticket's reply address.
+    """
+    if not settings.INBOUND_EMAIL_DOMAIN:
+        return None
+    mailbox = sending_mailbox(ticket)
+    if mailbox is not None and mailbox.forwarding_verified_at is not None:
+        public_address = sendable_address(mailbox)
+        if public_address:
+            return [public_address]
+    return [reply_address(ticket)]
 
 
 def reply_marker() -> str:

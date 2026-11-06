@@ -46,6 +46,7 @@ class MailboxSerializer(serializers.ModelSerializer):
             "default_team",
             "is_active",
             "forwarding_confirmation",
+            "forwarding_verified_at",
             "created_at",
             "updated_at",
         ]
@@ -53,6 +54,7 @@ class MailboxSerializer(serializers.ModelSerializer):
             "id",
             "local_part",
             "forwarding_confirmation",
+            "forwarding_verified_at",
             "created_at",
             "updated_at",
         ]

@@ -26,8 +26,12 @@ from apps.email_channel.content import (
     strip_history,
 )
 from apps.email_channel.filters import classify
-from apps.email_channel.models import InboundEmail
-from apps.email_channel.recipients import Recipient, stored_recipient
+from apps.email_channel.models import InboundEmail, Mailbox
+from apps.email_channel.recipients import (
+    Recipient,
+    proves_forwarding,
+    stored_recipient,
+)
 from apps.email_channel.thread_matching import (
     ReopenOutcome,
     apply_reopen_rule,
@@ -278,6 +282,12 @@ def _write(
     inbound.ticket = ticket
     inbound.ticket_message = ticket_message
     _finish(inbound, InboundEmail.Status.PROCESSED)
+    mailbox = recipient.mailbox
+    if proves_forwarding(inbound, message, mailbox):
+        # Only while the address is still the one the mail named.
+        Mailbox.objects.filter(
+            pk=mailbox.pk, public_address=mailbox.public_address
+        ).update(forwarding_verified_at=inbound.processed_at)
     transaction.on_commit(
         lambda: _announce(ticket, ticket_message, created=created, reopened=reopened)
     )

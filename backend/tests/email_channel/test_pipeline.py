@@ -423,3 +423,75 @@ def test_a_lost_notification_is_logged_as_such(mailbox, agent, deliver, caplog):
     assert inbound.status == InboundEmail.Status.PROCESSED
     assert "Couldn't queue" in caplog.text
     assert "Inbound mail" not in caplog.text
+
+
+# Forwarding from the public address (customers reply to it once proven)
+
+
+def test_a_mail_forwarded_from_the_public_address_lets_customers_reply_to_it(
+    mailbox, agent, deliver, settings
+):
+    from apps.organizations.models import OrganizationDomain
+    from apps.tickets.tasks import send_ticket_reply_email
+
+    settings.SENDING_DOMAIN_PROVIDER = "manual"
+    OrganizationDomain.objects.create(
+        organization=mailbox.organization,
+        domain="acme.example.com",
+        is_sending=True,
+        status=OrganizationDomain.Status.VERIFIED,
+        sending_status=OrganizationDomain.SendingStatus.VERIFIED,
+        sending_provider_ref="acme.example.com",
+        sending_provider="manual",
+    )
+
+    # Delivered to the inbound address, still To the public one: a forward.
+    first = deliver(build())
+
+    mailbox.refresh_from_db()
+    assert mailbox.forwarding_verified_at == first.processed_at
+    mail.outbox.clear()
+    reply = TicketMessageFactory(ticket=first.ticket, author=agent, channel="agent")
+    send_ticket_reply_email(reply.id)
+    [sent] = mail.outbox
+    assert sent.from_email.endswith("<support@acme.example.com>")
+    assert sent.reply_to == ["support@acme.example.com"]
+
+    # The customer answers the public address, which forwards it here again.
+    answer = deliver(
+        build(
+            Subject=f"Re: {sent.subject}",
+            Message_ID="<2@mail.example.org>",
+            In_Reply_To=sent.extra_headers["Message-ID"],
+            body="Still broken",
+        )
+    )
+
+    assert answer.ticket == first.ticket
+    assert answer.ticket_message.body == "Still broken"
+
+
+def test_only_a_processed_mail_through_the_inbound_address_proves_forwarding(
+    mailbox, agent, deliver
+):
+    ticket = TicketFactory(
+        organization=mailbox.organization, mailbox=mailbox, reference="OLD-1"
+    )
+    unproven = [
+        deliver(build(Auto_Submitted="auto-replied", Message_ID="<a@x.org>")),
+        deliver(build(Message_ID="<b@x.org>"), rcpt_to=reply_address(ticket)),
+        deliver(
+            build(Message_ID="<c@x.org>", To=INBOUND_ADDRESS, Cc=mailbox.public_address)
+        ),
+        deliver(build(Message_ID="<d@x.org>", To="someone@example.org")),
+    ]
+    stored = InboundEmailFactory(mailbox=mailbox, envelope_recipient="")
+    stored.raw.save("raw.eml", ContentFile(build(Message_ID="<e@x.org>")))
+    process_inbound_email.delay(str(stored.id))
+    stored.refresh_from_db()
+
+    assert [row.status for row in unproven[1:]] == ["processed"] * 3
+    assert unproven[0].status == "ignored"
+    assert stored.status == "processed"
+    mailbox.refresh_from_db()
+    assert mailbox.forwarding_verified_at is None

@@ -58,6 +58,13 @@ class Mailbox(TimestampedModel):
         help_text="Link and code of a Gmail forwarding confirmation: {url, code, "
         "detected_at}. Taken from a mail whose sender can be forged.",
     )
+    forwarding_verified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When a mail last came in through the inbound address while "
+        "naming the public address: forwarding from it works, so customers may "
+        "reply to it. Cleared when the public address changes.",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -71,6 +78,13 @@ class Mailbox(TimestampedModel):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.organization})"
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        # What a change of the public address is told from, in ``save``.
+        instance._stored_public_address = instance.__dict__.get("public_address")
+        return instance
 
     @property
     def inbound_address(self) -> str:
@@ -95,18 +109,27 @@ class Mailbox(TimestampedModel):
 
     def save(self, *args, **kwargs) -> None:
         self.public_address = self.public_address.strip().lower()
+        stored = getattr(self, "_stored_public_address", None)
+        if stored is not None and stored != self.public_address:
+            # A proof of forwarding is about one address.
+            self.forwarding_verified_at = None
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "forwarding_verified_at"}
         if not self.local_part:
             self.local_part = _generate_local_part(self.organization.slug)
         super().save(*args, **kwargs)
+        self._stored_public_address = self.public_address
 
     def regenerate_address(self) -> None:
         """Give this mailbox a new inbound address.
 
         Mail the provider delivers to the previous one is then rejected, whatever
-        its headers say.
+        its headers say: forwarding to it no longer counts as proven.
         """
         self.local_part = _generate_local_part(self.organization.slug)
-        self.save(update_fields=["local_part", "updated_at"])
+        self.forwarding_verified_at = None
+        self.save(update_fields=["local_part", "forwarding_verified_at", "updated_at"])
 
 
 class InboundEmail(TimestampedModel):
