@@ -45,6 +45,7 @@ import {
   getStore,
   initSession,
   restartAnonymousSession,
+  restartForNewEmail,
   switchSession,
 } from "./ui/modal";
 import { reattachPopupIfNeeded } from "./ui/chat/chat-view";
@@ -215,6 +216,10 @@ function setUser(
   const isEmpty = !id && !user?.name && !user?.email;
   const previous = config.user;
   const session = getStore().state.session;
+  const emailChanged =
+    (user?.email ?? "").trim().toLowerCase() !== (previous?.email ?? "").trim().toLowerCase();
+  // A code asked for the previous email isn't one to enter for the next.
+  if (emailChanged) getStore().update({ emailCodeSentAt: null });
   // Whom the session belongs to, or will: the hash covers one still being created.
   const owner = previous?.hash ? String(previous.id ?? "") : session?.externalUserId;
   if (user && !hasIdentity && id && id === owner) {
@@ -233,6 +238,12 @@ function setUser(
   config.company = company;
   if (!hasIdentity && wasIdentified) {
     void restartAnonymousSession(config);
+    return;
+  }
+  // An anonymous session that proved its email, given another: the history it opens
+  // isn't the new person's to see until the next init.
+  if (!hasIdentity && emailChanged && session?.email && !session.emailProofOffered) {
+    void restartForNewEmail(config);
     return;
   }
   if (hasIdentity) {

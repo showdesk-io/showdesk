@@ -8,15 +8,28 @@ Handles email notifications for ticket lifecycle events:
 """
 
 import logging
+import smtplib
+from email.utils import parseaddr
 
 from celery import shared_task
 from django.conf import settings
+from redis.exceptions import RedisError
 
 from apps.core.email import send_branded_email
+from apps.core.text import one_line
+from apps.tickets.models import requester_can_be_emailed, requester_reply_address
 
 logger = logging.getLogger(__name__)
 
 SITE_URL = getattr(settings, "SITE_URL", "http://localhost")
+# A reply mail finding its ticket's previous one still being sent waits this long.
+REPLY_LOCK_RETRY_SECONDS = 15
+# A reply mail that can't take its lock in a cache outage tries again, for an hour.
+REPLY_LOCK_OUTAGE_RETRY_SECONDS = 60
+REPLY_LOCK_OUTAGE_MAX_RETRIES = 60
+# A reply mail the mail server didn't take is tried again, this many more times.
+REPLY_MAIL_SMTP_MAX_RETRIES = 3
+REPLY_MAIL_SMTP_RETRY_SECONDS = 60
 
 
 def _ticket_url(ticket) -> str:
@@ -42,44 +55,6 @@ def _priority_label(ticket) -> str:
         return Ticket.Priority(slug).label
     except ValueError:
         return slug.replace("_", " ").title() or "—"
-
-
-def _requester_can_be_emailed(ticket) -> bool:
-    """Tell if the ticket has an address, and one that isn't an anonymized contact's.
-
-    Its contact says so. A ticket with none, scrubbed that way or left by a deleted
-    contact, only has the address to tell.
-    """
-    from apps.contacts.models import ANONYMIZED_EMAIL_DOMAIN
-
-    if not ticket.requester_email:
-        return False
-    if ticket.contact:
-        return not ticket.contact.is_anonymized
-    return not ticket.requester_email.lower().endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")
-
-
-def _reply_address(ticket) -> str:
-    """Return where an agent's reply goes, or "" if nowhere.
-
-    The ticket's address, or else what its contact holds: a resume doesn't fill in a
-    ticket, and an agent can link one. Not the contact of a ticket a login moved there,
-    who isn't necessarily who wrote it. ``is_unsubscribed`` doesn't come into it: it's
-    about non-essential email, and a reply to their own ticket isn't.
-    """
-    from apps.tickets.models import PRE_LOGIN_ANONYMOUS_KEY
-
-    if ticket.requester_email:
-        return ticket.requester_email if _requester_can_be_emailed(ticket) else ""
-    contact = ticket.contact
-    metadata = ticket.context_metadata
-    if (
-        contact is None
-        or contact.is_anonymized
-        or (isinstance(metadata, dict) and PRE_LOGIN_ANONYMOUS_KEY in metadata)
-    ):
-        return ""
-    return contact.email or contact.declared_email
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -154,27 +129,249 @@ def send_ticket_created_email(self, ticket_id: str) -> None:
         raise self.retry(exc=exc)
 
 
+def _attachments(message, statuses=None) -> list[dict]:
+    """The message's files as a mail names them: never by a storage URL.
+
+    ``statuses`` tells what the mail did with each (``outbound.FileStatus``).
+    """
+    return [
+        {
+            "filename": att.filename,
+            "size": att.file_size,
+            "status": (statuses or {}).get(att.pk, ""),
+        }
+        for att in message.attachments.all()
+    ]
+
+
+def _reply_entry(message, author_label: str, statuses=None) -> dict:
+    return {
+        "author_label": author_label,
+        "author_initial": (author_label[:1] or "?").upper(),
+        "body": message.body,
+        "attachments": _attachments(message, statuses),
+    }
+
+
+def _load_message(message_id: str):
+    from apps.tickets.models import TicketMessage
+
+    try:
+        return TicketMessage.objects.select_related(
+            "ticket",
+            "ticket__organization",
+            "ticket__assigned_agent",
+            "ticket__contact",
+            "ticket__mailbox",
+            "author",
+        ).get(id=message_id)
+    except TicketMessage.DoesNotExist:
+        logger.warning("Message %s not found, skipping email.", message_id)
+        return None
+
+
+def _requester_address(ticket) -> str:
+    """Where an agent's reply on ``ticket`` is emailed, or "" if it isn't.
+
+    An unsubscribed contact only gets the replies of a ticket they opened by email.
+    """
+    from apps.email_channel.outbound import suppressed_by_unsubscribe
+
+    if suppressed_by_unsubscribe(ticket):
+        return ""
+    return requester_reply_address(ticket)
+
+
+def _retry(task, countdown: int, **counts):
+    """Run ``task`` again, carrying its own counts of each kind of attempt.
+
+    Celery's count of retries mixes them: waiting for the ticket's lock must not
+    spend the SMTP attempts.
+    """
+    return task.retry(
+        kwargs={**task.request.kwargs, **counts},
+        countdown=countdown,
+        # Each count has its own limit: Celery's (None means its default) never binds.
+        max_retries=task.request.retries + 1,
+    )
+
+
+def _mark_failed(message) -> None:
+    from apps.tickets.models import TicketMessage
+
+    TicketMessage.objects.filter(pk=message.pk).exclude(
+        email_delivery_status=TicketMessage.DeliveryStatus.SENT
+    ).update(email_delivery_status=TicketMessage.DeliveryStatus.FAILED)
+
+
+def _email_requester(
+    task, message, address: str, smtp_attempts: int = 0, lock_outages: int = 0
+) -> None:
+    """Email ``address`` the unread replies up to ``message``, ``message``'s mail.
+
+    One reply mail at a time per ticket, so that two close replies don't both
+    carry the same unread ones: a task finding the ticket busy comes back shortly.
+    """
+    from apps.email_channel import outbound
+
+    ticket = message.ticket
+    try:
+        locked = outbound.lock_replies(ticket)
+    except RedisError as exc:
+        # Without the lock, two mails could carry the same replies: wait for the cache.
+        logger.warning("Reply lock unavailable for ticket %s: %s", ticket.pk, exc)
+        if lock_outages >= REPLY_LOCK_OUTAGE_MAX_RETRIES:
+            logger.error("Reply mail of %s given up: no cache", ticket.reference)
+            _mark_failed(message)
+            return
+        raise _retry(
+            task, REPLY_LOCK_OUTAGE_RETRY_SECONDS, lock_outages=lock_outages + 1
+        ) from exc
+    if not locked:
+        raise _retry(task, REPLY_LOCK_RETRY_SECONDS)
+    try:
+        _send_requester_mail(task, message, address, smtp_attempts)
+    finally:
+        outbound.unlock_replies(ticket)
+
+
+def _refused_for_size(exc: Exception) -> bool:
+    """Tell if the mail server refused the mail for its size."""
+    if not isinstance(exc, smtplib.SMTPResponseException):
+        return False
+    if exc.smtp_code == 552:
+        return True
+    error = exc.smtp_error
+    text = error.decode("utf-8", "replace") if isinstance(error, bytes) else str(error)
+    return isinstance(exc, smtplib.SMTPSenderRefused | smtplib.SMTPDataError) and (
+        "size" in text.lower()
+    )
+
+
+def _send_requester_mail(task, message, address: str, smtp_attempts: int = 0) -> None:
+    """Build and send ``message``'s mail; its Message-ID is the same on a retry.
+
+    Refused for its size, it goes once more at once, naming its files instead.
+    """
+    from apps.email_channel import outbound
+    from apps.email_channel.tokens import outbound_message_id
+    from apps.tickets.models import TicketMessage
+
+    # Another task may have sent it while this one waited for the ticket.
+    message.refresh_from_db(fields=["email_delivery_status"])
+    if message.email_delivery_status == TicketMessage.DeliveryStatus.SENT:
+        return
+    ticket = message.ticket
+    replies = outbound.unread_replies(message)
+    files, statuses = outbound.mail_attachments(replies)
+    conversation_url = outbound.conversation_url(ticket, address)
+    # The history recalls what the contact said: only for the contact's address.
+    history = [
+        {
+            "author_label": outbound.sender_label(earlier, address),
+            "body": earlier.body,
+            "created_at": earlier.created_at,
+        }
+        for earlier in (
+            outbound.context_messages(replies[0]) if conversation_url else ()
+        )
+    ]
+    author_label = outbound.sender_label(replies[-1], address)
+    intro = (
+        f"{author_label} replied to your support ticket."
+        if len(replies) == 1
+        else f"You have {len(replies)} new replies on your support ticket."
+    )
+
+    message_id = outbound_message_id(message)
+    if message.external_id != message_id:
+        TicketMessage.objects.filter(pk=message.pk).update(external_id=message_id)
+    headers = {
+        "Message-ID": message_id,
+        **outbound.threading_headers(ticket, before=message.created_at),
+    }
+
+    def send(files, statuses) -> None:
+        entries = [
+            _reply_entry(reply, outbound.sender_label(reply, address), statuses)
+            for reply in replies
+        ]
+        named = {
+            status
+            for entry in entries
+            for file in entry["attachments"]
+            if (status := file["status"]) != outbound.FileStatus.ATTACHED
+        }
+        send_branded_email(
+            template="ticket_reply",
+            subject=f"Re: [{ticket.reference}] {ticket.title}",
+            to=[address],
+            organization=ticket.organization,
+            from_email=outbound.from_address(ticket),
+            reply_to=outbound.reply_to(ticket),
+            headers=headers,
+            context={
+                "ticket": ticket,
+                "ticket_url": conversation_url or _ticket_url(ticket),
+                "replies": entries,
+                "history": history,
+                "reply_marker": outbound.reply_marker(),
+                "author_label": author_label,
+                "intro": intro,
+                "cta_label": "View conversation",
+                "files_too_large": outbound.FileStatus.TOO_LARGE in named,
+                "files_unavailable": outbound.FileStatus.UNAVAILABLE in named,
+                "files_url": conversation_url,
+            },
+            attachments=files,
+        )
+
+    try:
+        try:
+            send(files, statuses)
+        except Exception as exc:
+            if not (files and _refused_for_size(exc)):
+                raise
+            logger.warning("Reply mail of %s too large, sent without files", ticket)
+            send([], {pk: outbound.FileStatus.TOO_LARGE for pk in statuses})
+    except Exception as exc:
+        logger.exception("Failed to send reply email for %s", ticket.reference)
+        if smtp_attempts >= REPLY_MAIL_SMTP_MAX_RETRIES:
+            _mark_failed(message)
+            return
+        raise _retry(
+            task, REPLY_MAIL_SMTP_RETRY_SECONDS, smtp_attempts=smtp_attempts + 1
+        ) from exc
+    TicketMessage.objects.filter(pk__in=[reply.pk for reply in replies]).update(
+        email_delivery_status=TicketMessage.DeliveryStatus.SENT
+    )
+    logger.info("Sent reply email for %s.", ticket.reference)
+
+
+def _is_agent_reply(message) -> bool:
+    from apps.tickets.models import TicketMessage
+
+    author = message.author
+    return message.channel == TicketMessage.Channel.AGENT or bool(
+        author and author.is_agent
+    )
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_ticket_reply_email(self, message_id: str) -> None:
+def send_ticket_reply_email(
+    self, message_id: str, smtp_attempts: int = 0, lock_outages: int = 0
+) -> None:
     """Notify the relevant party when a reply is added.
 
-    - If an agent replies -> notify the requester
+    - If an agent replies -> email the requester, with the replies still unread
     - If the requester replies -> notify the assigned agent (or all agents)
     - Internal notes are never emailed externally
     """
     from apps.organizations.models import User
     from apps.tickets.models import TicketMessage
 
-    try:
-        message = TicketMessage.objects.select_related(
-            "ticket",
-            "ticket__organization",
-            "ticket__assigned_agent",
-            "ticket__contact",
-            "author",
-        ).get(id=message_id)
-    except TicketMessage.DoesNotExist:
-        logger.warning("Message %s not found, skipping email.", message_id)
+    message = _load_message(message_id)
+    if message is None:
         return
 
     if message.message_type == TicketMessage.MessageType.INTERNAL_NOTE:
@@ -182,47 +379,36 @@ def send_ticket_reply_email(self, message_id: str) -> None:
         return
 
     ticket = message.ticket
-    author = message.author
-    is_agent_reply = author and author.role in (User.Role.AGENT, User.Role.ADMIN)
 
-    if is_agent_reply:
-        address = _reply_address(ticket)
+    if _is_agent_reply(message):
+        address = _requester_address(ticket)
         if not address:
             logger.info("No requester to email for ticket %s.", ticket.reference)
             return
-        recipients = [address]
-        author_label = (author.first_name or "").strip() or (
-            author.email.split("@")[0] if author.email else "Support"
-        )
-        intro = f"{author_label} replied to your support ticket."
-        cta_label = "View conversation"
+        _email_requester(self, message, address, smtp_attempts, lock_outages)
+        return
+
+    if ticket.assigned_agent and ticket.assigned_agent.email:
+        recipients = [ticket.assigned_agent.email]
     else:
-        if ticket.assigned_agent and ticket.assigned_agent.email:
-            recipients = [ticket.assigned_agent.email]
-        else:
-            recipients = list(
-                User.objects.filter(
-                    organization=ticket.organization,
-                    role__in=[User.Role.AGENT, User.Role.ADMIN],
-                    is_active=True,
-                ).values_list("email", flat=True)
-            )
-        if not recipients:
-            return
-        author_label = ticket.requester_name or ticket.requester_email or "Requester"
-        intro = f"{author_label} replied on ticket {ticket.reference}."
-        cta_label = "Open ticket"
-
-    initial = (author_label[:1] or "?").upper()
-
-    attachments = [
-        {
-            "filename": att.filename,
-            "url": att.file.url if att.file else "",
-            "size": att.file_size,
-        }
-        for att in message.attachments.all()
-    ]
+        recipients = list(
+            User.objects.filter(
+                organization=ticket.organization,
+                role__in=[User.Role.AGENT, User.Role.ADMIN],
+                is_active=True,
+            ).values_list("email", flat=True)
+        )
+    if not recipients:
+        return
+    # A mail's own sender, who can be someone in copy rather than the requester.
+    sender_name, sender_address = parseaddr(message.external_sender)
+    author_label = (
+        one_line(sender_name)
+        or sender_address
+        or ticket.requester_name
+        or ticket.requester_email
+        or "Requester"
+    )
 
     try:
         send_branded_email(
@@ -233,12 +419,10 @@ def send_ticket_reply_email(self, message_id: str) -> None:
             context={
                 "ticket": ticket,
                 "ticket_url": _ticket_url(ticket),
-                "message_body": message.body,
+                "replies": [_reply_entry(message, author_label)],
                 "author_label": author_label,
-                "author_initial": initial,
-                "intro": intro,
-                "cta_label": cta_label,
-                "attachments": attachments,
+                "intro": f"{author_label} replied on ticket {ticket.reference}.",
+                "cta_label": "Open ticket",
             },
         )
         logger.info(
@@ -249,6 +433,31 @@ def send_ticket_reply_email(self, message_id: str) -> None:
     except Exception as exc:
         logger.exception("Failed to send reply email for %s", ticket.reference)
         raise self.retry(exc=exc)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_unread_reply_email(
+    self, message_id: str, smtp_attempts: int = 0, lock_outages: int = 0
+) -> None:
+    """Email an agent's reply the requester left unread in the widget.
+
+    Nothing if it was read, or if a later reply's own task will carry it.
+    """
+    from apps.email_channel import outbound
+    from apps.tickets.models import TicketMessage
+
+    message = _load_message(message_id)
+    if (
+        message is None
+        or message.message_type == TicketMessage.MessageType.INTERNAL_NOTE
+        or message.email_delivery_status == TicketMessage.DeliveryStatus.SENT
+        or outbound.read_in_widget(message)
+        or outbound.carried_by_later_reply(message)
+    ):
+        return
+    address = _requester_address(message.ticket)
+    if address:
+        _email_requester(self, message, address, smtp_attempts, lock_outages)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -296,17 +505,21 @@ def send_ticket_assigned_email(self, ticket_id: str) -> None:
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_ticket_resolved_email(self, ticket_id: str) -> None:
-    """Notify the requester when their ticket is resolved."""
+    """Notify the requester when their ticket is resolved, on the ticket's thread."""
+    from apps.email_channel import outbound
+    from apps.email_channel.tokens import resolution_message_id
     from apps.tickets.models import Ticket
 
     try:
-        ticket = Ticket.objects.select_related("organization", "contact").get(
-            id=ticket_id
-        )
+        ticket = Ticket.objects.select_related(
+            "organization", "contact", "mailbox"
+        ).get(id=ticket_id)
     except Ticket.DoesNotExist:
         return
 
-    if not _requester_can_be_emailed(ticket):
+    if not requester_can_be_emailed(ticket) or outbound.suppressed_by_unsubscribe(
+        ticket
+    ):
         return
 
     try:
@@ -315,6 +528,12 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
             subject=f"[{ticket.reference}] Your ticket has been resolved",
             to=[ticket.requester_email],
             organization=ticket.organization,
+            from_email=outbound.from_address(ticket),
+            reply_to=outbound.reply_to(ticket),
+            headers={
+                "Message-ID": resolution_message_id(ticket),
+                **outbound.threading_headers(ticket),
+            },
             context={
                 "ticket": ticket,
                 "requester_name": ticket.requester_name,
@@ -323,3 +542,120 @@ def send_ticket_resolved_email(self, ticket_id: str) -> None:
     except Exception as exc:
         logger.exception("Failed to send resolved email for %s", ticket.reference)
         raise self.retry(exc=exc)
+
+
+@shared_task
+def send_widget_email_code(session_id: str, email: str) -> None:
+    """Mail a widget session the code proving ``email``, if there's anything to see.
+
+    The route queues this for every request, so its answer and its time say nothing
+    of the address. Here: only while the session still has that email and no proof
+    of it, and only when the proof would open conversations it can't see (§6.2,
+    Decision A). The code is good for this session and its organization alone. It's
+    generated once: a failed send is retried with it (``deliver_widget_email_code``).
+    """
+    from apps.organizations.models import OTPCode
+    from apps.tickets.access import email_proof_would_open
+    from apps.tickets.models import WidgetSession, has_proof, normalized_email
+
+    session = (
+        WidgetSession.objects.select_related("organization", "contact")
+        .filter(pk=session_id)
+        .first()
+    )
+    if (
+        session is None
+        or not email
+        or normalized_email(session.email) != email
+        or has_proof(session)
+        or not email_proof_would_open(session, email)
+    ):
+        return
+    otp = OTPCode.generate(
+        email,
+        purpose=OTPCode.Purpose.WIDGET_EMAIL,
+        organization=session.organization,
+        widget_session=session,
+    )
+    deliver_widget_email_code.delay(str(otp.pk))
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def deliver_widget_email_code(self, otp_id: str) -> None:
+    """Send a widget email code, again on failure, while it's still to be used.
+
+    By id: the code itself never goes through the broker.
+    """
+    from apps.organizations.models import OTPCode
+
+    otp = (
+        OTPCode.objects.select_related("organization")
+        .filter(
+            pk=otp_id,
+            purpose=OTPCode.Purpose.WIDGET_EMAIL,
+            used_at__isnull=True,
+            organization__isnull=False,
+        )
+        .first()
+    )
+    if otp is None:
+        return
+    organization = otp.organization
+    try:
+        send_branded_email(
+            template="widget_email_code",
+            subject=f"Your code to see your conversations with {organization.name}",
+            to=[otp.email],
+            organization=organization,
+            context={
+                "organization": organization,
+                "code": otp.code,
+                "expiry_minutes": getattr(settings, "OTP_EXPIRY_SECONDS", 600) // 60,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Failed to send a widget email code")
+        raise self.retry(exc=exc)
+
+
+# How long an agent's upload waits for the reply that names it.
+ORPHAN_UPLOAD_AFTER_HOURS = 24
+
+
+@shared_task
+def purge_orphan_agent_uploads() -> int:
+    """Delete agents' uploads no reply took within a day, with their files.
+
+    The agent's app uploads a reply's files first: if the reply was never posted,
+    nothing shows them. The files go once the deletion is committed. Return how
+    many went.
+    """
+    from datetime import timedelta
+
+    from django.db import transaction
+    from django.utils import timezone
+
+    from apps.tickets.models import TicketAttachment
+
+    with transaction.atomic():
+        orphans = list(
+            TicketAttachment.objects.select_for_update(skip_locked=True).filter(
+                awaiting_message=True,
+                message__isnull=True,
+                uploaded_by__isnull=False,
+                created_at__lt=timezone.now()
+                - timedelta(hours=ORPHAN_UPLOAD_AFTER_HOURS),
+            )
+        )
+        files = [(a.file.storage, a.file.name) for a in orphans if a.file]
+        TicketAttachment.objects.filter(pk__in=[a.pk for a in orphans]).delete()
+
+        def delete_files() -> None:
+            for storage, name in files:
+                try:
+                    storage.delete(name)
+                except Exception:
+                    logger.exception("Couldn't delete the orphan upload %s", name)
+
+        transaction.on_commit(delete_files)
+    return len(orphans)

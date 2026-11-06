@@ -1,0 +1,17 @@
+Return-Path: <ann@example.org>
+Delivered-To: acme-fixture01@in.example.com
+X-Forwarded-To: acme-fixture01@in.example.com
+Received: by mx.example.com with SMTP id abc; Mon, 2 Nov 2026 09:00:00 +0000
+From: Ann Customer <ann@example.org>
+To: Acme Support <support@acme.example.com>
+Subject: My invoice is wrong
+Date: Mon, 2 Nov 2026 09:00:00 +0000
+Message-ID: <CAF0rwd-1@mail.example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+Hello,
+
+The invoice I received this morning is wrong.
+
+Ann

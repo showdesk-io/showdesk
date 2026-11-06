@@ -39,6 +39,7 @@ LOCAL_APPS = [
     "apps.videos",
     "apps.knowledge_base",
     "apps.notifications",
+    "apps.email_channel",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -136,6 +137,23 @@ REST_FRAMEWORK = {
         "otp_request_email": config("OTP_REQUEST_EMAIL_RATE", default="5/hour"),
         "otp_verify_ip": config("OTP_VERIFY_IP_RATE", default="60/hour"),
         "otp_verify_email": config("OTP_VERIFY_EMAIL_RATE", default="10/hour"),
+        # The conversation page reached by a mailed link, per client IP. It polls
+        # every 15 s while visible.
+        "conversation_read": config("CONVERSATION_READ_RATE", default="60/minute"),
+        "conversation_write": config("CONVERSATION_WRITE_RATE", default="20/minute"),
+        "conversation_renew": config("CONVERSATION_RENEW_RATE", default="10/hour"),
+        # The widget's email code, apart from login codes. Per address, the
+        # session's, whichever session asks.
+        "widget_email_code_ip": config("WIDGET_EMAIL_CODE_IP_RATE", default="30/hour"),
+        "widget_email_code_email": config(
+            "WIDGET_EMAIL_CODE_EMAIL_RATE", default="5/hour"
+        ),
+        "widget_email_verify_ip": config(
+            "WIDGET_EMAIL_VERIFY_IP_RATE", default="60/hour"
+        ),
+        "widget_email_verify_email": config(
+            "WIDGET_EMAIL_VERIFY_EMAIL_RATE", default="10/hour"
+        ),
     },
 }
 
@@ -201,7 +219,17 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [config("REDIS_URL", default="redis://localhost:6379/0")],
+            # A consumer waits for messages with a blocking pop of 5 s
+            # (RedisChannelLayer.brpop_timeout), and redis-py's default socket
+            # timeout is 5 s too: an idle consumer's read would time out on the
+            # client side and take its socket down. A dead connection is still
+            # noticed, after this timeout.
+            "hosts": [
+                {
+                    "address": config("REDIS_URL", default="redis://localhost:6379/0"),
+                    "socket_timeout": 15,
+                }
+            ],
         },
     },
 }
@@ -230,6 +258,30 @@ CELERY_BEAT_SCHEDULE = {
     "recheck-dns-pending-domains": {
         "task": "apps.organizations.tasks.recheck_dns_pending_domains",
         "schedule": 60 * 15,  # Every 15 minutes
+    },
+    "requeue-stale-inbound-emails": {
+        "task": "apps.email_channel.tasks.requeue_stale_inbound",
+        "schedule": 60 * 10,
+    },
+    "purge-inbound-raw-emails": {
+        "task": "apps.email_channel.tasks.purge_inbound_raw",
+        "schedule": 60 * 60 * 24,
+    },
+    "purge-expired-otp-codes": {
+        "task": "apps.organizations.tasks.purge_expired_otp_codes",
+        "schedule": 60 * 60 * 24,
+    },
+    "check-sending-domains": {
+        "task": "apps.email_channel.tasks.check_sending_domains",
+        "schedule": 60 * 15,
+    },
+    "requeue-sending-removals": {
+        "task": "apps.email_channel.tasks.requeue_sending_removals",
+        "schedule": 60 * 60,
+    },
+    "purge-orphan-agent-uploads": {
+        "task": "apps.tickets.tasks.purge_orphan_agent_uploads",
+        "schedule": 60 * 60 * 24,
     },
 }
 
@@ -334,11 +386,84 @@ del email_backend, email_options
 
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@showdesk.io")
 
-# Anymail settings (when using anymail.backends.mailjet.EmailBackend)
+# Anymail settings: the Mailjet sending backend, and inbound mail webhooks.
 ANYMAIL = {
     "MAILJET_API_KEY": config("MAILJET_API_KEY", default=""),
     "MAILJET_SECRET_KEY": config("MAILJET_SECRET_KEY", default=""),
+    # Postal's public key: /anymail/postal/inbound/ only exists with it.
+    "POSTAL_WEBHOOK_KEY": config("ANYMAIL_POSTAL_WEBHOOK_KEY", default=""),
+    # "user:password" (several, comma-separated, while rotating). The other
+    # providers' webhooks only exist with it, since basic auth is their only check.
+    "WEBHOOK_SECRET": [
+        entry
+        for entry in config("ANYMAIL_WEBHOOK_SECRET", default="", cast=Csv())
+        if entry.partition(":")[0] and entry.partition(":")[2]
+    ],
 }
+
+# =============================================================================
+# Email channel (inbound mail), off while INBOUND_EMAIL_DOMAIN is empty
+# =============================================================================
+# Domain receiving the mail forwarded to mailboxes and the replies to tickets.
+INBOUND_EMAIL_DOMAIN = config("INBOUND_EMAIL_DOMAIN", default="").strip().lower()
+# A resolved or closed ticket reopens on a reply within this many days of its last
+# activity. Later, the reply opens a new ticket.
+INBOUND_EMAIL_REOPEN_DAYS = config("INBOUND_EMAIL_REOPEN_DAYS", default=7, cast=int)
+# Total size of the attachments kept from one mail; larger ones are dropped. Only
+# mail beyond about twice this size is refused (see email_channel.webhooks).
+INBOUND_EMAIL_MAX_SIZE_MB = config("INBOUND_EMAIL_MAX_SIZE_MB", default=25, cast=int)
+# Mails from one sender to one mailbox, per hour, beyond which they are ignored.
+INBOUND_EMAIL_RATE_LIMIT_PER_HOUR = config(
+    "INBOUND_EMAIL_RATE_LIMIT_PER_HOUR", default=20, cast=int
+)
+# All mail to one mailbox, whoever sends it: a sender's own limit can be dodged
+# by changing the From, which costs nothing.
+INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR = config(
+    "INBOUND_EMAIL_MAILBOX_RATE_LIMIT_PER_HOUR", default=200, cast=int
+)
+# How long received raw mails (.eml) are kept.
+INBOUND_EMAIL_RAW_RETENTION_DAYS = config(
+    "INBOUND_EMAIL_RAW_RETENTION_DAYS", default=30, cast=int
+)
+# How long the log of received mails is kept (rows, without their raw mail).
+INBOUND_EMAIL_LOG_RETENTION_DAYS = config(
+    "INBOUND_EMAIL_LOG_RETENTION_DAYS", default=90, cast=int
+)
+# A reply left unread in the widget this long is also sent by email.
+WIDGET_UNREAD_EMAIL_DELAY_MINUTES = config(
+    "WIDGET_UNREAD_EMAIL_DELAY_MINUTES", default=5, cast=int
+)
+# Size, in MB as sent (base64), of the files a reply mail attaches in all. The
+# others are named in the mail, with the conversation link.
+REPLY_EMAIL_ATTACHMENTS_MAX_MB = config(
+    "REPLY_EMAIL_ATTACHMENTS_MAX_MB", default=10, cast=int
+)
+# Lifetime of the conversation links sent by email.
+CONVERSATION_LINK_MAX_AGE_DAYS = config(
+    "CONVERSATION_LINK_MAX_AGE_DAYS", default=30, cast=int
+)
+
+# =============================================================================
+# Sending domains: mail from an organization's own verified domain
+# =============================================================================
+# Who sets up a customer domain for sending: none (feature off), manual,
+# scaleway_tem or mailjet. See apps.email_channel.sending.
+SENDING_DOMAIN_PROVIDER = (
+    config("SENDING_DOMAIN_PROVIDER", default="none").strip().lower()
+)
+# manual: the SPF include of the sending service, and the DKIM selector of the
+# one key it signs every customer domain with, published by the operator at
+# <selector>._domainkey.<INBOUND_EMAIL_DOMAIN>.
+SENDING_DOMAIN_SPF_INCLUDE = config("SENDING_DOMAIN_SPF_INCLUDE", default="")
+SENDING_DOMAIN_DKIM_SELECTOR = config("SENDING_DOMAIN_DKIM_SELECTOR", default="")
+# scaleway_tem: an API secret key allowed to manage Transactional Email in the
+# project the domains are registered in, and that project's region.
+SCW_TEM_SECRET_KEY = config("SCW_TEM_SECRET_KEY", default="")
+SCW_TEM_PROJECT_ID = config("SCW_TEM_PROJECT_ID", default="")
+SCW_TEM_REGION = config("SCW_TEM_REGION", default="fr-par")
+# mailjet: the API host of the Mailjet account whose keys are MAILJET_API_KEY
+# and MAILJET_SECRET_KEY above (https://api.us.mailjet.com for US accounts).
+MAILJET_API_URL = config("MAILJET_API_URL", default="https://api.mailjet.com")
 
 # Frontend URL for links in emails
 SITE_URL = config("SITE_URL", default="http://localhost")

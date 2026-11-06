@@ -1,10 +1,12 @@
 """Ticket-related models: Ticket, TicketMessage, TicketAttachment, Tag, SLAPolicy."""
 
+from email.utils import parseaddr
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from apps.contacts.models import Contact
+from apps.contacts.models import ANONYMIZED_EMAIL_DOMAIN, Contact
 from apps.core.models import TimestampedModel
 
 
@@ -139,6 +141,66 @@ class SLAPolicy(TimestampedModel):
         return f"{self.name} ({self.priority})"
 
 
+def normalized_email(value) -> str:
+    """An address as proofs and contacts compare it: stripped and lowercased."""
+    return (value or "").strip().lower()
+
+
+def has_proof(session) -> bool:
+    """Tell if ``session`` proved the email it has now, whoever holds it."""
+    email = normalized_email(session.email)
+    return bool(
+        session.email_verified_at and email and session.email_verified_for == email
+    )
+
+
+def proof_holds(session, contact) -> bool:
+    """Tell if ``session`` proved the email it has, and ``contact`` holds that email.
+
+    The proof is about the address it was made for (``email_verified_for``): a date
+    left by a write racing an email change says nothing of the new one.
+    """
+    return bool(
+        has_proof(session)
+        and contact is not None
+        and normalized_email(contact.email) == normalized_email(session.email)
+    )
+
+
+def requester_can_be_emailed(ticket) -> bool:
+    """Tell if the ticket has an address, and one that isn't an anonymized contact's.
+
+    Its contact says so. A ticket with none, scrubbed that way or left by a deleted
+    contact, only has the address to tell.
+    """
+    if not ticket.requester_email:
+        return False
+    if ticket.contact:
+        return not ticket.contact.is_anonymized
+    return not ticket.requester_email.lower().endswith(f"@{ANONYMIZED_EMAIL_DOMAIN}")
+
+
+def requester_reply_address(ticket) -> str:
+    """Return where an agent's reply goes, or "" if nowhere.
+
+    The ticket's address, or else what its contact holds, or, without one, the
+    address it declared (Contacts design §5): a resume doesn't fill in a ticket, and
+    an agent can link one. Not the contact of a ticket a login moved there, who isn't
+    necessarily who wrote it.
+    """
+    if ticket.requester_email:
+        return ticket.requester_email if requester_can_be_emailed(ticket) else ""
+    contact = ticket.contact
+    metadata = ticket.context_metadata
+    if (
+        contact is None
+        or contact.is_anonymized
+        or (isinstance(metadata, dict) and PRE_LOGIN_ANONYMOUS_KEY in metadata)
+    ):
+        return ""
+    return contact.email or contact.declared_email
+
+
 class WidgetSession(TimestampedModel):
     """Anonymous or identified widget user session.
 
@@ -146,6 +208,10 @@ class WidgetSession(TimestampedModel):
     external_user_id (for HMAC-authenticated users). Anonymous sessions
     are identified only by their UUID, stored in the browser's localStorage.
     """
+
+    class ProofSource(models.TextChoices):
+        SIGNED = "signed", "Signed by the host app"
+        CODE = "code", "Code sent by email"
 
     organization = models.ForeignKey(
         "organizations.Organization",
@@ -174,6 +240,20 @@ class WidgetSession(TimestampedModel):
         null=True,
         blank=True,
         help_text="Set when this session proved ownership of its email.",
+    )
+    email_verified_for = models.EmailField(
+        blank=True,
+        default="",
+        help_text="The lowercased address the proof is about. It only counts while "
+        "it is the session's email and its contact's.",
+    )
+    email_proof_source = models.CharField(
+        max_length=10,
+        choices=ProofSource.choices,
+        blank=True,
+        default="",
+        help_text="How the email was proven. Only a signed proof is lost on an "
+        "unsigned page (logout).",
     )
 
     class Meta:
@@ -338,6 +418,16 @@ class Ticket(TimestampedModel):
         related_name="tickets",
         help_text="Widget session that created this ticket (messaging mode).",
     )
+    mailbox = models.ForeignKey(
+        "email_channel.Mailbox",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tickets",
+        # Indexed in Meta.indexes, built concurrently on a table that may be large.
+        db_index=False,
+        help_text="Mailbox the ticket was opened through, for tickets opened by email.",
+    )
     widget_last_read_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -363,6 +453,7 @@ class Ticket(TimestampedModel):
             models.Index(fields=["organization", "status"]),
             models.Index(fields=["organization", "priority"]),
             models.Index(fields=["assigned_agent", "status"]),
+            models.Index(fields=["mailbox"], name="ticket_mailbox"),
         ]
 
     def __str__(self) -> str:
@@ -379,6 +470,9 @@ class Ticket(TimestampedModel):
         while the contact still holds it, since an agent can change it: the
         session's date is about the address it had then. And only for what was written
         since: a proof says nothing of who wrote the session's earlier tickets.
+
+        A message posted through the conversation link isn't: it proves who holds
+        the mailbox now, not who wrote the ticket.
         """
         session = self.widget_session
         if self.source in (self.Source.AGENT, self.Source.API) or (
@@ -394,12 +488,9 @@ class Ticket(TimestampedModel):
             return False
         if session.external_user_id:
             return True
-        email = session.email.strip().lower()
         return bool(
-            session.email_verified_at
+            proof_holds(session, self.contact)
             and self.created_at >= session.email_verified_at
-            and email
-            and email == self.contact.email.strip().lower()
         )
 
     def clean(self) -> None:
@@ -413,6 +504,14 @@ class Ticket(TimestampedModel):
         ):
             raise ValidationError(
                 {"contact": "This contact belongs to another organization."}
+            )
+        if (
+            self.mailbox_id
+            and self.organization_id
+            and self.mailbox.organization_id != self.organization_id
+        ):
+            raise ValidationError(
+                {"mailbox": "This mailbox belongs to another organization."}
             )
 
 
@@ -443,6 +542,22 @@ class TicketMessage(TimestampedModel):
         VIDEO = "video", "Video"
         SCREENSHOT = "screenshot", "Screenshot"
         SYSTEM = "system", "System"
+
+    class Channel(models.TextChoices):
+        """How the message came in."""
+
+        WIDGET = "widget", "Widget"
+        EMAIL = "email", "Email"
+        AGENT = "agent", "Agent"
+        API = "api", "API"
+        SYSTEM = "system", "System"
+
+    class DeliveryStatus(models.TextChoices):
+        """Whether the message reached the requester by email."""
+
+        NONE = "", "Not emailed"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
 
     ticket = models.ForeignKey(
         Ticket,
@@ -480,9 +595,37 @@ class TicketMessage(TimestampedModel):
         choices=BodyType.choices,
         default=BodyType.TEXT,
     )
+    channel = models.CharField(
+        max_length=10,
+        choices=Channel.choices,
+        default=Channel.WIDGET,
+    )
+    external_id = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Message-ID of the email this message came in or went out as.",
+    )
+    external_sender = models.CharField(
+        max_length=320,
+        blank=True,
+        help_text="The From of the email this message came in as: a claim, unverified.",
+    )
+    email_delivery_status = models.CharField(
+        max_length=10,
+        choices=DeliveryStatus.choices,
+        blank=True,
+    )
 
     class Meta:
         ordering = ["created_at"]
+        indexes = [
+            # Only email messages have one: the others would make most of it.
+            models.Index(
+                fields=["external_id"],
+                condition=~models.Q(external_id=""),
+                name="ticketmessage_external_id",
+            ),
+        ]
 
     def __str__(self) -> str:
         if self.author:
@@ -497,12 +640,22 @@ class TicketMessage(TimestampedModel):
 
     @property
     def sender_name(self) -> str:
-        """Display name for the message sender."""
+        """Display name for the message sender.
+
+        An email's sender can be someone other than the ticket's contact, such as a
+        colleague in copy: their own name shows.
+        """
         if self.sender_type == self.SenderType.AGENT and self.author:
             return self.author.get_full_name() or self.author.email
-        if self.sender_type == self.SenderType.USER and self.widget_session:
+        if self.sender_type != self.SenderType.USER:
+            return ""
+        if self.widget_session:
             return self.widget_session.name or self.widget_session.email or ""
-        return ""
+        if self.external_sender:
+            name, address = parseaddr(self.external_sender)
+            return name or address or self.external_sender
+        contact = self.ticket.contact
+        return contact.name if contact else ""
 
 
 class SavedView(TimestampedModel):
@@ -588,6 +741,31 @@ class CannedResponse(TimestampedModel):
         return f"{self.name} ({scope}, {self.organization})"
 
 
+# Never stored as attachments, whoever sends them: executable or scriptable.
+BLOCKED_EXTENSIONS = frozenset(
+    {
+        ".exe",
+        ".bat",
+        ".cmd",
+        ".com",
+        ".msi",
+        ".scr",
+        ".pif",
+        ".vbs",
+        ".vbe",
+        ".js",
+        ".jse",
+        ".wsf",
+        ".wsh",
+        ".ps1",
+        ".sh",
+        ".csh",
+        ".dll",
+        ".sys",
+    }
+)
+
+
 class TicketAttachment(TimestampedModel):
     """A file attached to a ticket or message.
 
@@ -613,6 +791,8 @@ class TicketAttachment(TimestampedModel):
         null=True,
     )
     file = models.FileField(upload_to="attachments/%Y/%m/%d/")
+    # An agent's upload for a reply not posted yet: purged if none takes it.
+    awaiting_message = models.BooleanField(default=False)
     filename = models.CharField(max_length=255)
     content_type = models.CharField(max_length=100)
     file_size = models.PositiveBigIntegerField(help_text="File size in bytes.")

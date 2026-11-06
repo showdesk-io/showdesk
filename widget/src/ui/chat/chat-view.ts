@@ -6,6 +6,7 @@
  */
 
 import {
+  ApiError,
   sendMessage,
   sendAttachmentMessage,
   deleteMessage,
@@ -36,6 +37,10 @@ import {
 } from "../../recorder/popup-launcher";
 
 let messageListEl: HTMLElement | null = null;
+/** The contact nudge on screen, if any. */
+let nudgeEl: HTMLElement | null = null;
+/** The subscription of the view on screen: a view rendered again drops the previous one. */
+let unsubscribeView: (() => void) | null = null;
 let requestSession: () => Promise<WidgetSession | null> = async () => null;
 
 export function renderChatView(
@@ -47,6 +52,8 @@ export function renderChatView(
 ): void {
   container.innerHTML = "";
   requestSession = ensureSession;
+  unsubscribeView?.();
+  nudgeEl = null;
 
   // Message list (scrollable)
   messageListEl = document.createElement("div");
@@ -55,23 +62,7 @@ export function renderChatView(
 
   renderMessages(store, config);
 
-  // Contact nudge (after first message, if anonymous and not dismissed)
-  if (shouldShowNudge(store, config)) {
-    const nudge = renderContactNudge(store, (name, email) => {
-      const session = store.state.session;
-      if (session) {
-        updateSessionContact(config, session.sessionId, name, email).catch(
-          console.error,
-        );
-        store.update({
-          session: { ...session, name, email },
-        });
-      }
-    });
-    messageListEl.appendChild(nudge);
-    store.update({ contactNudgeShown: true });
-    scrollToBottom();
-  }
+  syncContactNudge(store, config);
 
   // Message input
   const input = renderMessageInput({
@@ -86,11 +77,90 @@ export function renderChatView(
   });
   container.appendChild(input);
 
+  // A conversation seen through the history only: read, not written.
+  const readOnly = renderReadOnlyNotice(store);
+  container.appendChild(readOnly);
+  const readOnlyText = readOnly.querySelector<HTMLElement>(".sd-read-only-text");
+  const showReadOnly = () => {
+    const { activeTicketId, closedTicketId } = store.state;
+    const isReadOnly = store.state.activeTicketReadOnly && Boolean(activeTicketId);
+    readOnly.style.display = isReadOnly ? "" : "none";
+    input.style.display = isReadOnly ? "none" : "";
+    if (readOnlyText) {
+      readOnlyText.textContent =
+        activeTicketId && closedTicketId === activeTicketId
+          ? "This conversation is closed."
+          : "This conversation can only be read here.";
+    }
+  };
+  showReadOnly();
+
   // Subscribe to state changes
-  store.subscribe(() => {
+  unsubscribeView = store.subscribe(() => {
     renderMessages(store, config);
+    syncContactNudge(store, config);
+    showReadOnly();
     scrollToBottom();
   });
+}
+
+function renderReadOnlyNotice(store: WidgetStore): HTMLElement {
+  const notice = document.createElement("div");
+  notice.className = "sd-read-only";
+  const text = document.createElement("div");
+  text.className = "sd-read-only-text";
+  text.textContent = "This conversation can only be read here.";
+  const start = document.createElement("button");
+  start.className = "sd-btn-small sd-btn-primary";
+  start.textContent = "Start a new conversation";
+  start.onclick = () => {
+    store.update({
+      activeTicketId: null,
+      activeTicketReference: null,
+      activeTicketReadOnly: false,
+      messages: [],
+    });
+  };
+  notice.append(text, start);
+  return notice;
+}
+
+/**
+ * The messages, with the optimistic one now sent under its real id. The WebSocket may
+ * have brought the same message first: the optimistic one, with its local preview,
+ * stays in its place.
+ */
+function confirmSent(
+  store: WidgetStore,
+  tempId: string,
+  result: { messageId: string; ticketId: string },
+): ChatMessage[] {
+  return store.state.messages
+    .filter((m) => m.id !== result.messageId)
+    .map((m) =>
+      m.id === tempId
+        ? { ...m, id: result.messageId, ticketId: result.ticketId, _status: "sent" as const }
+        : m,
+    );
+}
+
+/**
+ * A refusal to write on the active conversation: show it read-only from now on.
+ * A 403 is a conversation only seen through the history, a 409 one closed too long
+ * ago to reopen.
+ */
+function readOnlyIfRefused(err: unknown, store: WidgetStore, ticketId: string | null): void {
+  if (
+    err instanceof ApiError &&
+    (err.status === 403 || err.status === 409) &&
+    ticketId &&
+    store.state.activeTicketId === ticketId
+  ) {
+    store.update({
+      activeTicketReadOnly: true,
+      closedTicketId: err.status === 409 ? ticketId : store.state.closedTicketId,
+    });
+  }
 }
 
 function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
@@ -126,7 +196,8 @@ function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
     .querySelectorAll("[data-message-id]")
     .forEach((el) => existingIds.add((el as HTMLElement).dataset.messageId!));
 
-  for (const msg of store.state.messages) {
+  const messages = store.state.messages;
+  for (const [index, msg] of messages.entries()) {
     if (existingIds.has(msg.id)) {
       // Update status if changed
       const existing = messageListEl.querySelector(
@@ -141,7 +212,15 @@ function renderMessages(store: WidgetStore, config: ShowdeskConfig): void {
       continue;
     }
     const bubble = renderMessageBubble(msg, onDelete);
-    messageListEl.appendChild(bubble);
+    // In its place among those shown: a message can arrive after later ones.
+    const next = messages
+      .slice(index + 1)
+      .find((later) => existingIds.has(later.id));
+    const before = next
+      ? messageListEl.querySelector(`[data-message-id="${CSS.escape(next.id)}"]`)
+      : null;
+    // The contact nudge stays below the messages.
+    messageListEl.insertBefore(bubble, before ?? nudgeEl);
   }
 
   scrollToBottom();
@@ -285,11 +364,65 @@ function scrollToBottom(): void {
   }
 }
 
+/**
+ * The contact nudge is offered once the visitor has written, until they save or dismiss
+ * it, and only while there's no email to reach them at.
+ */
 function shouldShowNudge(store: WidgetStore, config: ShowdeskConfig): boolean {
-  if (store.state.contactNudgeDismissed || store.state.contactNudgeShown) return false;
-  if (config.user?.name && config.user?.email) return false;
-  if (store.state.session?.name && store.state.session?.email) return false;
+  if (store.state.contactNudgeDismissed) return false;
+  if (config.user?.email || store.state.session?.email) return false;
   return store.state.messages.some((m) => m.senderType === "user");
+}
+
+/** Put the contact nudge on screen, or take it off, as the state now says. */
+function syncContactNudge(store: WidgetStore, config: ShowdeskConfig): void {
+  if (!messageListEl) return;
+  const show = shouldShowNudge(store, config);
+  if (!show) {
+    nudgeEl?.remove();
+    nudgeEl = null;
+    return;
+  }
+  if (nudgeEl?.parentElement === messageListEl) return;
+  nudgeEl = renderContactNudge(store, (name, email) =>
+    saveContact(name, email, store, config),
+  );
+  messageListEl.appendChild(nudgeEl);
+  scrollToBottom();
+}
+
+/**
+ * Give the session the contact typed in the nudge. Whether the history then offers a
+ * code for the email is the backend's to say: a new address has no proof yet, and
+ * nothing to offer until the answer says so.
+ */
+function saveContact(
+  name: string,
+  email: string,
+  store: WidgetStore,
+  config: ShowdeskConfig,
+): void {
+  const session = store.state.session;
+  if (!session) return;
+  const sameEmail = email === session.email;
+  store.update({
+    session: {
+      ...session,
+      name,
+      email,
+      emailProofOffered: sameEmail ? session.emailProofOffered : false,
+    },
+    // A code asked for the previous email isn't one to enter now.
+    ...(sameEmail ? {} : { emailCodeSentAt: null }),
+  });
+  updateSessionContact(config, session.sessionId, name, email)
+    .then((saved) => {
+      const current = store.state.session;
+      // Another session, or another contact typed since: not this answer's to say.
+      if (current?.sessionId !== saved.sessionId || current.email !== email) return;
+      store.update({ session: { ...current, emailProofOffered: saved.emailProofOffered } });
+    })
+    .catch(console.error);
 }
 
 /** On its way if there's a session, or else once there is one: false if there's none to be had. */
@@ -333,6 +466,8 @@ async function postText(
   store.update({
     messages: [...store.state.messages, optimisticMsg],
   });
+  // Where it's going, should writing there be refused.
+  const ticketId = store.state.activeTicketId;
 
   try {
     // Gather context on first message
@@ -366,22 +501,19 @@ async function postText(
     if (!store.state.messages.some((m) => m.id === tempId)) return;
 
     // Update optimistic message with real data
-    const updated = store.state.messages.map((m) =>
-      m.id === tempId
-        ? { ...m, id: result.messageId, ticketId: result.ticketId, _status: "sent" as const }
-        : m,
-    );
+    const updated = confirmSent(store, tempId, result);
     store.update({
       messages: updated,
       activeTicketId: result.ticketId,
       activeTicketReference: result.reference,
     });
-  } catch {
+  } catch (err) {
     // Mark as failed
     const updated = store.state.messages.map((m) =>
       m.id === tempId ? { ...m, _status: "failed" as const } : m,
     );
     store.update({ messages: updated });
+    readOnlyIfRefused(err, store, ticketId);
   }
 }
 
@@ -418,6 +550,8 @@ async function handleSendAttachment(
   store.update({
     messages: [...store.state.messages, optimisticMsg],
   });
+  // Where it's going, should writing there be refused.
+  const ticketId = store.state.activeTicketId;
 
   try {
     const result = await sendAttachmentMessage(
@@ -431,21 +565,18 @@ async function handleSendAttachment(
 
     if (!store.state.messages.some((m) => m.id === tempId)) return;
 
-    const updated = store.state.messages.map((m) =>
-      m.id === tempId
-        ? { ...m, id: result.messageId, ticketId: result.ticketId, _status: "sent" as const }
-        : m,
-    );
+    const updated = confirmSent(store, tempId, result);
     store.update({
       messages: updated,
       activeTicketId: result.ticketId,
       activeTicketReference: result.reference,
     });
-  } catch {
+  } catch (err) {
     const updated = store.state.messages.map((m) =>
       m.id === tempId ? { ...m, _status: "failed" as const } : m,
     );
     store.update({ messages: updated });
+    readOnlyIfRefused(err, store, ticketId);
   }
 }
 
@@ -847,6 +978,8 @@ async function loadPopupUploadedMessage(
     store.update({
       activeTicketId: conv.ticketId,
       activeTicketReference: conv.reference,
+      activeTicketReadOnly: conv.readOnly,
+      closedTicketId: conv.closed ? conv.ticketId : null,
       messages: conv.messages,
     });
   } catch (err) {

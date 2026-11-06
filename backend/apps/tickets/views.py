@@ -9,11 +9,13 @@ from django_filters import rest_framework as django_filters
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.contacts.attributes import is_storable
+from apps.contacts.models import Contact
 from apps.contacts.services import (
     delete_contact_if_left_empty,
     resolve_contact_for_email,
@@ -31,10 +33,20 @@ from apps.core.permissions import (
     require_active_org,
 )
 from apps.core.throttling import (
+    WIDGET_EMAIL_CODE_THROTTLES,
+    WIDGET_EMAIL_VERIFY_THROTTLES,
+    WidgetEmailCodeEmailThrottle,
+    WidgetEmailVerifyEmailThrottle,
     WidgetMessageThrottle,
     WidgetSessionThrottle,
     WidgetSubmitThrottle,
     WidgetUploadThrottle,
+)
+from apps.email_channel.outbound import queue_reply_email
+from apps.email_channel.thread_matching import (
+    ReopenOutcome,
+    apply_reopen_rule,
+    reopen_expired,
 )
 from apps.notifications.signals import (
     notify_message_deleted,
@@ -45,10 +57,13 @@ from apps.notifications.signals import (
 from apps.organizations.models import (
     RESERVED_EXTERNAL_ID_PREFIXES,
     Organization,
+    OTPCode,
     Team,
     User,
 )
 
+from .access import session_tickets, writable_from
+from .messages import MessageRefused, create_user_message, lock_ticket_with_contact
 from .models import (
     PRE_LOGIN_ANONYMOUS_KEY,
     CannedResponse,
@@ -59,6 +74,9 @@ from .models import (
     TicketAttachment,
     TicketMessage,
     WidgetSession,
+    has_proof,
+    normalized_email,
+    proof_holds,
 )
 from .serializers import (
     CannedResponseSerializer,
@@ -84,11 +102,18 @@ from .serializers import (
 from .tasks import (
     send_ticket_assigned_email,
     send_ticket_created_email,
-    send_ticket_reply_email,
     send_ticket_resolved_email,
+    send_widget_email_code,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _ticket_title(body: str, body_type: str) -> str:
+    """A widget ticket's title: its first message, on one line, cut to 100."""
+    title = " ".join(body.split())[:100]
+    return title or f"[{body_type.capitalize()}]"
+
 
 # Next to ``PRE_LOGIN_ANONYMOUS_KEY``: the digest of the anonymous session it came
 # from, to trace the move.
@@ -189,10 +214,38 @@ def _record_session_resume(
     ):
         session.email = email
         fields.append("email")
-        if session.email_verified_at:
-            session.email_verified_at = None
-            fields.append("email_verified_at")
     session.save(update_fields=fields)
+    _drop_proof_of_another_email(session)
+
+
+def _drop_proof_of_another_email(session) -> None:
+    """Forget a proof about an email other than the one the session has now.
+
+    Whatever the email was before: a proof is only worth the address it was made
+    for (``email_verified_for``). Written on the row as it is, so a proof of the new
+    email landed meanwhile stays. One made for an old email that this request didn't
+    read is harmless: it holds for no email the session has.
+    """
+    email = normalized_email(session.email)
+    has_some = bool(session.email_verified_at or session.email_verified_for)
+    if not has_some or (
+        session.email_verified_at and session.email_verified_for == email
+    ):
+        return
+    stale = (
+        WidgetSession.objects.filter(pk=session.pk)
+        .exclude(email_verified_for=email, email_verified_at__isnull=False)
+        .exclude(email_verified_for="", email_verified_at__isnull=True)
+    )
+    if stale.update(
+        email_verified_at=None,
+        email_verified_for="",
+        email_proof_source="",
+        updated_at=timezone.now(),
+    ):
+        session.email_verified_at = None
+        session.email_verified_for = ""
+        session.email_proof_source = ""
 
 
 def _company_hash_is_valid(org, company, company_hash) -> bool:
@@ -214,8 +267,15 @@ def _contact_claims(identity) -> dict:
 
 
 def _link_session_contact(
-    org, session, *, email_hash=None, company_hash=None, traits=None, company=None
-) -> None:
+    org,
+    session,
+    *,
+    email_hash=None,
+    company_hash=None,
+    traits=None,
+    company=None,
+    code_proof=False,
+) -> bool:
     """Resolve the session's contact from the widget init payload.
 
     All of it is validated ``WidgetIdentitySerializer`` data. ``email_hash`` and
@@ -224,24 +284,38 @@ def _link_session_contact(
     reason a database error (a conflict the service's retry couldn't settle, a
     deadlock, a lock timeout) is logged, and the session goes on without a contact
     until the next init.
+
+    ``code_proof`` is True once the session redeemed a code mailed to its email.
+    Return whether the email is proven: the contact ends up holding it. The session
+    then records how (``email_proof_source``), which decides what a later unsigned
+    init does with it (Contacts design §3 rule 8).
     """
-    email_verified = bool(
+    signed = bool(
         session.email
         and email_hash
         and org.verify_email_hash(session.email, email_hash)
     )
+    email_verified = code_proof or signed
     previous_contact_id = session.contact_id
+    previous_source = session.email_proof_source
+    proven = False
     try:
         # Together: the tickets only get linked when the contact changes, so a
         # contact committed without them would leave them unlinked for good.
         with transaction.atomic():
-            resolve_contact_for_widget_session(
+            contact = resolve_contact_for_widget_session(
                 session,
                 email_verified=email_verified,
                 traits=traits,
                 company=company,
                 company_verified=_company_hash_is_valid(org, company, company_hash),
+                proof_source=(
+                    WidgetSession.ProofSource.CODE
+                    if code_proof
+                    else WidgetSession.ProofSource.SIGNED
+                ),
             )
+            proven = email_verified and proof_holds(session, contact)
             # The normal flow is first message, then contact nudge: tickets opened
             # before the session had a contact would otherwise never get one. Only
             # then: on any other visit, a ticket without a contact is one an agent
@@ -252,10 +326,13 @@ def _link_session_contact(
                 ).update(contact_id=session.contact_id)
     except DatabaseError:
         session.contact_id = previous_contact_id
+        session.email_proof_source = previous_source
         logger.exception(
             "Could not link widget session %s to a contact",
             _session_digest(session.pk),
         )
+        return False
+    return proven
 
 
 def _update_session(request, org, identity) -> Response:
@@ -270,13 +347,11 @@ def _update_session(request, org, identity) -> Response:
         session.name = name
         fields.append("name")
     if email is not None:
-        # The proof was about the previous email.
-        if email.lower() != session.email.strip().lower():
-            session.email_verified_at = None
-            fields.append("email_verified_at")
         session.email = email
         fields.append("email")
     session.save(update_fields=fields)
+    # A proof is about the email it was made for, not this one if it changed.
+    _drop_proof_of_another_email(session)
     # Backfill on linked tickets, each field where it's blank. Not on those a login
     # moved here: their requester is whoever wrote them, not necessarily this user.
     tickets = Ticket.objects.filter(organization=org, widget_session=session).exclude(
@@ -288,6 +363,60 @@ def _update_session(request, org, identity) -> Response:
         tickets.filter(requester_email="").update(requester_email=session.email)
     _link_session_contact(org, session, **_contact_claims(identity))
     return Response(WidgetSessionSerializer(session).data)
+
+
+def _new_ticket_contact_id(session):
+    """The contact a session's new ticket gets, as it is now and locked.
+
+    The session as the request read it may name a contact deleted since, by a
+    reunion: the session has moved on, and so does its ticket. Contact first, the
+    identity lock order, so it can't go before the ticket is written.
+    """
+    contact_id = (
+        WidgetSession.objects.filter(pk=session.pk)
+        .values_list("contact_id", flat=True)
+        .first()
+    )
+    if contact_id is None:
+        return None
+    return (
+        Contact.objects.select_for_update(no_key=True)
+        .filter(pk=contact_id)
+        .values_list("pk", flat=True)
+        .first()
+    )
+
+
+READ_ONLY = (
+    "This conversation can only be read here. Start a new conversation to write to us."
+)
+CLOSED = "This conversation is closed. Start a new conversation to write to us."
+
+
+class ConversationClosed(Exception):
+    """The ticket was resolved or closed too long ago to reopen."""
+
+
+def _widget_user_message(ticket, session, **fields) -> TicketMessage:
+    """Write the session's message on ``ticket``, reopening it as a mail would.
+
+    Within ``INBOUND_EMAIL_REOPEN_DAYS`` of its resolution the ticket reopens; past
+    that it takes nothing more (``ConversationClosed``), as on the conversation page.
+    """
+    with transaction.atomic():
+        locked, _ = lock_ticket_with_contact(ticket.pk)
+        if locked is None:
+            raise MessageRefused
+        outcome = apply_reopen_rule(locked)
+        if outcome == ReopenOutcome.EXPIRED:
+            raise ConversationClosed
+        message = create_user_message(ticket, session=session, **fields)
+    if outcome == ReopenOutcome.REOPENED:
+        try:
+            notify_ticket_update(locked)
+        except Exception:
+            logger.exception("WebSocket notification failed for %s", locked.reference)
+    return message
 
 
 def _ticket_context(context) -> dict:
@@ -370,6 +499,8 @@ def _move_conversation_to_identified_session(org, anonymous, identified) -> None
             email="",
             user_agent="",
             email_verified_at=None,
+            email_verified_for="",
+            email_proof_source="",
             contact=None,
             updated_at=timezone.now(),
         )
@@ -394,27 +525,6 @@ def _delete_contacts_left_empty(contact_ids) -> None:
             logger.exception("Could not delete the emptied contact %s", contact_id)
 
 
-def _create_user_message(ticket, **fields) -> TicketMessage:
-    """Create a widget user's message on the session its ticket is on now.
-
-    A login may have moved the ticket since the request found it through the anonymous
-    session. Under this lock, either the login is over and the message follows the
-    ticket, or it's still to come and it will move the committed message.
-    """
-    with transaction.atomic():
-        session_id = (
-            Ticket.objects.select_for_update(no_key=True)
-            .values_list("widget_session_id", flat=True)
-            .get(pk=ticket.pk)
-        )
-        return TicketMessage.objects.create(
-            ticket=ticket,
-            widget_session_id=session_id,
-            sender_type=TicketMessage.SenderType.USER,
-            **fields,
-        )
-
-
 def _create_or_resume_session(request, org, identity) -> Response:
     """POST: create a new session or resume an existing one.
 
@@ -422,8 +532,9 @@ def _create_or_resume_session(request, org, identity) -> Response:
     the widget stored then decides what happens:
 
     - Anonymous, no valid hash: it goes on, whatever the id sent.
-    - Anonymous with a proven email, no valid hash and no valid ``email_hash``: a
-      logout, as on an identified session below. What it proved stays true of what
+    - Anonymous with a signed email, no valid hash and no valid ``email_hash``: a
+      logout, as on an identified session below. An email proven by a code stays,
+      unless the init declares another one. What it proved stays true of what
       it wrote, and the next tickets aren't written under that proof.
     - Anonymous, valid hash: a login. The identified session replaces it, and takes
       its conversations.
@@ -447,9 +558,18 @@ def _create_or_resume_session(request, org, identity) -> Response:
             and user_hash
             and org.verify_user_hash(external_user_id, user_hash)
         )
-        lost_proof = bool(stored.email_verified_at) and not org.verify_email_hash(
-            email or stored.email, claims["email_hash"]
-        )
+        # A code proof stays, as a page that never signs couldn't sign it again, but
+        # not through an init declaring another email: someone else on that browser.
+        if stored.email_proof_source == WidgetSession.ProofSource.CODE:
+            lost_proof = bool(
+                stored.email_verified_at
+                and email
+                and normalized_email(email) != normalized_email(stored.email)
+            )
+        else:
+            lost_proof = bool(stored.email_verified_at) and not org.verify_email_hash(
+                email or stored.email, claims["email_hash"]
+            )
         if not is_login and not lost_proof:
             _record_session_resume(org, stored, name, email, claims["email_hash"])
             _link_session_contact(org, stored, **claims)
@@ -553,7 +673,18 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Not on the others: an annotation would change what ``stats`` groups by.
         if self.action == "list":
             return ticket_list_rows(tickets)
-        return tickets.select_related("contact__company", "widget_session")
+        tickets = tickets.select_related("contact__company", "widget_session")
+        if self.action in ("retrieve", "update", "partial_update"):
+            # sender_name reads the author, the session or the ticket's contact.
+            tickets = tickets.prefetch_related(
+                models.Prefetch(
+                    "messages",
+                    queryset=TicketMessage.objects.select_related(
+                        "author", "widget_session"
+                    ).prefetch_related("attachments"),
+                )
+            )
+        return tickets
 
     def perform_create(self, serializer) -> None:
         """Set organization, reference and source on creation."""
@@ -1119,32 +1250,32 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Create or retrieve ticket
         if ticket_id:
             try:
-                ticket = Ticket.objects.get(
-                    id=ticket_id,
-                    organization=org,
-                    widget_session=session,
-                )
+                ticket = session_tickets(session).get(id=ticket_id)
             except LOOKUP_ERRORS:
                 return Response(
                     {"error": "Ticket not found."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            if not writable_from(session, ticket):
+                return Response({"error": READ_ONLY}, status=status.HTTP_403_FORBIDDEN)
         else:
             # First message — create ticket
-            title = body[:100] if body else f"[{body_type.capitalize()}]"
-            ticket = Ticket.objects.create(
-                organization=org,
-                reference=org.next_ticket_reference(),
-                title=title,
-                description=body,
-                source=Ticket.Source.WIDGET,
-                widget_session=session,
-                contact_id=session.contact_id,
-                requester_name=session.name,
-                requester_email=session.email,
-                external_user_id=session.external_user_id,
-                **_ticket_context(context_data),
-            )
+            title = _ticket_title(body, body_type)
+            with transaction.atomic():
+                contact_id = _new_ticket_contact_id(session)
+                ticket = Ticket.objects.create(
+                    organization=org,
+                    reference=org.next_ticket_reference(),
+                    title=title,
+                    description=body,
+                    source=Ticket.Source.WIDGET,
+                    widget_session=session,
+                    contact_id=contact_id,
+                    requester_name=session.name,
+                    requester_email=session.email,
+                    external_user_id=session.external_user_id,
+                    **_ticket_context(context_data),
+                )
             try:
                 notify_new_ticket(ticket)
             except Exception:
@@ -1154,7 +1285,17 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = _create_user_message(ticket, body=body, body_type=body_type)
+        try:
+            message = _widget_user_message(
+                ticket, session, body=body, body_type=body_type
+            )
+        except MessageRefused:
+            return Response(
+                {"error": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except ConversationClosed:
+            return Response({"error": CLOSED}, status=status.HTTP_409_CONFLICT)
 
         try:
             notify_new_message(message)
@@ -1199,6 +1340,14 @@ class TicketViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Checked before anything is written: a refused file opens or reopens nothing.
+        try:
+            TicketAttachmentSerializer(context={"organization": org}).validate_file(
+                uploaded_file
+            )
+        except ValidationError as exc:
+            raise ValidationError({"file": exc.detail}) from exc
+
         ticket_id = request.data.get("ticket_id")
         body_type = request.data.get("body_type", "image")
         body = request.data.get("body", "")
@@ -1206,30 +1355,30 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Create or retrieve ticket
         if ticket_id:
             try:
-                ticket = Ticket.objects.get(
-                    id=ticket_id,
-                    organization=org,
-                    widget_session=session,
-                )
+                ticket = session_tickets(session).get(id=ticket_id)
             except LOOKUP_ERRORS:
                 return Response(
                     {"error": "Ticket not found."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            if not writable_from(session, ticket):
+                return Response({"error": READ_ONLY}, status=status.HTTP_403_FORBIDDEN)
         else:
-            title = body[:100] if body else f"[{body_type.capitalize()}]"
-            ticket = Ticket.objects.create(
-                organization=org,
-                reference=org.next_ticket_reference(),
-                title=title,
-                description=body,
-                source=Ticket.Source.WIDGET,
-                widget_session=session,
-                contact_id=session.contact_id,
-                requester_name=session.name,
-                requester_email=session.email,
-                external_user_id=session.external_user_id,
-            )
+            title = _ticket_title(body, body_type)
+            with transaction.atomic():
+                contact_id = _new_ticket_contact_id(session)
+                ticket = Ticket.objects.create(
+                    organization=org,
+                    reference=org.next_ticket_reference(),
+                    title=title,
+                    description=body,
+                    source=Ticket.Source.WIDGET,
+                    widget_session=session,
+                    contact_id=contact_id,
+                    requester_name=session.name,
+                    requester_email=session.email,
+                    external_user_id=session.external_user_id,
+                )
             try:
                 notify_new_ticket(ticket)
             except Exception:
@@ -1239,7 +1388,17 @@ class TicketViewSet(viewsets.ModelViewSet):
             send_ticket_created_email.delay(str(ticket.id))
 
         # Create message
-        message = _create_user_message(ticket, body=body, body_type=body_type)
+        try:
+            message = _widget_user_message(
+                ticket, session, body=body, body_type=body_type
+            )
+        except MessageRefused:
+            return Response(
+                {"error": "Ticket not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except ConversationClosed:
+            return Response({"error": CLOSED}, status=status.HTTP_409_CONFLICT)
 
         # Validate and save attachment
         att_serializer = TicketAttachmentSerializer(
@@ -1314,11 +1473,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            ticket = Ticket.objects.get(
-                id=ticket_id,
-                organization=org,
-                widget_session=session,
-            )
+            ticket = session_tickets(session).get(id=ticket_id)
         except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
@@ -1332,12 +1487,19 @@ class TicketViewSet(viewsets.ModelViewSet):
             .order_by("created_at")
         )
 
-        serializer = WidgetMessageSerializer(messages, many=True)
+        serializer = WidgetMessageSerializer(
+            messages, many=True, context={"session": session}
+        )
         return Response(
             {
                 "ticket_id": str(ticket.id),
                 "reference": ticket.reference,
                 "status": ticket.status,
+                # Seen through the contact's history, but opened by a session that
+                # isn't entitled: writing there would reach that session.
+                "read_only": not writable_from(session, ticket),
+                # Closed for too long to reopen: a message would be refused.
+                "can_reply": not reopen_expired(ticket),
                 "messages": serializer.data,
             }
         )
@@ -1357,15 +1519,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         if err:
             return err
 
-        # Find tickets by session, or by external_user_id for cross-session history
-        q = models.Q(widget_session=session)
-        if session.external_user_id:
-            q |= models.Q(
-                external_user_id=session.external_user_id,
-                organization=org,
-            )
-
-        tickets = Ticket.objects.filter(q).order_by("-updated_at")[:30]
+        tickets = session_tickets(session).order_by("-updated_at")[:30]
         serializer = WidgetConversationListSerializer(tickets, many=True)
         return Response(serializer.data)
 
@@ -1396,16 +1550,16 @@ class TicketViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            ticket = Ticket.objects.get(
-                id=ticket_id,
-                organization=org,
-                widget_session=session,
-            )
+            ticket = session_tickets(session).get(id=ticket_id)
         except LOOKUP_ERRORS:
             return Response(
                 {"error": "Ticket not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        # Their replies, read by whoever opened it: not for a reader of the history.
+        if not writable_from(session, ticket):
+            return Response({"error": READ_ONLY}, status=status.HTTP_403_FORBIDDEN)
 
         ticket.widget_last_read_at = timezone.now()
         ticket.save(update_fields=["widget_last_read_at"])
@@ -1442,6 +1596,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 id=message_id,
                 widget_session=session,
                 ticket__organization=org,
+                ticket__in=session_tickets(session),
             )
         except LOOKUP_ERRORS:
             return Response(
@@ -1458,13 +1613,14 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Keep references before deleting
         ticket = message.ticket
         deleted_message_id = str(message.id)
+        message_type = message.message_type
 
         # Delete associated attachments (files on storage) and the message
         message.attachments.all().delete()
         message.delete()
 
         try:
-            notify_message_deleted(ticket, deleted_message_id)
+            notify_message_deleted(ticket, deleted_message_id, message_type)
         except Exception:
             logger.exception(
                 "WebSocket notification failed for deleted message %s",
@@ -1472,6 +1628,81 @@ class TicketViewSet(viewsets.ModelViewSet):
             )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[AllowAny],
+        throttle_classes=WIDGET_EMAIL_CODE_THROTTLES,
+        url_path="widget_email_code",
+    )
+    def widget_email_code(self, request):
+        """Ask for a code proving the session's email.
+
+        Always the same answer, in the same time, whatever is behind the address: the
+        email is only declared, and anyone could type somebody else's to learn
+        whether it's a customer (Decision A). The task decides whether a code goes:
+        only when the contact holding the address has conversations this session
+        can't see yet, and a proof would open them.
+        """
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+        email = normalized_email(session.email)
+        WidgetEmailCodeEmailThrottle.check_address(request, self, email)
+        send_widget_email_code.delay(str(session.pk), email)
+        return Response(
+            {"detail": "If there is anything to see, a code is on its way."},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[AllowAny],
+        throttle_classes=WIDGET_EMAIL_VERIFY_THROTTLES,
+        url_path="widget_email_verify",
+    )
+    def widget_email_verify(self, request):
+        """Prove the session's email with the code mailed to it, for this session.
+
+        A wrong, expired or malformed code, one never sent, one sent to another
+        session or organization, and a session already proven are the same 400.
+        ``verified`` is true only if the contact ended up holding the address, and
+        the session still has it: an identified session's contact holding another
+        email, or an email changed meanwhile, proves nothing.
+        """
+        org, err = _get_widget_org(request)
+        if err:
+            return err
+        session, err = _get_widget_session(request, org)
+        if err:
+            return err
+        email = normalized_email(session.email)
+        WidgetEmailVerifyEmailThrottle.check_address(request, self, email)
+        code = request.data.get("code") if hasattr(request.data, "get") else None
+        if (
+            not email
+            or has_proof(session)
+            or not isinstance(code, str)
+            or OTPCode.redeem(
+                email,
+                code.strip(),
+                purpose=OTPCode.Purpose.WIDGET_EMAIL,
+                organization=org,
+                widget_session=session,
+            )
+            is None
+        ):
+            return Response(
+                {"error": "Invalid or expired code."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        verified = _link_session_contact(org, session, code_proof=True)
+        return Response({"verified": verified})
 
 
 class TicketMessageViewSet(viewsets.ModelViewSet):
@@ -1484,12 +1715,39 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         """Filter messages by the active organization's tickets."""
         org = get_active_org(self.request)
         if org:
-            return TicketMessage.objects.filter(ticket__organization=org)
+            # sender_name reads the author, the session or the ticket's contact.
+            return (
+                TicketMessage.objects.filter(ticket__organization=org)
+                .select_related("ticket__contact", "author", "widget_session")
+                .prefetch_related("attachments")
+            )
         return TicketMessage.objects.none()
 
     def perform_create(self, serializer) -> None:
-        """Set author on creation and send notifications."""
-        message = serializer.save(author=self.request.user)
+        """Set author on creation, take the files named, and send notifications.
+
+        The files are linked before anything announces or mails the message, so the
+        widget, the conversation page and the reply mail all have them.
+        """
+        files = serializer.validated_data.pop("attachment_ids", [])
+        with transaction.atomic():
+            message = serializer.save(
+                author=self.request.user,
+                channel=TicketMessage.Channel.AGENT,
+                sender_type=TicketMessage.SenderType.AGENT,
+            )
+            if files:
+                linked = TicketAttachment.objects.filter(
+                    pk__in=[file.pk for file in files],
+                    ticket_id=message.ticket_id,
+                    uploaded_by=self.request.user,
+                    message__isnull=True,
+                ).update(message=message, awaiting_message=False)
+                if linked != len({file.pk for file in files}):
+                    # Taken by another message meanwhile.
+                    raise ValidationError(
+                        {"attachment_ids": "These files are no longer free."}
+                    )
 
         # WebSocket notification
         try:
@@ -1497,16 +1755,17 @@ class TicketMessageViewSet(viewsets.ModelViewSet):
         except Exception:
             logger.exception("WebSocket notification failed for message %s", message.id)
 
-        # Email notification (async via Celery)
-        send_ticket_reply_email.delay(str(message.id))
+        # Email to the requester: now, or once left unread in the widget.
+        queue_reply_email(message)
 
     def perform_destroy(self, instance) -> None:
         """Delete message and send WebSocket notification."""
         ticket = instance.ticket
         message_id = str(instance.id)
+        message_type = instance.message_type
         instance.delete()
         try:
-            notify_message_deleted(ticket, message_id)
+            notify_message_deleted(ticket, message_id, message_type)
         except Exception:
             logger.exception(
                 "WebSocket notification failed for deleted message %s", message_id
@@ -1527,8 +1786,14 @@ class TicketAttachmentViewSet(viewsets.ModelViewSet):
         return TicketAttachment.objects.none()
 
     def perform_create(self, serializer) -> None:
-        """Set uploaded_by on creation."""
-        serializer.save(uploaded_by=self.request.user)
+        """Set uploaded_by on creation.
+
+        A file on no message waits for the reply that names it, a day at most.
+        """
+        serializer.save(
+            uploaded_by=self.request.user,
+            awaiting_message=serializer.validated_data.get("message") is None,
+        )
 
 
 class TagViewSet(viewsets.ModelViewSet):

@@ -79,6 +79,17 @@ def is_public_email_domain(domain: str) -> bool:
     return domain.lower() in PUBLIC_EMAIL_DOMAINS
 
 
+def is_inbound_email_domain(domain: str) -> bool:
+    """Whether the domain is `INBOUND_EMAIL_DOMAIN` or one of its subdomains.
+
+    The instance's own: its mailboxes' addresses live there and its operator
+    holds the DNS of every name under it. No organization may claim one.
+    """
+    inbound = (settings.INBOUND_EMAIL_DOMAIN or "").lower()
+    domain = domain.lower().rstrip(".")
+    return bool(inbound) and (domain == inbound or domain.endswith(f".{inbound}"))
+
+
 def is_end_user_account(role: str | None, is_superuser: bool | None) -> bool:
     """Tell if an account counts as an end user, from those two of its columns.
 
@@ -518,11 +529,35 @@ class OTPCode(models.Model):
     A new code is generated for each login attempt. Codes expire after
     OTP_EXPIRY_SECONDS (default 10 minutes), can only be used once, and stop
     working after OTP_MAX_ATTEMPTS submissions.
+
+    A code only works for its purpose, and asking for one only cancels the pending
+    codes of that purpose: a widget visitor naming someone's address can't spend
+    the attempts of their login code, nor cancel it.
     """
+
+    class Purpose(models.TextChoices):
+        LOGIN = "login", "Login"
+        WIDGET_EMAIL = "widget_email", "Widget email proof"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(db_index=True)
     code = models.CharField(max_length=8)
+    purpose = models.CharField(
+        max_length=20, choices=Purpose.choices, default=Purpose.LOGIN
+    )
+    # A widget code is only good in the organization and the session that asked for
+    # it: another organization's page could otherwise relay a code it got mailed. A
+    # login code has neither.
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, null=True, blank=True, related_name="+"
+    )
+    widget_session = models.ForeignKey(
+        "tickets.WidgetSession",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     used_at = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
@@ -537,7 +572,15 @@ class OTPCode(models.Model):
         return f"OTP for {self.email} ({self.code})"
 
     @classmethod
-    def redeem(cls, email: str, code: str) -> "OTPCode | None":
+    def redeem(
+        cls,
+        email: str,
+        code: str,
+        purpose: str = Purpose.LOGIN,
+        *,
+        organization=None,
+        widget_session=None,
+    ) -> "OTPCode | None":
         """Spend one attempt on the email's active code; consume it if it matches.
 
         Returns the code on success. Returns None for a wrong code, and for an
@@ -552,6 +595,9 @@ class OTPCode(models.Model):
         otp = (
             cls.objects.filter(
                 email=email,
+                purpose=purpose,
+                organization=organization,
+                widget_session=widget_session,
                 used_at__isnull=True,
                 created_at__gte=now - timedelta(seconds=expiry),
             )
@@ -573,30 +619,44 @@ class OTPCode(models.Model):
         return None
 
     @classmethod
-    def generate(cls, email: str) -> "OTPCode":
+    def generate(
+        cls,
+        email: str,
+        purpose: str = Purpose.LOGIN,
+        *,
+        organization=None,
+        widget_session=None,
+    ) -> "OTPCode":
         """Generate a new OTP code for the given email.
 
-        Invalidates any existing unused codes for this email.
+        Invalidates any existing unused codes for this email, purpose, organization
+        and widget session: a login code has neither, a widget code has both.
         """
+        scope = {
+            "email": email,
+            "purpose": purpose,
+            "organization": organization,
+            "widget_session": widget_session,
+        }
         # Invalidate previous unused codes
-        cls.objects.filter(email=email, used_at__isnull=True).update(
-            used_at=timezone.now()
-        )
+        cls.objects.filter(**scope, used_at__isnull=True).update(used_at=timezone.now())
 
         length = getattr(settings, "OTP_LENGTH", 6)
         code = "".join(secrets.choice("0123456789") for _ in range(length))
-        return cls.objects.create(email=email, code=code)
+        return cls.objects.create(**scope, code=code)
 
 
 class OrganizationDomain(TimestampedModel):
-    """A domain claimed by an organization for branding and/or email routing.
+    """A domain claimed by an organization for branding, email routing or sending.
 
-    Two independent purposes:
+    Three independent purposes:
       - is_branding:      shown publicly (replaces the legacy `domain` field).
       - is_email_routing: drives the signup auto-join flow (replaces the
                           legacy `email_domain` field).
+      - is_sending:       mailboxes' public addresses on it may become the
+                          From of outgoing mail (see email_channel.sending).
 
-    A row may serve one or both. At least one must be set (DB-checked).
+    A row may serve any of them. At least one must be set (DB-checked).
 
     Verification:
       - admin_email: an admin in the org has a verified email on this domain.
@@ -612,9 +672,20 @@ class OrganizationDomain(TimestampedModel):
     globally (partial unique index). When org B's DNS challenge succeeds
     on a domain org A holds, A flips to `failed` and B becomes `verified`.
     Once verified, a row stays verified forever unless transferred.
+
+    Sending: `is_sending` is the admin's intent, `sending_status` where the
+    sending provider stands ("" while not registered with it). Mail goes out
+    from the domain only while both the ownership and the sending status are
+    verified.
     """
 
     class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        VERIFIED = "verified", "Verified"
+        FAILED = "failed", "Failed"
+
+    class SendingStatus(models.TextChoices):
+        NONE = "", "Not set up"
         PENDING = "pending", "Pending"
         VERIFIED = "verified", "Verified"
         FAILED = "failed", "Failed"
@@ -651,6 +722,40 @@ class OrganizationDomain(TimestampedModel):
     verified_at = models.DateTimeField(null=True, blank=True)
     last_check_at = models.DateTimeField(null=True, blank=True)
 
+    is_sending = models.BooleanField(default=False)
+    sending_status = models.CharField(
+        max_length=20,
+        choices=SendingStatus.choices,
+        default=SendingStatus.NONE,
+        blank=True,
+        db_index=True,
+    )
+    sending_provider_ref = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="The domain's id at the sending provider, kept until removed there.",
+    )
+    sending_provider = models.CharField(
+        max_length=32,
+        blank=True,
+        help_text=(
+            "The provider the domain was registered with. Under another one, "
+            "the domain falls back and must be set up again."
+        ),
+    )
+    sending_dns_records = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Records to publish for sending: [{type, name, value}].",
+    )
+    sending_requested_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Start of the current pending cycle (it fails after 72 h).",
+    )
+    sending_last_checked_at = models.DateTimeField(null=True, blank=True)
+    sending_last_error = models.CharField(max_length=500, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
         constraints = [
@@ -664,7 +769,9 @@ class OrganizationDomain(TimestampedModel):
                 name="unique_verified_domain_globally",
             ),
             models.CheckConstraint(
-                condition=models.Q(is_branding=True) | models.Q(is_email_routing=True),
+                condition=models.Q(is_branding=True)
+                | models.Q(is_email_routing=True)
+                | models.Q(is_sending=True),
                 name="domain_has_at_least_one_purpose",
             ),
         ]
@@ -678,6 +785,8 @@ class OrganizationDomain(TimestampedModel):
             purposes.append("routing")
         if self.is_branding:
             purposes.append("branding")
+        if self.is_sending:
+            purposes.append("sending")
         return f"{self.domain} [{','.join(purposes)}] ({self.status})"
 
     @staticmethod

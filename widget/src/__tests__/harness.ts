@@ -236,9 +236,17 @@ export async function sendText(text: string): Promise<void> {
 export const panelText = () =>
   (document.querySelector(".sd-panel-content") as HTMLElement).textContent ?? "";
 
-export function openHistoryTab(): void {
+function openTab(label: string): void {
   const tabs = Array.from(document.querySelectorAll<HTMLElement>(".sd-tab"));
-  tabs.find((tab) => tab.textContent?.includes("History"))?.click();
+  tabs.find((tab) => tab.textContent?.includes(label))?.click();
+}
+
+export function openHistoryTab(): void {
+  openTab("History");
+}
+
+export function openChatTab(): void {
+  openTab("Chat");
 }
 
 /** A conversation as `widget_history` returns it. */

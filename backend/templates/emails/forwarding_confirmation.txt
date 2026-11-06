@@ -1,0 +1,14 @@
+{% extends "emails/base.txt" %}
+{% block content %}{% autoescape off %}A Gmail forwarding confirmation reached {{ inbound_address }}, the inbound address of your {{ mailbox_name }} mailbox.
+
+If you set up forwarding from Gmail to this address, enter this code in Gmail's forwarding settings:{% if code %}
+
+  {{ code }}{% endif %}{% if url %}
+
+Or open this Google address: {{ url }}{% endif %}
+
+If nobody in {{ org_name }} asked Gmail to forward mail here, ignore this email.
+
+Settings: {{ settings_url }}
+
+-- The Showdesk team{% endautoescape %}{% endblock %}

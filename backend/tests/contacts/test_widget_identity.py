@@ -982,6 +982,7 @@ class TestEmailOnResume:
             organization=org,
             email="old@x.io",
             email_verified_at=timezone.now(),
+            email_verified_for="old@x.io",
             **kwargs,
         )
 

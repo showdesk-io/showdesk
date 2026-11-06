@@ -11,16 +11,21 @@ Email rules:
   An identified session's unproven email goes to ``declared_email`` on its own
   contact, where the latest value wins.
 - A proven email (``email_verified=True``) fills the blank ``email`` of the
-  session's contact unless another contact owns it, or attaches the session to
-  an email-only contact when the external id is new. It is never moved between
-  contacts, and it only counts when it is the email the contact ends up with.
+  session's contact unless an identified or anonymized contact owns it, or attaches
+  the session to an email-only contact when the external id is new. It only counts
+  when it is the email the contact ends up with.
 - Anonymous sessions and inbound mail still use email-only contacts, first come,
   unverified: that grants no access, and a proof later attaches to the contact.
 - An anonymous session's unproven email writes nothing on a contact that already
   exists: no seen dates, no ``updated_at``, no company. It only links the session.
   An inbound mail writes one thing at most: a missing company, from the domain of
   the email the contact already holds (see ``resolve_contact_for_email``).
-- Two contacts are never merged.
+- Two contacts are never merged, but for one case: an identified contact with no
+  email proving the address of an email-only one takes its tickets, sessions, notes
+  and blanks, then its email, and the email-only row is deleted
+  (``_absorb_email_only_contact``). Nothing moved becomes verified.
+- A conversation link mailed to the address a contact holds proves it
+  (``mark_email_proven``).
 
 Company rules, without a valid ``company_hash``: an existing company is never
 modified, only linked, and a contact that already has a company is never moved.
@@ -44,6 +49,7 @@ somebody else's identifier.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from django.core.exceptions import ValidationError
@@ -58,9 +64,16 @@ from apps.organizations.models import (
     is_end_user_account,
     is_public_email_domain,
 )
+from apps.tickets.models import Ticket, WidgetSession
 
 from .attributes import clean_attributes, is_storable, merged_attributes
-from .models import Company, CompanyAttributeDef, Contact, ContactAttributeDef
+from .models import (
+    Company,
+    CompanyAttributeDef,
+    Contact,
+    ContactAttributeDef,
+    ContactNote,
+)
 
 _EMAIL_MAX = Contact._meta.get_field("email").max_length
 _NAME_MAX = Contact._meta.get_field("name").max_length
@@ -218,6 +231,18 @@ def resolve_contact_for_email(
     return contact
 
 
+def is_staff_address(organization_id, email: str) -> bool:
+    """Tell if ``email`` is the address of an agent, admin or superuser of the organization.
+
+    Such an address never becomes a contact, whatever channel it comes through.
+    """
+    return (
+        User.objects.filter(organization_id=organization_id, email__iexact=email)
+        .exclude(role=User.Role.END_USER, is_superuser=False)
+        .exists()
+    )
+
+
 def resolve_contact_for_ticket(ticket) -> Contact | None:
     """Find or create the contact of a ticket filed through the API.
 
@@ -239,12 +264,7 @@ def resolve_contact_for_ticket(ticket) -> Contact | None:
         account = None
     account_email = _clean_email(account.email) if account else ""
     email = email or account_email
-    if (
-        not email
-        or User.objects.filter(organization_id=organization_id, email__iexact=email)
-        .exclude(role=User.Role.END_USER, is_superuser=False)
-        .exists()
-    ):
+    if not email or is_staff_address(organization_id, email):
         return None
     name = _clean_text(ticket.requester_name)
     if not name and email == account_email:
@@ -325,6 +345,22 @@ def _resolve_company(
     )
 
 
+def session_external_id(session) -> str:
+    """The external id of an identified session, or "" if we wouldn't use it.
+
+    Not something we'd store as is, so it can't be looked up either, or a hash from
+    before those prefixes were reserved: it may sign something else.
+    """
+    external_id = _clean_external_id(session.external_user_id, _EXTERNAL_ID_MAX)
+    if (
+        not external_id
+        or external_id != session.external_user_id
+        or external_id.startswith(RESERVED_EXTERNAL_ID_PREFIXES)
+    ):
+        return ""
+    return external_id
+
+
 def _find_identified(
     org, external_id: str, proven_email: str, changed: set[str]
 ) -> Contact | None:
@@ -354,13 +390,79 @@ def _record_identified_email(
     if not email_verified:
         # The email it already holds is no separate claim for agents to review.
         _set(contact, changed, declared_email="" if email == contact.email else email)
-    elif not contact.email and not _email_taken(org, email):
-        # A verification date left by a previous email is about that email.
-        _set(contact, changed, email=email, email_verified_at=None)
+    elif not contact.email:
+        other = _email_only_holder(org, email)
+        if other is not None:
+            _absorb_email_only_contact(contact, other, changed)
+        elif not _email_taken(org, email):
+            # A verification date left by a previous email is about that email.
+            _set(contact, changed, email=email, email_verified_at=None)
+
+
+def _email_only_holder(org, email: str) -> Contact | None:
+    """Return the email-only, non-anonymized contact holding ``email``, locked.
+
+    Locked to be deleted: a plain ``FOR UPDATE``, so nothing can link to it meanwhile.
+    The lock order is the identified contact, then this one. Nothing locks them the
+    other way around: an email-only contact never takes another one's history.
+    """
+    return (
+        Contact.objects.select_for_update()
+        .filter(organization=org, email=email, external_id="", is_anonymized=False)
+        .first()
+    )
+
+
+_FILLED_FIELDS = ("name", "phone", "avatar_url", "job_title", "locale", "timezone")
+
+
+def _absorb_email_only_contact(
+    contact: Contact, other: Contact, changed: set[str]
+) -> None:
+    """Give a contact that proved an email what an email-only contact holds under it.
+
+    Only on a proof, and only from a contact with no identity of its own (Contacts
+    design §8). Everything moved was written under a merely declared address, so no
+    sender becomes verified: the sessions that wrote those tickets still have to prove
+    themselves. The contact's own values win, the other's fill its blanks, and an
+    unsubscription is kept. Sessions before tickets, the identity lock order.
+    """
+    WidgetSession.objects.filter(contact=other).update(contact=contact)
+    Ticket.objects.filter(contact=other).update(contact=contact)
+    ContactNote.objects.filter(contact=other).update(contact=contact)
+    for field in _FILLED_FIELDS:
+        if getattr(other, field) and not getattr(contact, field):
+            _set(contact, changed, **{field: getattr(other, field)})
+    if other.company_id and not contact.company_id:
+        _set(contact, changed, company=other.company)
+    theirs = other.attributes if isinstance(other.attributes, dict) else {}
+    if theirs and isinstance(contact.attributes, dict):
+        _set(contact, changed, attributes={**theirs, **contact.attributes})
+    if other.is_unsubscribed:
+        _set(contact, changed, is_unsubscribed=True)
+    # The earliest first visit, the latest last visit and contact.
+    for field, pick in (
+        ("first_seen_at", min),
+        ("last_seen_at", max),
+        ("last_contacted_at", max),
+    ):
+        dates = [d for d in (getattr(contact, field), getattr(other, field)) if d]
+        if dates:
+            _set(contact, changed, **{field: pick(dates)})
+    email = other.email
+    # Frees the email in this transaction, before ours takes it.
+    other.delete()
+    # A verification date left by a previous email is about that email.
+    _set(contact, changed, email=email, email_verified_at=None)
 
 
 def _resolve_session_once(
-    session, email_verified: bool, traits: Any, company: Any, company_verified: bool
+    session,
+    email_verified: bool,
+    traits: Any,
+    company: Any,
+    company_verified: bool,
+    proof_source: str,
 ) -> Contact | None:
     org = session.organization
     email = _clean_email(session.email)
@@ -370,15 +472,9 @@ def _resolve_session_once(
     changed: set[str] = set()
 
     if identified:
-        external_id = _clean_external_id(session.external_user_id, _EXTERNAL_ID_MAX)
-        if (
-            not external_id
-            or external_id != session.external_user_id
-            or external_id.startswith(RESERVED_EXTERNAL_ID_PREFIXES)
-        ):
-            # Not something we'd store as is, so it can't be looked up either, or a
-            # hash from before those prefixes were reserved: it may sign something
-            # else. Don't fall back on the email: this session claimed an identity.
+        external_id = session_external_id(session)
+        if not external_id:
+            # Don't fall back on the email: this session claimed an identity.
             contact = None
         else:
             proven_email = email if email_verified else ""
@@ -445,15 +541,52 @@ def _resolve_session_once(
     if session.contact_id != contact.pk:
         session.contact = contact
         session_changed.add("contact")
-    if email_proven and session.email_verified_at is None:
-        session.email_verified_at = timezone.now()
-        session_changed.add("email_verified_at")
     _save_changes(session, session_changed)
+    signed = WidgetSession.ProofSource.SIGNED
+    if email_proven and (
+        session.email_verified_for != email
+        or (proof_source == signed and session.email_proof_source != signed)
+    ):
+        _record_session_proof(session, email, proof_source)
     return contact
 
 
+_PROOF_FIELDS = ("email_verified_at", "email_verified_for", "email_proof_source")
+
+
+def _record_session_proof(session, email: str, source: str) -> None:
+    """Mark ``session`` proven for ``email`` by ``source``, if it still has that email.
+
+    Conditional writes, on the row as it is now: a request changing the session's
+    email meanwhile clears the proof, and this must not land on the new, unproven
+    address. A session already proven for it keeps its date, and only a signature
+    relabels it (a host app signing it decides what an unsigned page means), never a
+    code that was checked before that proof landed.
+    """
+    now = timezone.now()
+    rows = WidgetSession.objects.filter(pk=session.pk, email__iexact=email)
+    written = rows.exclude(email_verified_for=email).update(
+        email_verified_at=now,
+        email_verified_for=email,
+        email_proof_source=source,
+        updated_at=now,
+    )
+    signed = WidgetSession.ProofSource.SIGNED
+    if not written and source == signed:
+        rows.filter(email_verified_for=email).exclude(email_proof_source=signed).update(
+            email_proof_source=signed, updated_at=now
+        )
+    # What the row holds now, whichever write it took, or another request's.
+    session.refresh_from_db(fields=list(_PROOF_FIELDS))
+
+
 def _resolve_session_atomically(
-    session, email_verified: bool, traits: Any, company: Any, company_verified: bool
+    session,
+    email_verified: bool,
+    traits: Any,
+    company: Any,
+    company_verified: bool,
+    proof_source: str,
 ) -> Contact | None:
     """Run one pass. If it fails, forget in memory the writes it rolled back.
 
@@ -462,14 +595,18 @@ def _resolve_session_atomically(
     """
     contact_id = session.contact_id
     email_verified_at = session.email_verified_at
+    email_verified_for = session.email_verified_for
+    email_proof_source = session.email_proof_source
     try:
         with transaction.atomic():
             return _resolve_session_once(
-                session, email_verified, traits, company, company_verified
+                session, email_verified, traits, company, company_verified, proof_source
             )
     except DatabaseError:
         session.contact_id = contact_id
         session.email_verified_at = email_verified_at
+        session.email_verified_for = email_verified_for
+        session.email_proof_source = email_proof_source
         raise
 
 
@@ -480,12 +617,14 @@ def resolve_contact_for_widget_session(
     traits: Any = None,
     company: Any = None,
     company_verified: bool = False,
+    proof_source: str = WidgetSession.ProofSource.SIGNED,
 ) -> Contact | None:
     """Find or create the contact behind a widget session and link them.
 
     ``session.external_user_id`` must only be set by callers after a
     successful HMAC check. ``email_verified`` must only be True when the
-    host app signed the email (``email_hash``) or the user proved ownership.
+    host app signed the email (``email_hash``) or the user proved ownership, which
+    ``proof_source`` records (``WidgetSession.ProofSource``).
     ``company_verified`` must only be True when the host app signed the company's
     id, name and domain (``company_hash``); it has no effect on a session that
     isn't identified.
@@ -499,7 +638,7 @@ def resolve_contact_for_widget_session(
     has to see that commit to leave the value alone. A snapshot taken at the
     start of an enclosing REPEATABLE READ transaction would hide it.
     """
-    args = (session, email_verified, traits, company, company_verified)
+    args = (session, email_verified, traits, company, company_verified, proof_source)
     try:
         return _resolve_session_atomically(*args)
     except IntegrityError:
@@ -543,3 +682,26 @@ def delete_contact_if_left_empty(contact_id) -> bool:
             return False
         contact.delete()
         return True
+
+
+def mark_email_proven(contact_id, proves: Callable[[str], bool]) -> bool:
+    """Mark a contact's email verified if ``proves`` holds of the address it has now.
+
+    ``proves`` tells if a proof (a conversation link's hash) is of an address: an
+    agent may have changed the email since, and a proof of the previous one says
+    nothing of the new one. A contact that was already verified keeps its first
+    date. Under the contact's row lock, so the email and ``is_anonymized`` are
+    current. Return whether the contact is verified on that address.
+    """
+    with transaction.atomic():
+        contact = _locked(Contact, pk=contact_id)
+        if contact is None or contact.is_anonymized or not proves(contact.email):
+            return False
+        changed: set[str] = set()
+        _set(
+            contact,
+            changed,
+            email_verified_at=contact.email_verified_at or timezone.now(),
+        )
+        _save_changes(contact, changed)
+    return True

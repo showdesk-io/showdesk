@@ -1,5 +1,6 @@
 """Serializers for ticket-related models."""
 
+from django.conf import settings
 from django.db.models import Count, Q
 from rest_framework import serializers
 from rest_framework.fields import empty
@@ -16,6 +17,7 @@ from apps.organizations.models import RESERVED_EXTERNAL_ID_PREFIXES, Team, User
 from apps.organizations.serializers import UserSerializer
 
 from .models import (
+    BLOCKED_EXTENSIONS,
     CannedResponse,
     PriorityLevel,
     SavedView,
@@ -25,6 +27,7 @@ from .models import (
     TicketAttachment,
     TicketMessage,
     WidgetSession,
+    normalized_email,
 )
 
 
@@ -116,29 +119,31 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
     # Max 20 MB per file
     MAX_FILE_SIZE = 20 * 1024 * 1024
 
-    # Blocked extensions (executable, dangerous)
-    BLOCKED_EXTENSIONS = frozenset(
-        {
-            ".exe",
-            ".bat",
-            ".cmd",
-            ".com",
-            ".msi",
-            ".scr",
-            ".pif",
-            ".vbs",
-            ".vbe",
-            ".js",
-            ".jse",
-            ".wsf",
-            ".wsh",
-            ".ps1",
-            ".sh",
-            ".csh",
-            ".dll",
-            ".sys",
-        }
-    )
+    def validate(self, attrs):
+        if self.instance is not None:
+            # A file stays on the ticket it was uploaded to, and only goes on a
+            # message of that ticket. Ids of another organization are refused
+            # before, as unknown ones.
+            if "ticket" in attrs and attrs["ticket"].pk != self.instance.ticket_id:
+                raise serializers.ValidationError(
+                    {"ticket": "A file can't be moved to another ticket."}
+                )
+            message = attrs.get("message")
+            if message is not None and message.ticket_id != self.instance.ticket_id:
+                raise serializers.ValidationError(
+                    {"message": "This message belongs to another ticket."}
+                )
+            return attrs
+        message, ticket = attrs.get("message"), attrs.get("ticket")
+        if (
+            message is not None
+            and ticket is not None
+            and message.ticket_id != ticket.pk
+        ):
+            raise serializers.ValidationError(
+                {"message": "This message belongs to another ticket."}
+            )
+        return attrs
 
     class Meta:
         model = TicketAttachment
@@ -166,10 +171,14 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
         import os
 
         _, ext = os.path.splitext(value.name)
-        if ext.lower() in self.BLOCKED_EXTENSIONS:
+        if ext.lower() in BLOCKED_EXTENSIONS:
             raise serializers.ValidationError(f"File type '{ext}' is not allowed.")
 
         return value
+
+
+# Files an agent's message takes, at most.
+MAX_FILES_PER_MESSAGE = 10
 
 
 class TicketMessageSerializer(serializers.ModelSerializer):
@@ -178,6 +187,15 @@ class TicketMessageSerializer(serializers.ModelSerializer):
     ticket = OrgScopedPrimaryKeyRelatedField(queryset=Ticket.objects.all())
     author_detail = UserSerializer(source="author", read_only=True)
     attachments = TicketAttachmentSerializer(many=True, read_only=True)
+    # Files uploaded to the ticket for this message, linked to it on creation: before
+    # it is announced or mailed.
+    attachment_ids = OrgScopedPrimaryKeyRelatedField(
+        queryset=TicketAttachment.objects.filter(message__isnull=True),
+        org_field="ticket__organization",
+        many=True,
+        write_only=True,
+        required=False,
+    )
     sender_name = serializers.CharField(read_only=True)
 
     class Meta:
@@ -192,11 +210,50 @@ class TicketMessageSerializer(serializers.ModelSerializer):
             "sender_type",
             "body_type",
             "sender_name",
+            "channel",
+            "external_sender",
+            "email_delivery_status",
             "attachments",
+            "attachment_ids",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "author", "created_at", "updated_at"]
+        # Staff write as agents: what the requester says comes from the widget,
+        # mail or the conversation page.
+        read_only_fields = [
+            "id",
+            "author",
+            "sender_type",
+            "channel",
+            "external_sender",
+            "email_delivery_status",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate(self, attrs):
+        ticket = attrs.get("ticket") or getattr(self.instance, "ticket", None)
+        files = attrs.get("attachment_ids") or []
+        if len(files) > MAX_FILES_PER_MESSAGE:
+            raise serializers.ValidationError(
+                {"attachment_ids": f"At most {MAX_FILES_PER_MESSAGE} files a message."}
+            )
+        if self.instance is not None and files:
+            raise serializers.ValidationError(
+                {"attachment_ids": "Files are only added to a new message."}
+            )
+        if ticket is not None and any(file.ticket_id != ticket.pk for file in files):
+            raise serializers.ValidationError(
+                {"attachment_ids": "These files belong to another ticket."}
+            )
+        request = self.context.get("request")
+        user_id = getattr(getattr(request, "user", None), "pk", None)
+        if any(user_id is None or file.uploaded_by_id != user_id for file in files):
+            # Not a customer's upload, nor a colleague's pending one.
+            raise serializers.ValidationError(
+                {"attachment_ids": "Only files you uploaded can be attached."}
+            )
+        return attrs
 
 
 # Who a ticket can be assigned to, as in the bulk_update action.
@@ -286,6 +343,7 @@ class TicketSerializer(serializers.ModelSerializer):
             "context_screen_resolution",
             "context_metadata",
             "sla_policy",
+            "mailbox",
             "first_response_at",
             "resolved_at",
             "closed_at",
@@ -298,6 +356,7 @@ class TicketSerializer(serializers.ModelSerializer):
             "id",
             "organization",
             "reference",
+            "mailbox",
             "first_response_at",
             "resolved_at",
             "closed_at",
@@ -672,6 +731,7 @@ class WidgetSessionSerializer(serializers.ModelSerializer):
     """Serializer for widget session creation and display."""
 
     session_id = serializers.UUIDField(source="id", read_only=True)
+    email_proof_offered = serializers.SerializerMethodField()
 
     class Meta:
         model = WidgetSession
@@ -680,8 +740,22 @@ class WidgetSessionSerializer(serializers.ModelSerializer):
             "name",
             "email",
             "external_user_id",
+            "email_proof_offered",
         ]
         read_only_fields = ["session_id"]
+
+    def get_email_proof_offered(self, obj: WidgetSession) -> bool:
+        """Whether the widget offers a code: an email without a proof.
+
+        Whatever exists behind the address, so the answer tells nothing about it.
+        Never on an instance that receives no mail: no conversation came by email.
+        """
+        if not settings.INBOUND_EMAIL_DOMAIN:
+            return False
+        email = normalized_email(obj.email)
+        return bool(email) and not (
+            obj.email_verified_at and obj.email_verified_for == email
+        )
 
 
 class WidgetMessageCreateSerializer(serializers.Serializer):
@@ -710,6 +784,7 @@ class WidgetMessageSerializer(serializers.ModelSerializer):
 
     attachments = TicketAttachmentSerializer(many=True, read_only=True)
     sender_name = serializers.CharField(read_only=True)
+    deletable = serializers.SerializerMethodField()
 
     class Meta:
         model = TicketMessage
@@ -722,8 +797,21 @@ class WidgetMessageSerializer(serializers.ModelSerializer):
             "sender_name",
             "attachments",
             "created_at",
+            "deletable",
         ]
         read_only_fields = fields
+
+    def get_deletable(self, obj) -> bool:
+        """Whether the widget's session may delete it: a message it wrote itself.
+
+        Not a mail, nor what another session wrote on a shared ticket.
+        """
+        session = self.context.get("session")
+        return (
+            session is not None
+            and obj.sender_type == TicketMessage.SenderType.USER
+            and obj.widget_session_id == session.pk
+        )
 
 
 class WidgetConversationListSerializer(serializers.ModelSerializer):

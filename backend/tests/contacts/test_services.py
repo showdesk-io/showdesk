@@ -554,7 +554,7 @@ class TestVerifiedEmail:
 
     def test_declared_email_not_held_by_the_contact_stays_declared(self, org):
         """A proof that doesn't stick is no proof: the contact keeps the claim."""
-        ContactFactory(organization=org, email="b@x.io", external_id="")
+        ContactFactory(organization=org, email="b@x.io", external_id="u2")
         contact = ContactFactory(
             organization=org, email="", external_id="u1", declared_email="b@x.io"
         )
@@ -672,9 +672,10 @@ class TestVerifiedEmail:
         assert (_identity(contact), _snapshot(owner)) == before
         assert session.email_verified_at is None
 
-    def test_blank_contact_does_not_take_over_an_owned_email(self, org):
+    def test_blank_contact_does_not_take_over_an_identified_owners_email(self, org):
+        """An email-only owner is reunited instead: see test_reunion.py."""
         contact = ContactFactory(organization=org, email="", external_id="u1")
-        owner = ContactFactory(organization=org, email="b@x.io", external_id="")
+        owner = ContactFactory(organization=org, email="b@x.io", external_id="u2")
         before = (_identity(contact), _snapshot(owner))
         session = _session(org, external_user_id="u1", email="b@x.io")
         assert resolve_contact_for_widget_session(session, email_verified=True) == (
@@ -1282,7 +1283,11 @@ class TestRaces:
         assert _snapshot(rival) == before
 
     def test_external_id_claimed_while_attaching_goes_to_its_owner(self, org):
-        """First pass misses the rival and attaches, the unique constraint refuses."""
+        """First pass misses the rival and attaches, the unique constraint refuses.
+
+        The second pass finds the rival, which then takes the email-only contact's
+        history with its email.
+        """
         rival = ContactFactory(organization=org, email="", external_id="u1")
         email_only = ContactFactory(organization=org, email="e@x.io", external_id="")
         real_locked = services._locked
@@ -1297,14 +1302,13 @@ class TestRaces:
         session = _session(org, external_user_id="u1", email="e@x.io")
         with mock.patch.object(services, "_locked", miss_the_rival_once):
             contact = resolve_contact_for_widget_session(session, email_verified=True)
-        email_only.refresh_from_db()
         contact.refresh_from_db()
         session.refresh_from_db()
         assert missed
         assert contact == rival
-        assert email_only.external_id == ""
-        assert contact.email == ""
-        assert session.email_verified_at is None
+        assert not Contact.objects.filter(pk=email_only.pk).exists()
+        assert contact.email == "e@x.io"
+        assert session.email_verified_at is not None
 
     def test_external_id_created_by_a_rival_is_reused_under_the_lock(self, org):
         """``get_or_create`` finds the rival's row, which still has to be locked."""

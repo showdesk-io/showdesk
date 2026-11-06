@@ -140,3 +140,39 @@ def test_seed_ignores_the_same_reference_in_another_organization():
     assert Ticket.objects.filter(
         organization__slug="acme-corp", reference="SD-0001"
     ).exists()
+
+
+@pytest.mark.django_db
+def test_seeds_a_mailbox_only_when_mail_can_reach_it(settings):
+    from apps.email_channel.models import Mailbox
+
+    settings.INBOUND_EMAIL_DOMAIN = ""
+    _seed()
+    assert not Mailbox.objects.exists()
+
+    settings.INBOUND_EMAIL_DOMAIN = "in.example.com"
+    _seed()
+    _seed()
+
+    mailbox = Mailbox.objects.get()
+    assert mailbox.organization.slug == "acme-corp"
+    assert mailbox.public_address == "support@acme.example.com"
+
+
+@pytest.mark.django_db
+def test_sets_the_demo_mailbox_domain_to_send_without_registering_it(settings):
+    settings.INBOUND_EMAIL_DOMAIN = ""
+    _seed()
+    row = OrganizationDomain.objects.get(domain="acme.example.com")
+    assert not row.is_sending
+
+    settings.INBOUND_EMAIL_DOMAIN = "in.example.com"
+    _seed()
+    _seed()
+
+    row = OrganizationDomain.objects.get(domain="acme.example.com")
+    assert row.organization.slug == "acme-corp"
+    assert row.status == OrganizationDomain.Status.VERIFIED
+    assert row.is_sending
+    assert row.sending_status == ""
+    assert row.sending_provider_ref == ""

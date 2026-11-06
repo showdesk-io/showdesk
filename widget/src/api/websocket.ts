@@ -7,6 +7,7 @@
  */
 
 import type { ChatMessage } from "../types";
+import { mapAttachments } from "./chat-api";
 
 export type MessageHandler = (msg: ChatMessage) => void;
 export type ConnectionHandler = (connected: boolean) => void;
@@ -167,7 +168,7 @@ export class WidgetWebSocket {
             bodyType: data.body_type || "text",
             senderType: data.sender_type || "agent",
             senderName: data.sender_name || "",
-            attachments: [],
+            attachments: mapAttachments(data.attachments),
             createdAt: data.created_at || new Date().toISOString(),
             _status: "sent",
           });

@@ -1,0 +1,34 @@
+From: Ann Customer <ann@example.org>
+To: support@acme.example.com
+Subject: Screenshots
+Date: Mon, 2 Nov 2026 09:00:00 +0000
+Message-ID: <attachments-1@mail.example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed"
+
+--mixed
+Content-Type: text/plain; charset="UTF-8"
+
+Here are the files.
+
+--mixed
+Content-Type: image/png; name="screen.png"
+Content-Disposition: attachment; filename="../../etc/screen.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==
+
+--mixed
+Content-Type: application/octet-stream; name="setup.exe"
+Content-Disposition: attachment; filename="setup.exe"
+Content-Transfer-Encoding: base64
+
+TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAA=
+
+--mixed
+Content-Type: text/plain; name="notes.txt"
+Content-Disposition: attachment; filename="C:\\Users\\ann\\notes.txt"
+
+Printer model: P-100
+
+--mixed--

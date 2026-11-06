@@ -486,14 +486,18 @@ def test_agent_reply_doesnt_fall_back_on_who_logged_in_after_it_was_written(
     assert _reply_recipients(agent, ticket) == []
 
 
-def test_unsubscribing_doesnt_stop_a_reply_whichever_address_it_goes_to(
+def test_unsubscribing_stops_a_reply_except_on_a_ticket_opened_by_email(
     blank_requester_ticket,
 ):
-    """A reply to their own ticket is essential, and nothing enforces it yet anyway."""
+    """The channel they chose: a widget ticket's reply waits in the widget."""
     agent, ticket = blank_requester_ticket
     ticket.contact = ContactFactory(
         organization=ticket.organization, email="held@x.io", is_unsubscribed=True
     )
     ticket.save()
 
+    assert _reply_recipients(agent, ticket) == []
+
+    ticket.source = "email"
+    ticket.save()
     assert _reply_recipients(agent, ticket) == [["held@x.io"]]

@@ -12,9 +12,10 @@ import logging
 from datetime import timedelta
 
 from celery import shared_task
+from django.conf import settings
 from django.utils import timezone
 
-from .models import OrganizationDomain
+from .models import OrganizationDomain, OTPCode
 from .services import perform_dns_check
 
 logger = logging.getLogger(__name__)
@@ -52,3 +53,16 @@ def recheck_dns_pending_domains() -> int:
                 row.domain,
             )
     return promoted
+
+
+@shared_task(name="apps.organizations.tasks.purge_expired_otp_codes")
+def purge_expired_otp_codes() -> int:
+    """Delete the one-time codes past their expiry, whatever their purpose.
+
+    Nothing reads them any more: a code is only redeemed within
+    ``OTP_EXPIRY_SECONDS``, and the request throttles count in the cache. Return how
+    many went.
+    """
+    expiry = timedelta(seconds=getattr(settings, "OTP_EXPIRY_SECONDS", 600))
+    deleted, _ = OTPCode.objects.filter(created_at__lt=timezone.now() - expiry).delete()
+    return deleted

@@ -85,8 +85,11 @@ export function useCreateMessage(ticketId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (data: { body: string; message_type: string }) =>
-      createMessage(ticketId, data),
+    mutationFn: (data: {
+      body: string;
+      message_type: string;
+      attachment_ids?: string[];
+    }) => createMessage(ticketId, data),
     onSuccess: () => {
       invalidateTimelines(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });

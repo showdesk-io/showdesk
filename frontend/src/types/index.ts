@@ -28,18 +28,88 @@ export interface Organization {
   widget_first_seen_at: string | null;
   plan: Plan;
   enabled_features: string[];
+  /** Whether this instance receives mail, i.e. it has an inbound domain. */
+  inbound_email_enabled: boolean;
+  inbound_email_domain: string;
+  /** Whether a sending domain provider is configured: mail can go out from the org's domains. */
+  sending_domains_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Email channel
+// ---------------------------------------------------------------------------
+
+/** A Gmail forwarding confirmation, taken from a mail whose sender can be forged. */
+export interface ForwardingConfirmation {
+  url: string;
+  code: string;
+  detected_at: string;
+}
+
+export interface Mailbox {
+  id: string;
+  name: string;
+  local_part: string;
+  /** Where the organization forwards its support mail. */
+  inbound_address: string;
+  public_address: string;
+  /** Whether replies go out from the public address now, rather than the inbound one. */
+  sends_from_public_address: boolean;
+  /**
+   * When a mail last came in forwarded from the public address, null if never since
+   * it was set. It lets admins turn `reply_to_public_address` on.
+   */
+  forwarding_verified_at: string | null;
+  /**
+   * An admin's choice: customers reply to the public address, while
+   * `sends_from_public_address` and `forwarding_verified_at` hold too.
+   */
+  reply_to_public_address: boolean;
+  default_team: string | null;
+  is_active: boolean;
+  /** Only sent to admins; empty until Gmail sends one. */
+  forwarding_confirmation?: Partial<ForwardingConfirmation>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type InboundEmailStatus = "pending" | "processed" | "ignored" | "rejected" | "failed";
+
+/** A received mail that didn't become a message. */
+export interface InboundLogEntry {
+  id: string;
+  sender: string;
+  subject: string;
+  status: InboundEmailStatus;
+  reason: string;
+  received_at: string;
+  processed_at: string | null;
+}
+
 export type DomainStatus = "pending" | "verified" | "failed";
 export type DomainVerificationMethod = "admin_email" | "dns_txt";
+/** Where the sending provider stands on a domain; "" while it isn't registered. */
+export type SendingStatus = "" | "pending" | "verified" | "failed";
+
+/** A DNS record to publish so mail can be sent from a domain. */
+export interface SendingRecord {
+  type: string;
+  /** Fully qualified. */
+  name: string;
+  value: string;
+  /** A domain has at most one such record: merge into an existing one. */
+  merge?: boolean;
+}
 
 export interface OrganizationDomain {
   id: string;
   domain: string;
   is_branding: boolean;
   is_email_routing: boolean;
+  /** Mail is to be sent from it. Only set at creation; sending is then turned on and off. */
+  is_sending: boolean;
   status: DomainStatus;
   verification_method: DomainVerificationMethod | null;
   verification_token: string;
@@ -47,6 +117,12 @@ export interface OrganizationDomain {
   last_check_at: string | null;
   txt_record_name: string;
   txt_record_value: string;
+  sending_status: SendingStatus;
+  sending_dns_records: SendingRecord[];
+  /** When the current pending cycle started. */
+  sending_requested_at: string | null;
+  sending_last_checked_at: string | null;
+  sending_last_error: string;
   created_at: string;
   updated_at: string;
 }
@@ -203,10 +279,17 @@ export interface TicketMessage {
   sender_type: SenderType;
   body_type: BodyType;
   sender_name: string;
+  channel: MessageChannel;
+  /** The display name and address of a mail's From, when it came by email. */
+  external_sender: string;
+  email_delivery_status: EmailDeliveryStatus;
   attachments: TicketAttachment[];
   created_at: string;
   updated_at: string;
 }
+
+export type MessageChannel = "widget" | "email" | "agent" | "api" | "system";
+export type EmailDeliveryStatus = "" | "sent" | "failed";
 
 export interface ConsoleErrorEntry {
   level: "error" | "warning";
@@ -260,6 +343,7 @@ export interface Ticket {
     [key: string]: unknown;
   };
   sla_policy: string | null;
+  mailbox: string | null;
   first_response_at: string | null;
   resolved_at: string | null;
   closed_at: string | null;

@@ -21,11 +21,17 @@ def _drop_constraint():
         cursor.execute("DROP INDEX unique_widget_session_external_user_per_org")
 
 
-def _session(org, age_days: int = 0, seen_days: int | None = None, **kwargs):
+def _session(
+    org,
+    age_days: int = 0,
+    seen_days: int | None = None,
+    model=WidgetSession,
+    **kwargs,
+):
     """Create a session, last seen ``seen_days`` ago (by default when it was created)."""
-    session = WidgetSession.objects.create(organization=org, **kwargs)
+    session = model.objects.create(organization_id=org.pk, **kwargs)
     now = timezone.now()
-    WidgetSession.objects.filter(pk=session.pk).update(
+    model.objects.filter(pk=session.pk).update(
         created_at=now - timedelta(days=age_days),
         last_seen_at=now - timedelta(days=age_days if seen_days is None else seen_days),
     )
@@ -52,7 +58,9 @@ class TestMergeDuplicateSessions:
             ticket=ticket, widget_session=newest, body="Hi"
         )
         merge_duplicate_sessions(django_apps, None)
-        assert list(WidgetSession.objects.filter(organization=org)) == [oldest]
+        assert list(
+            WidgetSession.objects.filter(organization=org).values_list("pk", flat=True)
+        ) == [oldest.pk]
         ticket.refresh_from_db()
         other_ticket.refresh_from_db()
         message.refresh_from_db()
@@ -186,21 +194,31 @@ def test_anonymous_sessions_and_other_organizations_arent_constrained():
 def test_migration_merges_then_constrains():
     # The merge leaves deferred foreign key checks pending, and Postgres refuses
     # to build an index on a table that has some: only a real migration shows it.
+    before = ("tickets", "0010_ticket_contact_widgetsession_contact_and_more")
     executor = MigrationExecutor(connection)
-    executor.migrate(
-        [("tickets", "0010_ticket_contact_widgetsession_contact_and_more")]
-    )
+    executor.migrate([before])
     org = OrganizationFactory()
-    oldest = _session(org, age_days=2, external_user_id="u1")
-    newest = _session(org, age_days=1, external_user_id="u1")
-    ticket = TicketFactory(organization=org, widget_session=newest, requester=None)
+    # The models of that time: today's have columns the tables don't have yet.
+    historical = executor.loader.project_state(before).apps
+    HistoricalTicket = historical.get_model("tickets", "Ticket")
+    HistoricalSession = historical.get_model("tickets", "WidgetSession")
+    oldest = _session(org, 2, model=HistoricalSession, external_user_id="u1")
+    newest = _session(org, 1, model=HistoricalSession, external_user_id="u1")
+    ticket = HistoricalTicket.objects.create(
+        organization_id=org.pk,
+        reference="SD-0001",
+        title="Before the merge",
+        widget_session_id=newest.pk,
+    )
     try:
         executor = MigrationExecutor(connection)
         executor.migrate([("tickets", MERGE_MIGRATION)])
     finally:
         executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())
-    assert list(WidgetSession.objects.filter(organization=org)) == [oldest]
+    assert list(
+        WidgetSession.objects.filter(organization=org).values_list("pk", flat=True)
+    ) == [oldest.pk]
     assert Ticket.objects.get(pk=ticket.pk).widget_session_id == oldest.pk
     with pytest.raises(IntegrityError), transaction.atomic():
         WidgetSession.objects.create(organization=org, external_user_id="u1")

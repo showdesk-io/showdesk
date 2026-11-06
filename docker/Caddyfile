@@ -25,6 +25,16 @@
 		reverse_proxy backend:8000
 	}
 
+	# Inbound mail webhooks (email channel). The backend refuses a body over
+	# about 2 x INBOUND_EMAIL_MAX_SIZE_MB (25 by default), but only once it is
+	# received: this bounds what is read. Raise it with INBOUND_EMAIL_MAX_SIZE_MB.
+	handle /anymail/* {
+		request_body {
+			max_size 50MB
+		}
+		reverse_proxy backend:8000
+	}
+
 	# -----------------------------------------------------------------------
 	# WebSocket → Django Channels (Daphne)
 	# -----------------------------------------------------------------------
@@ -58,6 +68,14 @@
 	handle /widget-demo* {
 		rewrite /widget-demo /widget-demo.html
 		reverse_proxy widget:3001
+	}
+
+	# -----------------------------------------------------------------------
+	# Conversation page: its URL holds its link's token, no Referer may carry it
+	# -----------------------------------------------------------------------
+	handle /c/* {
+		header Referrer-Policy no-referrer
+		reverse_proxy frontend:5173
 	}
 
 	# -----------------------------------------------------------------------

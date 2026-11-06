@@ -4,16 +4,20 @@ from unittest.mock import patch
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 
-from apps.tickets.models import PriorityLevel, Ticket
+from apps.tickets.models import PriorityLevel, Ticket, TicketMessage, WidgetSession
 from tests.factories import (
+    ContactFactory,
     OrganizationFactory,
     PriorityLevelFactory,
     TagFactory,
     TeamFactory,
     TicketFactory,
+    TicketMessageFactory,
     UserFactory,
 )
 
@@ -266,6 +270,38 @@ class TestTicketMessageAPI:
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data["body"] == "Looking into this now."
         assert str(response.data["author"]) == str(agent.id)
+        message = TicketMessage.objects.get(pk=response.data["id"])
+        assert message.channel == TicketMessage.Channel.AGENT
+
+    def test_list_costs_the_same_queries_whatever_the_message_count(
+        self, authenticated_client, organization, agent
+    ) -> None:
+        """Sender names and attachments don't cost a query per message."""
+        contact = ContactFactory(organization=organization)
+        ticket = TicketFactory(organization=organization, contact=contact)
+        session = WidgetSession.objects.create(organization=organization, name="Ann")
+
+        def add_messages() -> None:
+            TicketMessageFactory(ticket=ticket, author=agent)
+            for widget_session in (None, session):
+                TicketMessageFactory(
+                    ticket=ticket,
+                    author=None,
+                    widget_session=widget_session,
+                    sender_type=TicketMessage.SenderType.USER,
+                )
+
+        def count_queries() -> int:
+            with CaptureQueriesContext(connection) as queries:
+                response = authenticated_client.get("/api/v1/messages/")
+            assert response.status_code == status.HTTP_200_OK
+            return len(queries)
+
+        add_messages()
+        few = count_queries()
+        add_messages()
+        add_messages()
+        assert count_queries() == few
 
     def test_create_internal_note(self, authenticated_client, organization) -> None:
         """Agents can create internal notes."""

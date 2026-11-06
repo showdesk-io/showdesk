@@ -3,6 +3,7 @@
  */
 
 import type {
+  ChatAttachment,
   ChatMessage,
   ConversationSummary,
   ShowdeskConfig,
@@ -59,28 +60,74 @@ export async function createOrResumeSession(
   });
 
   if (!res.ok) throw new Error(`Session error: ${res.status}`);
-  const data = await res.json();
+  return parseSession(await res.json());
+}
+
+/** A session as the API sends it. */
+interface SessionData {
+  session_id: string;
+  name?: string | null;
+  email?: string | null;
+  external_user_id?: string | null;
+  email_proof_offered?: boolean;
+}
+
+function parseSession(data: SessionData): WidgetSession {
   return {
     sessionId: data.session_id,
     name: data.name || "",
     email: data.email || "",
     externalUserId: data.external_user_id || "",
+    emailProofOffered: data.email_proof_offered === true,
   };
 }
 
-/** Update contact info on the session. */
+/** Update contact info on the session. The session as the backend now has it. */
 export async function updateSessionContact(
   config: ShowdeskConfig,
   sessionId: string,
   name: string,
   email: string,
-): Promise<void> {
+): Promise<WidgetSession> {
   const res = await fetch(`${config.apiUrl}/tickets/widget_session/`, {
     method: "PATCH",
     headers: { ...headers(config, sessionId), "Content-Type": "application/json" },
     body: JSON.stringify({ name, email }),
   });
   if (!res.ok) throw new Error(`Update contact error: ${res.status}`);
+  return parseSession(await res.json());
+}
+
+/**
+ * Ask for a code proving the session's email. The answer is the same whether a code
+ * went or not: it only goes when there are conversations to see.
+ */
+export async function requestEmailCode(
+  config: ShowdeskConfig,
+  sessionId: string,
+): Promise<void> {
+  const res = await fetch(`${config.apiUrl}/tickets/widget_email_code/`, {
+    method: "POST",
+    headers: { ...headers(config, sessionId), "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new ApiError(`Email code error: ${res.status}`, res.status);
+}
+
+/** Prove the session's email with a code. True if the email is now proven. */
+export async function verifyEmailCode(
+  config: ShowdeskConfig,
+  sessionId: string,
+  code: string,
+): Promise<boolean> {
+  const res = await fetch(`${config.apiUrl}/tickets/widget_email_verify/`, {
+    method: "POST",
+    headers: { ...headers(config, sessionId), "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw new ApiError(`Email verify error: ${res.status}`, res.status);
+  const data = await res.json();
+  return data?.verified === true;
 }
 
 /** Send a text message. Returns ticket_id, message_id, reference. */
@@ -107,7 +154,7 @@ export async function sendMessage(
     body: JSON.stringify(payload),
   });
 
-  if (!res.ok) throw new Error(`Send message error: ${res.status}`);
+  if (!res.ok) throw new ApiError(`Send message error: ${res.status}`, res.status);
   const data = await res.json();
   return {
     ticketId: data.ticket_id,
@@ -151,7 +198,7 @@ export async function sendAttachmentMessage(
     },
   );
 
-  if (!res.ok) throw new Error(`Upload error: ${res.status}`);
+  if (!res.ok) throw new ApiError(`Upload error: ${res.status}`, res.status);
   const data = await res.json();
   return {
     ticketId: data.ticket_id,
@@ -170,6 +217,13 @@ export async function fetchConversation(
   ticketId: string;
   reference: string;
   status: string;
+  /**
+   * Not to be written on: seen through the contact's history but not this
+   * session's, or closed too long ago to reopen.
+   */
+  readOnly: boolean;
+  /** Closed too long ago to reopen: a message would be refused. */
+  closed: boolean;
   messages: ChatMessage[];
 }> {
   const res = await fetch(
@@ -183,6 +237,8 @@ export async function fetchConversation(
     ticketId: data.ticket_id,
     reference: data.reference,
     status: data.status,
+    readOnly: data.read_only === true || data.can_reply === false,
+    closed: data.can_reply === false,
     messages: (data.messages || []).map(mapMessage),
   };
 }
@@ -245,6 +301,17 @@ export async function deleteMessage(
   if (!res.ok) throw new Error(`Delete message error: ${res.status}`);
 }
 
+/** Files as the API and the WebSocket list them. */
+export function mapAttachments(raw: unknown): ChatAttachment[] {
+  return ((raw as Array<Record<string, unknown>>) || []).map((a) => ({
+    id: a.id as string,
+    url: a.file as string,
+    filename: a.filename as string,
+    contentType: a.content_type as string,
+    fileSize: a.file_size as number,
+  }));
+}
+
 function mapMessage(raw: Record<string, unknown>): ChatMessage {
   return {
     id: raw.id as string,
@@ -253,16 +320,9 @@ function mapMessage(raw: Record<string, unknown>): ChatMessage {
     bodyType: (raw.body_type as ChatMessage["bodyType"]) || "text",
     senderType: (raw.sender_type as ChatMessage["senderType"]) || "agent",
     senderName: (raw.sender_name as string) || "",
-    attachments: ((raw.attachments as Array<Record<string, unknown>>) || []).map(
-      (a) => ({
-        id: a.id as string,
-        url: a.file as string,
-        filename: a.filename as string,
-        contentType: a.content_type as string,
-        fileSize: a.file_size as number,
-      }),
-    ),
+    attachments: mapAttachments(raw.attachments),
     createdAt: raw.created_at as string,
+    ...(typeof raw.deletable === "boolean" ? { deletable: raw.deletable } : {}),
     _status: "sent",
   };
 }

@@ -1,0 +1,20 @@
+From: Ann Client <ann@example.org>
+To: Acme Support <reply+0f2a4c1e5b6d4e7f8a9b0c1d2e3f4a5b.0123456789abcdef@in.example.com>
+Subject: RE: [ACM-12] Ma facture est fausse
+Date: Mon, 2 Nov 2026 11:00:00 +0100
+Message-ID: <AM0PR01-2@mail.example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="iso-8859-1"
+Content-Transfer-Encoding: quoted-printable
+
+Le num=E9ro de facture est 4521.
+
+Ann
+
+-----Message d'origine-----
+De=A0: Acme Support <reply+0f2a4c1e5b6d4e7f8a9b0c1d2e3f4a5b.0123456789abcdef@in.example.com>
+Envoy=E9=A0: lundi 2 novembre 2026 10:00
+=C0=A0: Ann Client <ann@example.org>
+Objet=A0: [ACM-12] Ma facture est fausse
+
+Pourriez-vous nous envoyer le num=E9ro de facture ?

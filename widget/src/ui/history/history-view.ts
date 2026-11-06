@@ -2,7 +2,8 @@
  * History View — List of past conversations.
  *
  * Clicking a conversation loads its messages in the chat view.
- * "New conversation" button starts a fresh thread.
+ * "New conversation" button starts a fresh thread. Above the list, a session with an
+ * unproven email is offered a code to see its conversations by email.
  */
 
 import {
@@ -12,6 +13,7 @@ import {
 } from "../../api/chat-api";
 import type { WidgetStore } from "../../state/widget-state";
 import type { ShowdeskConfig, ConversationSummary } from "../../types";
+import { renderEmailProofBanner } from "./email-proof-banner";
 
 export function renderHistoryView(
   container: HTMLElement,
@@ -32,6 +34,7 @@ export function renderHistoryView(
       activeTab: "chat",
       activeTicketId: null,
       activeTicketReference: null,
+      activeTicketReadOnly: false,
       messages: [],
     });
   };
@@ -40,12 +43,40 @@ export function renderHistoryView(
   // Loading state
   const list = document.createElement("div");
   list.className = "sd-history-list";
+
+  // An unproven email: a code opens its conversations by email.
+  if (store.state.session?.emailProofOffered) {
+    wrapper.appendChild(
+      renderEmailProofBanner(store, config, () => {
+        // Unless the view was rendered again for the proven session meanwhile.
+        if (list.isConnected) void loadHistory(list, store, config);
+      }),
+    );
+  }
   wrapper.appendChild(list);
 
   container.appendChild(wrapper);
 
   // Fetch history
   loadHistory(list, store, config);
+
+  // Rendered for a session that changed since, or before there was one, or before it
+  // offered the code (a contact just saved): rendered again for the one there is now.
+  const shownSession = store.state.session;
+  const unsubscribe = store.subscribe(() => {
+    if (!wrapper.isConnected) {
+      unsubscribe();
+      return;
+    }
+    const session = store.state.session;
+    if (
+      session?.sessionId !== shownSession?.sessionId ||
+      Boolean(session?.emailProofOffered) !== Boolean(shownSession?.emailProofOffered)
+    ) {
+      unsubscribe();
+      renderHistoryView(container, store, config);
+    }
+  });
 }
 
 async function loadHistory(
@@ -150,6 +181,8 @@ async function openConversation(
       activeTab: "chat",
       activeTicketId: data.ticketId,
       activeTicketReference: data.reference,
+      activeTicketReadOnly: data.readOnly,
+      closedTicketId: data.closed ? data.ticketId : null,
       messages: data.messages,
       isLoading: false,
       conversations: store.state.conversations.map((c) =>

@@ -152,3 +152,16 @@ class TestUserAPI:
             f"/api/v1/users/{target.id}/toggle_active/"
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+def test_the_organization_says_whether_sending_domains_are_on(
+    authenticated_client, settings
+) -> None:
+    settings.SENDING_DOMAIN_PROVIDER = "none"
+    off = authenticated_client.get("/api/v1/organizations/").data["results"][0]
+    settings.SENDING_DOMAIN_PROVIDER = "manual"
+    on = authenticated_client.get("/api/v1/organizations/").data["results"][0]
+
+    assert off["sending_domains_enabled"] is False
+    assert on["sending_domains_enabled"] is True
