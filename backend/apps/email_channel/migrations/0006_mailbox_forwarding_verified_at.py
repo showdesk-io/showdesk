@@ -14,8 +14,16 @@ class Migration(migrations.Migration):
             name="forwarding_verified_at",
             field=models.DateTimeField(
                 blank=True,
-                help_text="When a mail last came in through the inbound address while naming the public address: forwarding from it works, so customers may reply to it. Cleared when the public address changes.",
+                help_text="When a mail last came in forwarded from the public address: delivered to the inbound address by its domain's server, naming it. Cleared with the public address or the inbound address.",
                 null=True,
+            ),
+        ),
+        migrations.AddField(
+            model_name="mailbox",
+            name="reply_to_public_address",
+            field=models.BooleanField(
+                default=False,
+                help_text="Customers reply to the public address rather than to a reply address, while mail goes out from it and its forwarding is proven. An admin's choice, cleared with the proof.",
             ),
         ),
     ]

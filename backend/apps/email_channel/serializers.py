@@ -17,6 +17,10 @@ from apps.tickets.serializers import WidgetMessageSerializer
 PUBLIC_ADDRESS_TAKEN = "Another mailbox already uses this address."
 DOMAIN_NOT_VERIFIED = "Verify {domain} for your organization first."
 PUBLIC_DOMAIN = "Use an address on your own domain, not on a public webmail one."
+FORWARDING_UNPROVEN = (
+    "Forward {address} to this mailbox first: a mail that came through it turns "
+    "this on."
+)
 
 
 class MailboxSerializer(serializers.ModelSerializer):
@@ -47,6 +51,7 @@ class MailboxSerializer(serializers.ModelSerializer):
             "is_active",
             "forwarding_confirmation",
             "forwarding_verified_at",
+            "reply_to_public_address",
             "created_at",
             "updated_at",
         ]
@@ -94,7 +99,25 @@ class MailboxSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"public_address": [PUBLIC_ADDRESS_TAKEN]}
                 )
+        if attrs.get("reply_to_public_address"):
+            self._check_reply_to_allowed(candidate)
         return attrs
+
+    def _check_reply_to_allowed(self, candidate: Mailbox) -> None:
+        """Customers may reply to the public address once it forwards here (§5.1).
+
+        Proven for the address saved, which mail goes out from: a public address
+        changed along drops the proof.
+        """
+        saved = self.instance.public_address if self.instance is not None else None
+        if not (
+            candidate.forwarding_verified_at is not None
+            and candidate.public_address == saved
+            and sendable_address(candidate)
+        ):
+            address = candidate.public_address or "your public address"
+            message = FORWARDING_UNPROVEN.format(address=address)
+            raise serializers.ValidationError({"reply_to_public_address": [message]})
 
     def _check_domain_owned(self, candidate: Mailbox) -> None:
         """A new public address needs its domain verified by the organization.

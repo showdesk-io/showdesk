@@ -772,6 +772,7 @@ def on_ownership_verified(row: OrganizationDomain) -> None:
             .update(
                 public_address="",
                 forwarding_verified_at=None,
+                reply_to_public_address=False,
                 updated_at=timezone.now(),
             )
         )

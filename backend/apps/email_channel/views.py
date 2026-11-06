@@ -93,14 +93,6 @@ class MailboxViewSet(viewsets.ModelViewSet):
         mailbox.regenerate_address()
         return Response(self.get_serializer(mailbox).data)
 
-    @action(detail=True, methods=["post"], url_path="reset-forwarding")
-    def reset_forwarding(self, request, pk=None):
-        """Forget the proof of forwarding: replies go to a reply address again."""
-        mailbox = self.get_object()
-        mailbox.forwarding_verified_at = None
-        mailbox.save(update_fields=["forwarding_verified_at", "updated_at"])
-        return Response(self.get_serializer(mailbox).data)
-
     @action(detail=True, methods=["get"])
     def inbound(self, request, pk=None):
         """The mailbox's mails that were ignored or failed, newest first."""

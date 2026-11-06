@@ -13,7 +13,14 @@ class MailboxAdmin(admin.ModelAdmin):
     list_display = ["name", "local_part", "public_address", "organization", "is_active"]
     list_filter = ["is_active"]
     search_fields = ["name", "local_part", "public_address"]
-    readonly_fields = ["id", "local_part", "created_at", "updated_at"]
+    # The proof is the pipeline's to stamp.
+    readonly_fields = [
+        "id",
+        "local_part",
+        "forwarding_verified_at",
+        "created_at",
+        "updated_at",
+    ]
 
 
 @admin.register(InboundEmail)

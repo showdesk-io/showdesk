@@ -69,9 +69,15 @@ def agent(mailbox):
 def deliver(postal_key, django_capture_on_commit_callbacks):
     """Post a mail to the signed webhook and run everything that follows."""
 
-    def _deliver(raw: bytes, *, rcpt_to: str = INBOUND_ADDRESS) -> InboundEmail:
+    def _deliver(
+        raw: bytes,
+        *,
+        rcpt_to: str = INBOUND_ADDRESS,
+        mail_from: str = "customer@example.org",
+    ) -> InboundEmail:
+        payload = postal_payload(raw, rcpt_to=rcpt_to, mail_from=mail_from)
         with django_capture_on_commit_callbacks(execute=True):
-            response = post_to_postal(postal_payload(raw, rcpt_to=rcpt_to), postal_key)
+            response = post_to_postal(payload, postal_key)
         assert response.status_code == 200
         return InboundEmail.objects.order_by("-created_at").first()
 
@@ -425,10 +431,13 @@ def test_a_lost_notification_is_logged_as_such(mailbox, agent, deliver, caplog):
     assert "Inbound mail" not in caplog.text
 
 
-# Forwarding from the public address (customers reply to it once proven)
+# Forwarding from the public address (customers may reply to it once proven)
+
+# The envelope sender a forward gets from the public address's own server.
+FORWARDER = "support+caf_=acme-abc=in.example.com@Acme.Example.com"
 
 
-def test_a_mail_forwarded_from_the_public_address_lets_customers_reply_to_it(
+def test_a_forward_from_the_public_address_lets_admins_have_customers_reply_to_it(
     mailbox, agent, deliver, settings
 ):
     from apps.organizations.models import OrganizationDomain
@@ -445,15 +454,27 @@ def test_a_mail_forwarded_from_the_public_address_lets_customers_reply_to_it(
         sending_provider="manual",
     )
 
-    # Delivered to the inbound address, still To the public one: a forward.
-    first = deliver(build())
+    def replied_to(ticket):
+        mail.outbox.clear()
+        reply = TicketMessageFactory(ticket=ticket, author=agent, channel="agent")
+        send_ticket_reply_email(reply.id)
+        [sent] = mail.outbox
+        return sent
 
+    # Anyone can write To: support@…, not deliver from its domain's server.
+    deliver(build(Message_ID="<0@mail.example.org>"))
     mailbox.refresh_from_db()
-    assert mailbox.forwarding_verified_at == first.processed_at
-    mail.outbox.clear()
-    reply = TicketMessageFactory(ticket=first.ticket, author=agent, channel="agent")
-    send_ticket_reply_email(reply.id)
-    [sent] = mail.outbox
+    assert mailbox.forwarding_verified_at is None
+
+    first = deliver(build(), mail_from=FORWARDER)
+    mailbox.refresh_from_db()
+    assert mailbox.forwarding_verified_at == first.received_at
+    # The proof alone changes nothing: an admin chooses.
+    assert replied_to(first.ticket).reply_to == [reply_address(first.ticket)]
+
+    mailbox.reply_to_public_address = True
+    mailbox.save()
+    sent = replied_to(first.ticket)
     assert sent.from_email.endswith("<support@acme.example.com>")
     assert sent.reply_to == ["support@acme.example.com"]
 
@@ -464,11 +485,19 @@ def test_a_mail_forwarded_from_the_public_address_lets_customers_reply_to_it(
             Message_ID="<2@mail.example.org>",
             In_Reply_To=sent.extra_headers["Message-ID"],
             body="Still broken",
-        )
+        ),
+        mail_from=FORWARDER,
     )
-
     assert answer.ticket == first.ticket
     assert answer.ticket_message.body == "Still broken"
+    mailbox.refresh_from_db()
+    assert mailbox.forwarding_verified_at == first.received_at  # Within the hour.
+
+    # Turned off, it stays off whatever comes in next.
+    mailbox.reply_to_public_address = False
+    mailbox.save()
+    deliver(build(Message_ID="<3@mail.example.org>"), mail_from=FORWARDER)
+    assert replied_to(first.ticket).reply_to == [reply_address(first.ticket)]
 
 
 def test_only_a_processed_mail_through_the_inbound_address_proves_forwarding(
@@ -478,14 +507,29 @@ def test_only_a_processed_mail_through_the_inbound_address_proves_forwarding(
         organization=mailbox.organization, mailbox=mailbox, reference="OLD-1"
     )
     unproven = [
-        deliver(build(Auto_Submitted="auto-replied", Message_ID="<a@x.org>")),
-        deliver(build(Message_ID="<b@x.org>"), rcpt_to=reply_address(ticket)),
         deliver(
-            build(Message_ID="<c@x.org>", To=INBOUND_ADDRESS, Cc=mailbox.public_address)
+            build(Auto_Submitted="auto-replied", Message_ID="<a@x.org>"),
+            mail_from=FORWARDER,
         ),
-        deliver(build(Message_ID="<d@x.org>", To="someone@example.org")),
+        deliver(
+            build(Message_ID="<b@x.org>"),
+            rcpt_to=reply_address(ticket),
+            mail_from=FORWARDER,
+        ),
+        deliver(
+            build(
+                Message_ID="<c@x.org>", To=INBOUND_ADDRESS, Cc=mailbox.public_address
+            ),
+            mail_from=FORWARDER,
+        ),
+        deliver(
+            build(Message_ID="<d@x.org>", To="someone@example.org"),
+            mail_from=FORWARDER,
+        ),
     ]
-    stored = InboundEmailFactory(mailbox=mailbox, envelope_recipient="")
+    stored = InboundEmailFactory(
+        mailbox=mailbox, envelope_recipient="", envelope_sender=FORWARDER.lower()
+    )
     stored.raw.save("raw.eml", ContentFile(build(Message_ID="<e@x.org>")))
     process_inbound_email.delay(str(stored.id))
     stored.refresh_from_db()

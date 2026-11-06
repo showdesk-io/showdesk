@@ -257,13 +257,18 @@ def from_address(ticket) -> str | None:
 def reply_to(ticket) -> list[str] | None:
     """Where a reply to the ticket's mail goes, while the inbound domain is set.
 
-    The sending mailbox's public address when mail goes out from it and its
-    forwarding to the mailbox is proven (§5.1); else the ticket's reply address.
+    The sending mailbox's public address when mail goes out from it, its
+    forwarding to the mailbox is proven and an admin chose it (§5.1); else the
+    ticket's reply address.
     """
     if not settings.INBOUND_EMAIL_DOMAIN:
         return None
     mailbox = sending_mailbox(ticket)
-    if mailbox is not None and mailbox.forwarding_verified_at is not None:
+    if (
+        mailbox is not None
+        and mailbox.reply_to_public_address
+        and mailbox.forwarding_verified_at is not None
+    ):
         public_address = sendable_address(mailbox)
         if public_address:
             return [public_address]
