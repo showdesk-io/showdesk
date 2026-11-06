@@ -3,6 +3,7 @@
 > Date: 2026-10-29
 > Status: Validated. PR 2 built on `feat/email-channel` (2026-11-03), see §10.
 > PR 3 built on `feat/sending-domains` (2026-11-04), see §11.
+> Reply-To public address built on `feat/reply-to-public-address` (2026-11-06), see §11.
 > Phase: 3.5 (Channels & Integrations)
 > Research input: `docs/brainstorm/multi-channel-communication.md` (§1, §6)
 > Depends on: `docs/plans/2026-10-29-contacts-design.md`
@@ -253,7 +254,11 @@ template:
 
 - `From`: `"{email_from_name or org name}" <{local_part}@{INBOUND_EMAIL_DOMAIN}>`
   (PR 3: `public_address` when its domain is verified for sending).
-- `Reply-To`: tokenised reply address.
+- `Reply-To`: tokenised reply address. Once mail goes out from the public
+  address and its forwarding to the mailbox is proven (§11, reply-to choices),
+  the public address instead: customers see and reply to the organization's own
+  address, and their replies come back through the forwarding, threaded by
+  `In-Reply-To` / `References` (§4.3).
 - `Message-ID` stored in `external_id`; `In-Reply-To`/`References` built from
   the ticket's `external_id` chain so mail clients thread correctly.
 - Subject `Re: [SD-123] {title}`.
@@ -531,6 +536,13 @@ inbound provider.
   still needs its DNS (the `_showdesk` TXT), which nobody but the provider
   has. Add such providers to the list.
 
+- Customers reply to the public address once a forwarded mail proved its
+  forwarding. If the organization later breaks that forwarding (turns it off,
+  or its mail server starts refusing it), their replies stay in the
+  organization's own mailbox and no longer reach Showdesk, until a mail
+  forwarded again proves it, or an admin resets the proof. The mailbox card
+  shows the date of the last proof, and admins can reset it.
+
 - Two checks of the same domain (the periodic one and a "Check now") may
   finish out of order, the older result written last. That is rare (checks
   take seconds, "Check now" is rate-limited) and bounded: the next check, at
@@ -700,6 +712,25 @@ What admins have:
   purpose and status on the domain while a provider is configured.
 - `manage.py seed` marks the demo mailbox's domain for sending, unregistered,
   when `INBOUND_EMAIL_DOMAIN` is set.
+
+Customers reply to the public address (added after PR 3, 2026-11-06; plan
+`docs/plans/2026-11-06-reply-to-public-address-plan.md`):
+
+| # | Choice | Why |
+|---|---|---|
+| R1 | A mailbox's forwarding is proven by a **processed** mail whose stored envelope recipient is its inbound address, whose `Delivered-To`, `X-Original-To`, `X-Forwarded-To`, `To` or `Cc` names its public address, and whose `To` / `Cc` don't name the inbound address. A mail without an envelope, to a reply address or to the public address directly, or ignored / rejected, proves nothing. | Headers are declarations; the envelope is what the provider delivered to. A mail addressed to both addresses reaches the inbound one directly. The same evidence Gmail forwarding gives. |
+| R2 | `Mailbox.forwarding_verified_at` is stamped by every such mail (the last proof), only while the public address is still the one it named. | Admins see when forwarding last worked; a changed address doesn't inherit a proof. |
+| R3 | It is cleared when the public address changes (also when another organization's verification frees it, §11 choice 4), when the inbound address is regenerated (forwarding to the previous one is refused), and by an admin's reset. | A proof is about one address forwarded to one inbound address. |
+| R4 | `Reply-To` is the public address iff `sendable_address(mailbox)` is truthy and `forwarding_verified_at` is set, for the mailbox the `From` is taken from; otherwise the reply token. Decided at send time, for the reply, unread-reply, resolved and conversation-link mails. The reply marker stays, and reply addresses keep working. | A reply-to we don't send from would look odd, one we can't receive from would lose the reply; mail already sent keeps coming back. |
+| R5 | The mailbox payload carries `forwarding_verified_at`, read-only; "customers reply to the public address" is `sends_from_public_address` and `forwarding_verified_at`. | No field repeating two facts. |
+
+- `POST /api/v1/mailboxes/{id}/reset-forwarding/` (admins): clears the proof,
+  200 with the mailbox.
+- Settings → Email: under "Replies are sent from …", "Customers reply to
+  support@acme.com" with when forwarding was last confirmed and, for admins,
+  "Reset" (confirmed first); when sending from the public address without a
+  proof, "Customers reply to a reply address of Showdesk (forward
+  support@acme.com here to have them reply to it)".
 
 What operators set (§8):
 
