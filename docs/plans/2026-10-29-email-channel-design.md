@@ -170,8 +170,9 @@ Ignored and rejected emails are listed in the Mailbox settings.
 
 1. `In-Reply-To` / `References` matching a stored `TicketMessage.external_id`
    of the same organization, or the Message-ID of one of our mails sending no
-   message (`<resolved-{ticket}-…@…>`, `<link-{ticket}-…@…>`), which names its
-   ticket.
+   message (`<resolved-{ticket}-{stamp}-{signature}@…>`,
+   `<link-{ticket}-{key}-{signature}@…>`), which names its ticket when its
+   signature checks (an HMAC of kind, ticket and stamp, as the reply token's).
 2. Reply token.
 3. `[SD-123]` in the subject, **only** if the sender is the ticket's contact.
 4. Otherwise a new ticket. A `Fwd:` / `Tr:` / `WG:` subject without matching
@@ -736,7 +737,7 @@ Customers reply to the public address (added after PR 3, 2026-11-06; plan
 | R3 | `Mailbox.reply_to_public_address` (default off) is an admin's choice, set by `PATCH` on the mailbox; turning it on is refused (400, "Forward support@acme.com to this mailbox first: a mail that came through it turns this on.") without a proof or while mail doesn't go out from the public address. A proof alone switches nothing. | Forwarding can be proven by mail the organization didn't mean as a switch, and a forged envelope sender can refresh the proof (Known limitations): the switch is the admin's. |
 | R4 | The proof and the choice are cleared together when the public address changes or is cleared (`Mailbox.save()` compares with the database; also when another organization's verification frees it, §11 choice 4) and when the inbound address is regenerated. Turning the choice off keeps the proof. | A proof is about one address forwarded to one inbound address. |
 | R5 | `Reply-To` is the public address iff `sendable_address(mailbox)` is truthy, `forwarding_verified_at` is set and `reply_to_public_address` is on, for the mailbox the `From` is taken from; otherwise the reply token. Decided at send time, for the reply, unread-reply, resolved and conversation-link mails. The reply marker stays, and reply addresses keep working. | A reply-to we don't send from would look odd, one we can't receive from would lose the reply; mail already sent keeps coming back. |
-| R6 | The resolved mail's Message-ID (`<resolved-{ticket}-{stamp}@…>`) and the conversation-link mail's (`<link-{ticket}-{task id}@…>`, now with the ticket's `In-Reply-To` / `References`) name their ticket in header matching (§4.3), within the mail's organization. | Without a reply address, a reply to them threads by its headers only. Parsed rather than stored: they send no message. |
+| R6 | The resolved mail's Message-ID (`<resolved-{ticket}-{stamp}-{signature}@…>`) and the conversation-link mail's (`<link-{ticket}-{task id}-{signature}@…>`, now with the ticket's `In-Reply-To` / `References`) name their ticket in header matching (§4.3), within the mail's organization, only when the signature checks: 16 hex of an HMAC of kind, ticket and stamp, with its own salt, under `SECRET_KEY` or a fallback. | Without a reply address, a reply to them threads by its headers only. Parsed rather than stored: they send no message. Signed, as a ticket's id is no secret (reply addresses, links, URLs): unsigned, it would let anyone post into a ticket. |
 
 - The mailbox payload carries `forwarding_verified_at` (read-only, also in the
   Django admin) and `reply_to_public_address` (admins write it).

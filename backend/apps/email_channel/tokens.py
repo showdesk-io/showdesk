@@ -17,10 +17,12 @@ from django.utils.crypto import constant_time_compare, salted_hmac
 _REPLY_SALT = "showdesk.email_channel.reply"
 _CONVERSATION_SALT = "showdesk.email_channel.conversation"
 _EMAIL_HASH_SALT = "showdesk.email_channel.email_hash"
-# The Message-IDs of the mail sending no message: a ticket's resolution, a link.
+_TICKET_MAIL_ID_SALT = "showdesk.email_channel.ticket_mail_id"
+# The Message-IDs of the mail sending no message (a ticket's resolution, a link):
+# {kind}-{ticket}-{stamp}-{signature}, signed as anyone may know a ticket's id.
 _TICKET_MAIL_ID = re.compile(
-    r"<(?:resolved|link)-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})-[0-9a-z]{1,64}"
-    r"@([^<>@\s]+)>"
+    r"<(resolved|link)-([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})"
+    r"-([0-9a-z]{1,64})-([0-9a-f]{16})@([^<>@\s]+)>"
 )
 # How old a link may be and still get a new one mailed. Past that, ask support.
 RENEWABLE_FOR = timedelta(days=180)
@@ -35,6 +37,23 @@ def _reply_signature(ticket_hex: str, secret: str | None = None) -> str:
     return salted_hmac(
         _REPLY_SALT, ticket_hex, secret=secret, algorithm="sha256"
     ).hexdigest()[:16]
+
+
+def _ticket_mail_signature(
+    kind: str, ticket_id: str, stamp: str, secret: str | None = None
+) -> str:
+    return salted_hmac(
+        _TICKET_MAIL_ID_SALT,
+        f"{kind}:{ticket_id}:{stamp}",
+        secret=secret,
+        algorithm="sha256",
+    ).hexdigest()[:16]
+
+
+def _ticket_mail_id(kind: str, ticket, stamp: str) -> str:
+    ticket_id = str(ticket.id)
+    signature = _ticket_mail_signature(kind, ticket_id, stamp)
+    return f"<{kind}-{ticket_id}-{stamp}-{signature}@{_outbound_domain()}>"
 
 
 def reply_address(ticket) -> str:
@@ -151,7 +170,7 @@ def resolution_message_id(ticket) -> str:
     """
     resolved_at = ticket.resolved_at
     stamp = int(resolved_at.timestamp()) if resolved_at else 0
-    return f"<resolved-{ticket.id}-{stamp}@{_outbound_domain()}>"
+    return _ticket_mail_id("resolved", ticket, str(stamp))
 
 
 def conversation_link_message_id(ticket, key: str) -> str:
@@ -160,16 +179,25 @@ def conversation_link_message_id(ticket, key: str) -> str:
     ``key`` tells one mail from another: the same on its retries.
     """
     key = re.sub(r"[^0-9a-z]", "", key.lower())[:64] or uuid.uuid4().hex
-    return f"<link-{ticket.id}-{key}@{_outbound_domain()}>"
+    return _ticket_mail_id("link", ticket, key)
 
 
 def ticket_id_from_message_id(message_id: str) -> uuid.UUID | None:
     """The ticket a mail of ours sending no message was about, or None.
 
     A ticket's resolution, a conversation link: replies to them reference these.
-    Only names a ticket, which a match still looks for in the mail's organization.
+    Signed, so that knowing a ticket's id doesn't make one. Only names a ticket,
+    which a match still looks for in the mail's organization.
     """
     match = _TICKET_MAIL_ID.fullmatch(message_id.strip().lower())
-    if match is None or match.group(2) != _outbound_domain().lower():
+    if match is None:
         return None
-    return uuid.UUID(match.group(1))
+    kind, ticket_id, stamp, signature, domain = match.groups()
+    if domain != _outbound_domain().lower() or not any(
+        constant_time_compare(
+            signature, _ticket_mail_signature(kind, ticket_id, stamp, secret)
+        )
+        for secret in _secrets()
+    ):
+        return None
+    return uuid.UUID(ticket_id)
