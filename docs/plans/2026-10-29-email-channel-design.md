@@ -422,6 +422,15 @@ Selected by `SENDING_DOMAIN_PROVIDER`:
   the sender and check its DKIM and SPF, delete the sender). It uses the
   account Anymail sends with (`MAILJET_API_KEY`, `MAILJET_SECRET_KEY`) and
   `MAILJET_API_URL` (default `https://api.mailjet.com`).
+- `postal`: one server of a self-hosted Postal v3. Postal has no API for
+  domains, so the operator runs the Postal domains service
+  (`deploy/postal-domains/`) on the Postal host, which adds a domain to that
+  server (already verified, outgoing only, with its own DKIM key), has Postal
+  check its DNS, and deletes it, through Postal's own models. Showdesk shows
+  the SPF include, the domain's DKIM TXT and the return-path CNAME, and checks
+  them itself and through Postal. Settings `POSTAL_DOMAINS_API_URL`,
+  `POSTAL_DOMAINS_API_TOKEN`; the instance sends through the same server with
+  Anymail's Postal backend (`ANYMAIL_POSTAL_API_URL`, `ANYMAIL_POSTAL_API_KEY`).
 
 ### 7.3 Checks
 
@@ -463,10 +472,12 @@ All new variables are documented in `.env.example` with safe defaults.
 | `INBOUND_EMAIL_LOG_RETENTION_DAYS` | 90 | 2 | Log of received mails (rows), purged daily; pending or failed ones stay. |
 | `WIDGET_UNREAD_EMAIL_DELAY_MINUTES` | 5 | 2 | Delay before emailing an unread widget reply. |
 | `CONVERSATION_LINK_MAX_AGE_DAYS` | 30 | 2 | Conversation link lifetime. |
-| `SENDING_DOMAIN_PROVIDER` | `none` | 3 | `none`, `manual`, `scaleway_tem`, `mailjet`. |
+| `SENDING_DOMAIN_PROVIDER` | `none` | 3 | `none`, `manual`, `scaleway_tem`, `mailjet`, `postal`. |
 | `SENDING_DOMAIN_SPF_INCLUDE`, `SENDING_DOMAIN_DKIM_SELECTOR` | empty | 3 | `manual` adapter: the SPF include customers add, and the selector of the operator's DKIM key, published at `<selector>._domainkey.<INBOUND_EMAIL_DOMAIN>`, which customers point to with a CNAME. |
 | `SCW_TEM_SECRET_KEY`, `SCW_TEM_PROJECT_ID`, `SCW_TEM_REGION` | empty / `fr-par` | 3 | `scaleway_tem` adapter. |
 | `MAILJET_API_URL` | `https://api.mailjet.com` | 3 | `mailjet` adapter: the account's API host (`https://api.us.mailjet.com` for a US account). Its keys are Anymail's `MAILJET_API_KEY`, `MAILJET_SECRET_KEY`. |
+| `POSTAL_DOMAINS_API_URL`, `POSTAL_DOMAINS_API_TOKEN` | empty | 3 | `postal` adapter: the Postal domains service on the Postal host (e.g. `https://postal.example.com/showdesk-domains`) and its bearer token. |
+| `ANYMAIL_POSTAL_API_URL`, `ANYMAIL_POSTAL_API_KEY` | empty | 3 | Anymail's Postal sending backend (`EMAIL_BACKEND=anymail.backends.postal.EmailBackend`): Postal's URL and an API credential of the server to send with. Set into `ANYMAIL` only when given. |
 
 Operators must publish SPF/DKIM for `INBOUND_EMAIL_DOMAIN` with their sending
 service, since fallback mail is sent from that domain, and point its MX to the
@@ -524,6 +535,21 @@ inbound provider.
 - A wrong `MAILJET_API_URL` (a US account on the EU host, or the reverse)
   makes every Mailjet call fail: domains can't be set up, and checks stay
   inconclusive, until it is fixed.
+
+- `postal`: what Postal does was read from its source (3.3.7 and `main`),
+  not yet observed on a real Postal. The Postal domains service has the
+  Docker socket of the Postal host (root there): it is the operator's to run,
+  on `127.0.0.1` behind the reverse proxy. Each call boots Rails in Postal's
+  container (a few seconds), 40 s at most. The service only manages the
+  domains it created (their uuids in its state file, to be kept): a domain
+  the Postal server or its organization already has is never taken over,
+  and enabling sending from it is a conflict until the operator removes it
+  from Postal; a lost state file leaves the service's domains unmanaged
+  (their checks fail). One server per instance. A DKIM key
+  regenerated in Postal's UI changes the record customers must publish:
+  their domains go back to pending until they do. Postal re-checks a
+  domain's DNS hourly on its own, and stops signing with its key as soon as
+  the record is gone, before Showdesk's next check sees it.
 
 - A public address saved while its domain changes hands: the address is
   validated against the domain's owner, then saved, and a verification by
@@ -693,6 +719,7 @@ these choices beyond this design. Each one is pinned by a test.
 | 18 | An admin-email verification of a domain the organization already has adds the asked purposes to the row and keeps the others, and leaves its sending state alone. | Verifying again must not drop a purpose, nor stop sending. |
 | 19 | A DNS win clears the token of the other organizations' rows of the domain (the previous owner's and any pending one): their admins regenerate a token to claim it again. | The previous owner's TXT, left published, would otherwise win the domain straight back. |
 | 20 | `mailjet` (added after PR 3; matched to a real account on 2026-11-05): a domain is a domain sender `*@<domain>` of the account Anymail sends with; its ref is the sender's numeric id. The records are Mailjet's ownership token, SPF (`merge`) and DKIM, all TXT, fully qualified, read from the sender's DNS entry by its `DNSID` (a new sender has one even while inactive). Registering a domain Mailjet already has (a 400 "already existing … sender") reuses that sender, found with `GET /sender?Email=*@<domain>&ShowDeleted=true` (a non-deleted one first), only when it is `Inactive` or `Deleted`: an `Active` one is someone's in use (the operator's own, one set up by hand) and is refused as already registered (409 `provider_conflict`, or `removal_pending` while a removal of ours waits). When a reused sender's DNS entry is gone (a deleted sender), the ownership TXT (`mailjet._<token[:8]>.<domain>`, the token being the sender's `Filename` without `.txt`) and SPF are shown, DKIM comes with the first check after reactivation. A 400 mentioning a limit or maximum is the account's sender limit: logged as an error, admins are told to contact their administrator. `check`: a missing sender (404) is FAILED; an inactive or deleted one is asked to validate (Mailjet says this reactivates a deleted one; to confirm, not observed yet). After a `validate` answering 2xx, the sender read again decides: active, Mailjet checks DKIM and SPF; otherwise its DNS validation error (else the global one) is shown, never the file one, and a deleted sender left deleted without error is logged as an error and shown as "Mailjet didn't reactivate this domain's previous sender; contact your Showdesk administrator.". VERIFIED only when the sender is active and both are `OK`, otherwise PENDING with Mailjet's error texts. `remove` reads the sender first and deletes it unless it is missing or `Deleted`; a 404 on delete, or a 400 after which the sender reads `Deleted`, counts as removed. A DNS entry read whose domain isn't the sender's counts as not found. | Mailjet only sends from an active sender of the sending account, and DKIM and SPF are what DMARC alignment needs; Mailjet keeps deleted senders and refuses to create them again. |
+| 21 | `postal` (added 2026-11-08, read from Postal's source; plan `docs/plans/2026-11-08-postal-sending-provider-plan.md`): Postal has no API for domains, so the Postal domains service (`deploy/postal-domains/`, Python standard library) runs on the Postal host and manages the domains of one Postal server, `POSTAL_DOMAINS_ORGANIZATION` / `POSTAL_DOMAINS_SERVER`, by running a Ruby script with `rails runner` in Postal's web container (`docker exec`, an argv list, the name or uuid checked first, a timeout, two at once). Bearer token, compared in constant time, 32 characters at least. A domain is created outgoing only and already verified, as Postal's UI does for its admins: Showdesk proves the ownership itself (choice 14). The ref is Postal's domain uuid. Records, fully qualified: SPF `v=spf1 include:<dns.spf_include> ~all` (`merge`; Postal's `a mx` dropped), the DKIM TXT `<dkim_identifier>-<id>._domainkey.<domain>`, the return-path CNAME `<custom_return_path_prefix>.<domain>` → `dns.return_path_domain`. The service keeps the uuids of the domains it created and only shows, checks or deletes those: `register` of a name it created is idempotent, of one the server or its organization has otherwise a 409 `exists` (AlreadyRegisteredError: `provider_conflict` or `removal_pending`, choice 5), and an answer for another name an error; the domains in `POSTAL_DOMAINS_PROTECTED` (the instance's own) and their subdomains are refused (403). Postal's own SPF status is ignored: Showdesk checks the SPF itself. `check` has the service run Postal's `check_dns`, then reads the DNS: exactly one DKIM TXT equal to Postal's (whitespace and a final `;` aside), one SPF record including Postal's include before its `all`; and Postal must report the DKIM and the return path `OK`. A lookup that can't conclude is UNKNOWN; anything missing is PENDING with every reason. The service's own 404 (`not_found`) is FAILED on a check and a removal done on `remove`; any other 404 (a proxy's) is an error. | Postal only accepts a From on a verified domain of the sending server or its organization, signs with a domain's own key only once its check found it `OK` (else with Postal's key, not aligned), uses the domain's return path only once it checked `OK`, and only re-checks hourly domains it has checked once. Postal's models create the key, the uuid and the selector as its UI does. A proxy's 404 must not fail every domain. A domain added to Postal by hand must never be deleted by Showdesk. |
 
 What admins have:
 
@@ -753,7 +780,7 @@ Customers reply to the public address (added after PR 3, 2026-11-06; plan
 What operators set (§8):
 
 - `SENDING_DOMAIN_PROVIDER`: `none` (default, feature hidden), `manual`,
-  `scaleway_tem` or `mailjet`. A misconfigured provider is logged, and admins only see
+  `scaleway_tem`, `mailjet` or `postal`. A misconfigured provider is logged, and admins only see
   that sending from their domain is unavailable. A provider's failed HTTP
   call only shows admins its status ("The sending service answered 503.");
   what a check finds wrong (TEM's last error; Mailjet's validation, DKIM
@@ -772,5 +799,14 @@ What operators set (§8):
   through that same account (`EMAIL_BACKEND=anymail.backends.mailjet.EmailBackend`),
   and `INBOUND_EMAIL_DOMAIN` must be a validated sender domain of it, since
   fallback mail is sent from it.
+- `postal`: `POSTAL_DOMAINS_API_URL` and `POSTAL_DOMAINS_API_TOKEN`, the
+  Postal domains service run on the Postal host behind its reverse proxy
+  (`deploy/postal-domains/README.md`), bound to one Postal server kept for
+  Showdesk. Outbound mail goes through that server
+  (`EMAIL_BACKEND=anymail.backends.postal.EmailBackend`,
+  `ANYMAIL_POSTAL_API_URL`, `ANYMAIL_POSTAL_API_KEY` an API credential of
+  it); the domains of `DEFAULT_FROM_EMAIL` and `INBOUND_EMAIL_DOMAIN` are
+  added to it by the operator, verified, with their SPF, DKIM and return
+  path, and the host has its PTR, SPF and Postal DKIM key published.
 - Celery beat runs `check-sending-domains` every 15 min and
   `requeue-sending-removals` hourly, on the `default` queue.

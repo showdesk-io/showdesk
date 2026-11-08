@@ -95,7 +95,7 @@ class ManualProvider:
             return DomainCheck(CheckStatus.UNKNOWN)
 
         errors = []
-        spf_error = self._spf_error(domain, spf)
+        spf_error = spf_record_error(domain, spf, self.spf_include)
         if spf_error:
             errors.append(spf_error)
         if not operator_keys.intersection(map(_dkim_key, dkim)):
@@ -107,17 +107,6 @@ class ManualProvider:
             return DomainCheck(CheckStatus.PENDING, " ".join(errors))
         return DomainCheck(CheckStatus.VERIFIED, "")
 
-    def _spf_error(self, domain: str, records: list[str]) -> str:
-        """Why the domain's SPF doesn't let the service send, or ""."""
-        spf_records = [r for r in records if r.lower().split()[:1] == ["v=spf1"]]
-        include = f"include:{self.spf_include}"
-        if len(spf_records) > 1:
-            # Receivers treat several SPF records as an error (RFC 7208 §4.5).
-            return f"SPF: {domain} has several SPF records; merge them into one."
-        if not spf_records or not _spf_includes(spf_records[0], self.spf_include):
-            return f"SPF: add {include} to the SPF record of {domain}."
-        return ""
-
     def remove(self, ref: str) -> None:
         return None
 
@@ -127,6 +116,17 @@ def _dkim_key(record: str) -> str:
     compact = re.sub(r"\s+", "", record)
     match = _DKIM_KEY_RE.search(compact)
     return match.group(1) if match else ""
+
+
+def spf_record_error(domain: str, records: list[str], include: str) -> str:
+    """Why the domain's SPF (its TXT records) doesn't include `include`, or ""."""
+    spf_records = [r for r in records if r.lower().split()[:1] == ["v=spf1"]]
+    if len(spf_records) > 1:
+        # Receivers treat several SPF records as an error (RFC 7208 §4.5).
+        return f"SPF: {domain} has several SPF records; merge them into one."
+    if not spf_records or not _spf_includes(spf_records[0], include):
+        return f"SPF: add include:{include} to the SPF record of {domain}."
+    return ""
 
 
 def _spf_includes(record: str, include: str) -> bool:
