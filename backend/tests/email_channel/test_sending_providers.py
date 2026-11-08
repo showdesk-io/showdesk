@@ -921,3 +921,208 @@ class TestMailjet:
         settings.ANYMAIL = {**settings.ANYMAIL, "MAILJET_SECRET_KEY": ""}
         with pytest.raises(ImproperlyConfigured):
             get_provider()
+
+
+# -- postal ------------------------------------------------------------------
+
+POSTAL_URL = "https://postal.example.com/showdesk-domains"
+POSTAL_TOKEN = "postal-domains-token-not-to-leak-0123456789"
+POSTAL_ID = "6f1c3c1e-2b1a-4b5e-9a57-0c3b1f1e2d3a"
+POSTAL_DKIM_NAME = "postal-abcdef._domainkey.acme.com"
+POSTAL_DKIM = "v=DKIM1; t=s; h=sha256; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC;"
+POSTAL_CHECK = ("POST", f"{POSTAL_URL}/domains/{POSTAL_ID}/check")
+
+
+def postal_domain(dkim="OK", return_path="OK", return_path_error=None) -> dict:
+    """A domain as the Postal domains service returns it."""
+    return {
+        "id": POSTAL_ID,
+        "name": "acme.com",
+        "records": [
+            {
+                "kind": "spf",
+                "type": "TXT",
+                "name": "acme.com",
+                "value": "v=spf1 include:spf.postal.example.com ~all",
+            },
+            {
+                "kind": "dkim",
+                "type": "TXT",
+                "name": POSTAL_DKIM_NAME,
+                "value": POSTAL_DKIM,
+            },
+            {
+                "kind": "return_path",
+                "type": "CNAME",
+                "name": "psrp.acme.com",
+                "value": "rp.postal.example.com",
+            },
+        ],
+        "status": {
+            "checked_at": "2026-11-08T10:00:00Z",
+            "dkim": dkim,
+            "dkim_error": None if dkim == "OK" else "No TXT records were returned",
+            "spf": "OK",
+            "spf_error": None,
+            "return_path": return_path,
+            "return_path_error": return_path_error,
+        },
+    }
+
+
+POSTAL_RECORDS = [
+    {
+        "type": "TXT",
+        "name": "acme.com",
+        "value": "v=spf1 include:spf.postal.example.com ~all",
+        "merge": True,
+    },
+    {"type": "TXT", "name": POSTAL_DKIM_NAME, "value": POSTAL_DKIM},
+    {"type": "CNAME", "name": "psrp.acme.com", "value": "rp.postal.example.com"},
+]
+
+
+@pytest.fixture
+def postal(settings):
+    settings.SENDING_DOMAIN_PROVIDER = "postal"
+    settings.POSTAL_DOMAINS_API_URL = f"{POSTAL_URL}/"
+    settings.POSTAL_DOMAINS_API_TOKEN = POSTAL_TOKEN
+    return get_provider()
+
+
+def postal_answering(routes: dict):
+    return answering(routes, module="postal")
+
+
+class TestPostal:
+    def test_register_creates_the_domain_and_returns_its_records(self, postal) -> None:
+        for status in (201, 200):  # Created, or one the server already had.
+            patcher, fake = postal_answering(
+                {("POST", f"{POSTAL_URL}/domains"): (status, postal_domain(None))}
+            )
+            with patcher:
+                registered = postal.register("acme.com")
+            assert registered.ref == POSTAL_ID
+            assert registered.records == POSTAL_RECORDS
+            (_method, _url, kwargs), *_ = fake.calls
+            assert kwargs["json"] == {"name": "acme.com"}
+            assert kwargs["headers"]["Authorization"] == f"Bearer {POSTAL_TOKEN}"
+            assert kwargs["timeout"]
+
+    def test_check_is_verified_when_the_dns_and_postal_agree(self, postal) -> None:
+        patcher, fake = postal_answering({POSTAL_CHECK: (200, postal_domain())})
+        with (
+            patcher,
+            published(
+                {
+                    "acme.com": ["v=spf1 mx include:spf.postal.example.com -all"],
+                    # Split into chunks and without the final ";": the same key.
+                    POSTAL_DKIM_NAME: [POSTAL_DKIM.rstrip(";").replace("; ", ";  ")],
+                }
+            ),
+        ):
+            result = postal.check(POSTAL_ID)
+        assert result == DomainCheck(CheckStatus.VERIFIED, "", POSTAL_RECORDS)
+        assert calls_of(fake) == [POSTAL_CHECK]
+
+    def test_check_names_what_is_missing(self, postal) -> None:
+        patcher, _fake = postal_answering(
+            {
+                POSTAL_CHECK: (
+                    200,
+                    postal_domain(
+                        dkim="Invalid",
+                        return_path="Missing",
+                        return_path_error="There is no return path record at psrp.acme.com",
+                    ),
+                )
+            }
+        )
+        with (
+            patcher,
+            published(
+                {
+                    "acme.com": ["v=spf1 include:_spf.google.com ~all"],
+                    POSTAL_DKIM_NAME: ["v=DKIM1; p=SOMETHINGELSE"],
+                }
+            ),
+        ):
+            result = postal.check(POSTAL_ID)
+        assert result.status == CheckStatus.PENDING
+        assert result.error == (
+            "SPF: add include:spf.postal.example.com to the SPF record of acme.com. "
+            f"DKIM: publish the TXT record {POSTAL_DKIM_NAME} exactly as shown. "
+            "Return path: There is no return path record at psrp.acme.com"
+        )
+
+        # The DNS is right, but Postal hasn't seen the key yet: it would not
+        # sign with it.
+        patcher, _fake = postal_answering(
+            {POSTAL_CHECK: (200, postal_domain(dkim="Missing"))}
+        )
+        with (
+            patcher,
+            published(
+                {
+                    "acme.com": ["v=spf1 include:spf.postal.example.com ~all"],
+                    POSTAL_DKIM_NAME: [POSTAL_DKIM],
+                }
+            ),
+        ):
+            result = postal.check(POSTAL_ID)
+        assert result.status == CheckStatus.PENDING
+        assert result.error.startswith(
+            "DKIM: the sending service hasn't seen the record yet"
+        )
+
+    def test_check_that_cannot_conclude_or_of_a_domain_gone(self, postal) -> None:
+        patcher, _fake = postal_answering({POSTAL_CHECK: (200, postal_domain())})
+        with patcher, published({"acme.com": None, POSTAL_DKIM_NAME: [POSTAL_DKIM]}):
+            assert postal.check(POSTAL_ID).status == CheckStatus.UNKNOWN
+
+        patcher, _fake = postal_answering({POSTAL_CHECK: (404, {"error": "not_found"})})
+        with patcher:
+            result = postal.check(POSTAL_ID)
+        assert result == DomainCheck(
+            CheckStatus.FAILED, "The sending service no longer has this domain."
+        )
+
+    def test_service_errors_raise_without_the_token(self, postal, caplog) -> None:
+        for answer in (
+            requests.ConnectionError(f"Bearer {POSTAL_TOKEN} refused"),
+            (502, {"error": "postal_failed"}),
+            (404, b"<html>Not Found</html>"),  # A proxy's, not the service's.
+            (200, b"<html>"),
+        ):
+            patcher, _fake = postal_answering({POSTAL_CHECK: answer})
+            with patcher, pytest.raises(SendingProviderError) as raised:
+                postal.check(POSTAL_ID)
+            assert POSTAL_TOKEN not in str(raised.value)
+        assert POSTAL_TOKEN not in caplog.text
+
+        # A ref that isn't Postal's uuid never reaches a URL.
+        patcher, fake = postal_answering({})
+        with patcher, pytest.raises(SendingProviderError):
+            postal.check("../domains")
+        with patcher, pytest.raises(SendingProviderError):
+            postal.register("acme.com/../x")
+        assert fake.calls == []
+
+    def test_remove_deletes_the_domain(self, postal) -> None:
+        delete = ("DELETE", f"{POSTAL_URL}/domains/{POSTAL_ID}")
+        for answer in ((204, None), (404, {"error": "not_found"})):
+            patcher, fake = postal_answering({delete: answer})
+            with patcher:
+                postal.remove(POSTAL_ID)
+            assert calls_of(fake) == [delete]
+        # A 404 that isn't the service's (a proxy's) says nothing of the domain.
+        for answer in ((503, {"error": "busy"}), (404, b"Not Found")):
+            patcher, _fake = postal_answering({delete: answer})
+            with patcher, pytest.raises(SendingProviderError):
+                postal.remove(POSTAL_ID)
+        assert postal.removal_needed is True
+
+    def test_without_settings_is_misconfigured(self, postal, settings) -> None:
+        settings.POSTAL_DOMAINS_API_TOKEN = ""
+        with pytest.raises(ImproperlyConfigured):
+            get_provider()

@@ -1,0 +1,5 @@
+# Ruff configuration for the Postal domains service (linted from the repo root
+# in CI as from this directory).
+
+[lint.isort]
+known-first-party = ["postal_domains"]
