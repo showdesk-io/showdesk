@@ -29,7 +29,9 @@ in `POSTAL_DOMAINS_STATE_FILE`, and only ever shows, checks or deletes those
 (any other uuid is a 404): a domain added to the server by hand is never
 Showdesk's, nor deleted by it. Keep that file (a volume, below): without it, the
 service no longer knows its domains (Showdesk's checks fail them, and enabling
-them again is a 409).
+them again is a 409). One instance only per state file: the service
+holds an exclusive lock on `<state file>.lock` and refuses to start if another
+does.
 
 ## API
 
@@ -155,8 +157,27 @@ and on Showdesk: `SENDING_DOMAIN_PROVIDER=postal`,
 
 ```
 curl -s -H "Authorization: Bearer $TOKEN" https://postal.example.com/showdesk-domains/domains/00000000-0000-0000-0000-000000000000
-# {"error": "not_found"} once Postal answered (a few seconds)
+# {"error": "not_found"} at once
 ```
+
+An unknown uuid is answered from the state file, without running anything in
+Postal: this proves the token and the reverse proxy, not Postal itself. The
+first `POST /domains` (enabling sending from a domain in Showdesk) does.
+
+The host's DNS resolver must answer fast: Postal's DNS checks
+(`POST /domains/<uuid>/check`) run inside the 30 s limit, Rails' boot
+included.
+
+## Recovery
+
+A domain created in Postal but not recorded in the state file (the service
+crashed or was killed between the two; a failed write is undone at once)
+makes every enable of that domain a 409 `exists`. Check in Postal's UI that
+nothing else uses it, then either delete it there, or stop the service, add
+its uuid to the state file and start the service again.
+
+A domain later added to `POSTAL_DOMAINS_PROTECTED` can't be shown, checked or
+deleted by the service any more: remove it in Postal's UI if it must go.
 
 ## On the Postal side
 

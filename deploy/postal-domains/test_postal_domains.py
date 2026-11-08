@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import stat
 import subprocess
 import threading
@@ -208,6 +209,62 @@ def test_create_runs_the_script_in_postal_and_records_the_domain(
     assert not kwargs.get("shell")
     assert created(state_file) == [UUID]
     assert stat.S_IMODE(state_file.stat().st_mode) == 0o600
+
+
+def test_protected_names_match_whole_labels_any_case(env, state_file) -> None:
+    # Capitals and a trailing dot in the list; a lookalike name isn't protected.
+    with serving({**env, "POSTAL_DOMAINS_PROTECTED": "Showdesk.Example."}) as url:
+        with postal() as run:
+            assert call(f"{url}/domains", "POST", {"name": "eu.showdesk.example"}) == (
+                403,
+                {"error": "protected"},
+            )
+        run.assert_not_called()
+        with postal(
+            {"status": 201, "domain": {**STATE, "name": "notshowdesk.example"}}
+        ):
+            status, _ = call(f"{url}/domains", "POST", {"name": "notshowdesk.example"})
+    assert status == 201
+    assert created(state_file) == [UUID]
+
+
+def test_a_created_domain_it_cannot_record_is_deleted_at_once(
+    service, state_file, caplog
+) -> None:
+    state_file.parent.chmod(0o500)  # The state file can't be written.
+    try:
+        with (
+            caplog.at_level(logging.INFO, "postal_domains"),
+            postal({"status": 201, "domain": STATE}, {"status": 204}) as run,
+        ):
+            assert call(f"{service}/domains", "POST", {"name": "acme.com"}) == (
+                502,
+                {"error": "postal_failed"},
+            )
+    finally:
+        state_file.parent.chmod(0o700)
+    assert [c.args[0][13:16] for c in run.call_args_list] == [
+        ["create", "showdesk", "customers"],
+        ["delete", "showdesk", "customers"],
+    ]
+    assert run.call_args_list[1].args[0][16] == UUID
+    assert f"Could not write {state_file}" in caplog.text
+    assert f"deleted {UUID}" in caplog.text
+    assert not state_file.exists()
+
+
+def test_a_second_instance_on_the_same_state_file_is_refused(service, env) -> None:
+    config = postal_domains.load_config(
+        {
+            "POSTAL_DOMAINS_TOKEN": TOKEN,
+            "POSTAL_DOMAINS_ORGANIZATION": "showdesk",
+            "POSTAL_DOMAINS_SERVER": "customers",
+            "POSTAL_DOMAINS_LISTEN_PORT": "0",
+            **env,
+        }
+    )
+    with pytest.raises(postal_domains.ConfigError, match="another instance"):
+        postal_domains.make_server(config)
 
 
 def test_only_the_domains_it_created_are_its_own(ours) -> None:

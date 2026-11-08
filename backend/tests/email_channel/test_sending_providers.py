@@ -1033,6 +1033,15 @@ class TestPostal:
             postal.register("acme.com")
         assert not isinstance(raised.value, AlreadyRegisteredError)
 
+    def test_register_of_a_reserved_domain_says_so(self, postal) -> None:
+        patcher, _fake = postal_answering(
+            {("POST", f"{POSTAL_URL}/domains"): (403, {"error": "protected"})}
+        )
+        with patcher, pytest.raises(SendingProviderError) as raised:
+            postal.register("acme.com")
+        assert str(raised.value) == "This domain is reserved by the sending service."
+        assert not isinstance(raised.value, AlreadyRegisteredError)
+
     def test_check_is_verified_when_the_dns_and_postal_agree(self, postal) -> None:
         patcher, fake = postal_answering({POSTAL_CHECK: (200, postal_domain())})
         with (

@@ -22,6 +22,7 @@ kept in POSTAL_DOMAINS_STATE_FILE), and never touches a protected one
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hmac
 import json
 import logging
@@ -156,13 +157,40 @@ class CreatedDomains:
 
     Only those are shown, checked or deleted: a domain added to the server
     otherwise (by hand, before Showdesk) is never Showdesk's to delete. The
-    file is replaced atomically on every change, mode 600.
+    file is replaced atomically on every change, mode 600. One instance only
+    uses it: an exclusive lock on `<file>.lock`, held while it runs.
     """
 
     def __init__(self, path: str) -> None:
         self.path = Path(path)
         self.lock = threading.Lock()
-        self.uuids = self._load()
+        self.lock_fd = self._lock_file()
+        try:
+            self.uuids = self._load()
+        except BaseException:
+            self.close()
+            raise
+
+    def _lock_file(self) -> int:
+        lock_path = self.path.with_name(f"{self.path.name}.lock")
+        try:
+            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError as exc:
+            raise ConfigError(f"Can't open {lock_path}: {exc}") from None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            raise ConfigError(
+                f"{lock_path} is locked: another instance uses this state file."
+            ) from None
+        return fd
+
+    def close(self) -> None:
+        """Release the lock."""
+        if self.lock_fd >= 0:
+            os.close(self.lock_fd)
+            self.lock_fd = -1
 
     def _load(self) -> frozenset[str]:
         try:
@@ -210,6 +238,12 @@ class CreatedDomains:
                 os.unlink(tmp)
             raise
         self.uuids = uuids
+        # The rename itself, on disk.
+        directory = os.open(self.path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 class Postal:
@@ -233,9 +267,9 @@ class Postal:
             return 503, {"error": "busy"}
         try:
             status, body = self._run(action, arg)
+            return self._record(action, arg, status, body)
         finally:
             self.slots.release()
-        return self._record(action, arg, status, body)
 
     def _record(
         self, action: str, arg: str, status: int, body: dict[str, Any] | None
@@ -255,11 +289,27 @@ class Postal:
             elif action == "delete" and status in (204, 404):
                 self.created.discard(arg)
         except OSError as exc:
-            # A created domain we couldn't record: never ours from now on.
             logger.error("Could not write %s: %s", self.created.path, exc)
+            if action == "create" and status == 201:
+                self._undo_create(arg, body["id"])
             if action == "create":
                 return 502, {"error": "postal_failed"}
         return status, body
+
+    def _undo_create(self, name: str, uuid: str) -> None:
+        """Delete a domain just created but not recorded: unrecorded, it would
+        never be ours again, and enabling it a 409 from then on."""
+        status, _ = self._run("delete", uuid)
+        if status in (204, 404):
+            logger.warning("Unrecorded %s: deleted %s from Postal.", name, uuid)
+        else:
+            logger.error(
+                "Unrecorded %s (%s) could not be deleted from Postal: delete it "
+                "there, or add its uuid to %s (README, Recovery).",
+                name,
+                uuid,
+                self.created.path,
+            )
 
     def _run(self, action: str, arg: str) -> tuple[int, dict[str, Any] | None]:
         config = self.config
@@ -452,9 +502,18 @@ def make_server(config: Config) -> ThreadingHTTPServer:
             # The request line and status only: never a header.
             logger.info("%s %s", self.address_string(), format % args)
 
-    server = ThreadingHTTPServer((config.host, config.port), Handler)
-    server.daemon_threads = True
-    return server
+    class Server(ThreadingHTTPServer):
+        daemon_threads = True
+
+        def server_close(self) -> None:
+            super().server_close()
+            postal.created.close()
+
+    try:
+        return Server((config.host, config.port), Handler)
+    except BaseException:
+        postal.created.close()
+        raise
 
 
 def main() -> int:

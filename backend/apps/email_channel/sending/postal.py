@@ -108,11 +108,11 @@ class PostalProvider:
                 response.status_code,
                 response.text[:200].replace(self.token, "***"),
             )
-            raise _HTTPError(
-                f"The sending service answered {response.status_code}.",
-                response.status_code,
-                _error_code(response),
-            )
+            code = _error_code(response)
+            message = f"The sending service answered {response.status_code}."
+            if response.status_code == 403 and code == "protected":
+                message = "This domain is reserved by the sending service."
+            raise _HTTPError(message, response.status_code, code)
         if response.status_code == 204 or not response.content:
             return None
         try:
