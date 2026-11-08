@@ -1,12 +1,16 @@
 """Sending domain providers: what each asks to publish and how it reads a check (§7.2).
 
 The DNS boundary is `dns_verification.lookup_txt` and the HTTP one
-`requests.request` as `scaleway_tem` and `mailjet` call it; nothing else is
-mocked.
+`requests.request` as `scaleway_tem`, `mailjet` and `postal` call it; nothing
+else is mocked.
 """
 
 import base64
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -1009,6 +1013,26 @@ class TestPostal:
             assert kwargs["headers"]["Authorization"] == f"Bearer {POSTAL_TOKEN}"
             assert kwargs["timeout"]
 
+    def test_register_refuses_a_domain_postal_has_otherwise(self, postal) -> None:
+        # The server (or its organization) has it, not added by Showdesk.
+        patcher, _fake = postal_answering(
+            {("POST", f"{POSTAL_URL}/domains"): (409, {"error": "exists"})}
+        )
+        with patcher, pytest.raises(AlreadyRegisteredError):
+            postal.register("acme.com")
+        # An answer for another name is not this domain's registration.
+        patcher, _fake = postal_answering(
+            {
+                ("POST", f"{POSTAL_URL}/domains"): (
+                    201,
+                    {**postal_domain(None), "name": "other.com"},
+                )
+            }
+        )
+        with patcher, pytest.raises(SendingProviderError) as raised:
+            postal.register("acme.com")
+        assert not isinstance(raised.value, AlreadyRegisteredError)
+
     def test_check_is_verified_when_the_dns_and_postal_agree(self, postal) -> None:
         patcher, fake = postal_answering({POSTAL_CHECK: (200, postal_domain())})
         with (
@@ -1016,7 +1040,7 @@ class TestPostal:
             published(
                 {
                     "acme.com": ["v=spf1 mx include:spf.postal.example.com -all"],
-                    # Split into chunks and without the final ";": the same key.
+                    # Other spacing and without the final ";": the same key.
                     POSTAL_DKIM_NAME: [POSTAL_DKIM.rstrip(";").replace("; ", ";  ")],
                 }
             ),
@@ -1102,10 +1126,12 @@ class TestPostal:
 
         # A ref that isn't Postal's uuid never reaches a URL.
         patcher, fake = postal_answering({})
-        with patcher, pytest.raises(SendingProviderError):
-            postal.check("../domains")
-        with patcher, pytest.raises(SendingProviderError):
-            postal.register("acme.com/../x")
+        for ref in ("../domains", f"{POSTAL_ID}\n"):
+            with patcher, pytest.raises(SendingProviderError):
+                postal.check(ref)
+        for name in ("acme.com/../x", "acme.com\n"):
+            with patcher, pytest.raises(SendingProviderError):
+                postal.register(name)
         assert fake.calls == []
 
     def test_remove_deletes_the_domain(self, postal) -> None:
@@ -1126,3 +1152,35 @@ class TestPostal:
         settings.POSTAL_DOMAINS_API_TOKEN = ""
         with pytest.raises(ImproperlyConfigured):
             get_provider()
+
+
+def test_anymail_postal_keys_are_only_set_when_given() -> None:
+    """Unset, Anymail itself says which one is missing."""
+
+    def anymail(**env: str) -> dict:
+        environ = {
+            k: v for k, v in os.environ.items() if not k.startswith("ANYMAIL_POSTAL_")
+        }
+        output = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import json, config.settings.base as s; print(json.dumps(s.ANYMAIL))",
+            ],
+            cwd=Path(__file__).resolve().parents[2],
+            env={**environ, **env},
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout
+        return json.loads(output.splitlines()[-1])
+
+    unset = anymail(ANYMAIL_POSTAL_API_URL=" ")
+    assert "POSTAL_API_URL" not in unset
+    assert "POSTAL_API_KEY" not in unset
+    given = anymail(
+        ANYMAIL_POSTAL_API_URL="https://postal.example.com",
+        ANYMAIL_POSTAL_API_KEY="server-key",
+    )
+    assert given["POSTAL_API_URL"] == "https://postal.example.com"
+    assert given["POSTAL_API_KEY"] == "server-key"

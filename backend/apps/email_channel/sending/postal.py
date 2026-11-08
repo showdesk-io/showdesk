@@ -5,6 +5,8 @@ service (`deploy/postal-domains/`) on the Postal host, which adds, checks and
 deletes the domains of one Postal server (`POSTAL_DOMAINS_API_URL`, with the
 bearer token `POSTAL_DOMAINS_API_TOKEN`). A domain is created there already
 verified (Showdesk proves the ownership itself) and gets its own DKIM key.
+The service only manages the domains it created: one Postal has otherwise
+is a 409 `exists`, AlreadyRegisteredError (a conflict, §11 choice 5).
 
 The records: SPF (Postal's include, merged), the domain's DKIM TXT, and the
 return-path CNAME Postal's envelope sender uses. `check` has Postal check
@@ -29,16 +31,24 @@ from django.core.exceptions import ImproperlyConfigured
 from apps.organizations import dns_verification
 
 from .manual import spf_record_error
-from .providers import CheckStatus, DomainCheck, RegisteredDomain, SendingProviderError
+from .providers import (
+    AlreadyRegisteredError,
+    CheckStatus,
+    DomainCheck,
+    RegisteredDomain,
+    SendingProviderError,
+)
 
 logger = logging.getLogger(__name__)
 
-# A Rails boot in Postal's container, plus Postal's own DNS check.
+# A Rails boot in Postal's container, plus Postal's own DNS check: the
+# service answers within 40 s.
 TIMEOUT_SECONDS = 60
 
-_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# Used with fullmatch: `$` would let a final newline through.
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-_DOMAIN_RE = re.compile(rf"^(?=.{{1,253}}$)(?:{_LABEL}\.)+{_LABEL}$")
+_DOMAIN_RE = re.compile(rf"(?=.{{1,253}}\Z)(?:{_LABEL}\.)+{_LABEL}")
 _KINDS = ("spf", "dkim", "return_path")
 
 
@@ -117,22 +127,34 @@ class PostalProvider:
     def _domain(self, method: str, path: str, json: dict | None = None) -> dict:
         """A domain the service returns, with its id checked."""
         body = self._call(method, path, json)
-        if not body or not _UUID_RE.match(str(body.get("id", ""))):
+        if not body or not _UUID_RE.fullmatch(str(body.get("id", ""))):
             logger.warning("Postal domains %s %s: no domain id.", method, path)
             raise SendingProviderError("The sending service gave an unreadable answer.")
         return body
 
     def _path(self, ref: str, action: str = "") -> str:
-        if not _UUID_RE.match(ref):
+        if not _UUID_RE.fullmatch(ref):
             raise SendingProviderError("This domain's Postal id is invalid.")
         return f"/domains/{ref}{action}"
 
     def register(self, domain: str) -> RegisteredDomain:
-        if not _DOMAIN_RE.match(domain):
+        if not _DOMAIN_RE.fullmatch(domain):
             raise SendingProviderError("This domain name can't be sent to Postal.")
-        # 201 created, 200 one the server already had: ours either way (the
-        # server is Showdesk's only).
-        body = self._domain("POST", "/domains", json={"name": domain})
+        # 201 created, 200 one the service created before (a retry); 409
+        # one Postal has otherwise, never Showdesk's.
+        try:
+            body = self._domain("POST", "/domains", json={"name": domain})
+        except _HTTPError as exc:
+            if exc.status_code == 409 and exc.code == "exists":
+                raise AlreadyRegisteredError(
+                    f"The Postal server already has {domain}."
+                ) from exc
+            raise
+        if body.get("name") != domain:
+            logger.warning(
+                "Postal domains: registered %r for %s.", body.get("name"), domain
+            )
+            raise SendingProviderError("The sending service gave an unreadable answer.")
         records = _records(body, domain)
         if not records:
             raise SendingProviderError("The sending service gave an unreadable answer.")
@@ -151,7 +173,7 @@ class PostalProvider:
         domain = str(body.get("name", "")).strip().rstrip(".").lower()
         expected = _by_kind(body, domain)
         spf, dkim = expected.get("spf"), expected.get("dkim")
-        if not (_DOMAIN_RE.match(domain) and spf and dkim):
+        if not (_DOMAIN_RE.fullmatch(domain) and spf and dkim):
             logger.warning("Postal domain %s: no SPF or DKIM record given.", ref)
             return DomainCheck(CheckStatus.UNKNOWN)
         records = _records(body, domain)
