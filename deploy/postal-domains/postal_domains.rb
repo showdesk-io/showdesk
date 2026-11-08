@@ -2,13 +2,17 @@
 
 # Run by postal_domains.py in Postal's web container, on stdin:
 #
-#   bundle exec rails runner - <action> <organization> <server> <name or uuid>
+#   timeout -s KILL <n> bundle exec rails runner - <action> <organization> <server> <name or uuid> <protected>
 #
 # Actions: create (a name), show, check, delete (a uuid). Only the domains of
-# the given server are read or written. Prints one line:
+# the given server are read or written; postal_domains.py only asks for the
+# uuids of the domains it created, and tells an existing domain (200) that is
+# its own from one that isn't. <protected>: comma-separated domain names that
+# are never created, shown, checked nor deleted, nor their subdomains. Prints
+# one line:
 #
 #   SHOWDESK_RESULT {"status": 200|201|204, "domain": {...}}
-#   SHOWDESK_RESULT {"error": "not_found" | "rejected" | "no_server" | "invalid" | "failed", ...}
+#   SHOWDESK_RESULT {"error": "not_found" | "protected" | "exists" | "rejected" | "no_server" | "invalid" | "failed", ...}
 #
 # Written against Postal 3.3 (app/models/domain.rb, has_dns_checks.rb).
 
@@ -18,7 +22,7 @@ RESULT_PREFIX = "SHOWDESK_RESULT "
 LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 NAME_RE = /\A(?=.{1,253}\z)(?:#{LABEL}\.)+(?![0-9]+\z)#{LABEL}\z/
 UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
-PERMALINK_RE = /\A[a-z0-9-]{1,64}\z/
+PERMALINK_RE = /\A[a-z0-9][a-z0-9-]{0,63}\z/
 
 def emit(payload)
   $stdout.puts(RESULT_PREFIX + JSON.generate(payload))
@@ -52,13 +56,18 @@ def domain_state(domain)
   }
 end
 
+def protected?(name, protected_names)
+  protected_names.any? { |entry| name == entry || name.end_with?(".#{entry}") }
+end
+
 def create(server, name)
+  # The organization's domains count for the server too: never Showdesk's.
+  return emit(error: "exists", detail: "organization") if server.organization.domains.exists?(name: name)
+
+  # Returned as it is (never verified here): postal_domains.py only takes it
+  # if it created it.
   domain = server.domains.find_by(name: name)
-  if domain
-    # Showdesk proved the ownership: one added by hand, unverified, is verified.
-    domain.mark_as_verified
-    return emit(status: 200, domain: domain_state(domain))
-  end
+  return emit(status: 200, domain: domain_state(domain)) if domain
 
   domain = server.domains.build(name: name, verification_method: "DNS", outgoing: true, incoming: false)
   domain.verified_at = Time.now
@@ -73,9 +82,14 @@ def create(server, name)
 end
 
 begin
-  action, organization, server_permalink, arg = ARGV
+  action, organization, server_permalink, arg, protected_arg = ARGV
   unless PERMALINK_RE.match?(organization.to_s) && PERMALINK_RE.match?(server_permalink.to_s)
     emit(error: "invalid", detail: "permalinks")
+    exit 1
+  end
+  protected_names = protected_arg.to_s.split(",")
+  unless protected_names.all? { |entry| NAME_RE.match?(entry) }
+    emit(error: "invalid", detail: "protected")
     exit 1
   end
 
@@ -93,7 +107,11 @@ begin
       emit(error: "invalid", detail: "name")
       exit 1
     end
-    create(server, arg)
+    if protected?(arg, protected_names)
+      emit(error: "protected")
+    else
+      create(server, arg)
+    end
   elsif %w[show check delete].include?(action)
     unless UUID_RE.match?(arg.to_s)
       emit(error: "invalid", detail: "uuid")
@@ -102,6 +120,8 @@ begin
     domain = server.domains.find_by(uuid: arg)
     if domain.nil?
       emit(error: "not_found")
+    elsif protected?(domain.name.downcase, protected_names)
+      emit(error: "protected")
     elsif action == "delete"
       domain.destroy!
       emit(status: 204)

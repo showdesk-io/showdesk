@@ -8,12 +8,28 @@ UI does, through Postal's own models. Each call runs `postal_domains.rb` in
 Postal's web container:
 
 ```
-docker exec -i postal-web-1 bundle exec rails runner - <action> <organization> <server> <name|uuid>
+docker exec -i postal-web-1 timeout -s KILL 30 bundle exec rails runner - <action> <organization> <server> <name|uuid> <protected>
 ```
 
 (the script on stdin, never a shell; the name or uuid checked first). One call
 boots Rails, a few seconds; at most `POSTAL_DOMAINS_CONCURRENCY` run at once.
 Python 3.11+ standard library only. Written against Postal 3.3.
+
+**Time limits.** A call takes 40 s at most, so that Showdesk (which waits 60 s
+per call, and makes two when a domain is enabled) stays within gunicorn's
+120 s: a free slot within 5 s, else 503 `busy`; the command is killed **in the
+container** after `POSTAL_DOMAINS_TIMEOUT` (30 s at most) by `timeout -s KILL`
+(GNU coreutils, part of Postal's Debian-based image: `ruby:3.4-slim-bookworm`
+in 3.3.7), since killing `docker exec` alone would leave Rails running there;
+`docker exec` itself is killed 5 s later if it hasn't returned. Only the last
+1 MB of Postal's output is read.
+
+**Only its own domains.** The service keeps the uuids of the domains it created
+in `POSTAL_DOMAINS_STATE_FILE`, and only ever shows, checks or deletes those
+(any other uuid is a 404): a domain added to the server by hand is never
+Showdesk's, nor deleted by it. Keep that file (a volume, below): without it, the
+service no longer knows its domains (Showdesk's checks fail them, and enabling
+them again is a 409).
 
 ## API
 
@@ -21,7 +37,7 @@ Every request needs `Authorization: Bearer <POSTAL_DOMAINS_TOKEN>` (else 401).
 
 | Request | Answer |
 |---|---|
-| `POST /domains` `{"name": "acme.com"}` | 201 created, 200 if the server already has it (then marked verified too) |
+| `POST /domains` `{"name": "acme.com"}` | 201 created; 200 if this service created it before (a retry); 409 `exists` if the server or its organization has it otherwise |
 | `GET /domains/<uuid>` | 200, as stored |
 | `POST /domains/<uuid>/check` | 200, once Postal has checked the domain's DNS (`check_dns`) |
 | `DELETE /domains/<uuid>` | 204 |
@@ -42,10 +58,12 @@ A domain is:
 }
 ```
 
-Errors are `{"error": <code>}`: 400 `invalid_body` / `invalid_name`, 404
-`not_found` (also for a path that isn't a uuid), 422 `rejected` (with Postal's
-`detail`), 502 `postal_failed` (Postal failed, timed out or isn't configured:
-see the service's log), 503 `busy`.
+Errors are `{"error": <code>}`: 400 `invalid_body` / `invalid_name`, 403
+`protected` (a name in `POSTAL_DOMAINS_PROTECTED`, or one of their
+subdomains), 404 `not_found` (also for a path that isn't a uuid, or a domain
+this service didn't create), 409 `exists`, 413 `too_large` (a body over 4 KB),
+422 `rejected` (with Postal's `detail`), 502 `postal_failed` (Postal failed,
+timed out or isn't configured: see the service's log), 503 `busy`.
 
 Domains are created `outgoing` only, and already **verified**: Showdesk proves
 the ownership itself (its own `_showdesk` TXT record), so Postal's verification
@@ -61,9 +79,11 @@ once it checked that key's record OK: Showdesk's checks call
 | `POSTAL_DOMAINS_TOKEN` | (required) | At least 32 characters, e.g. `openssl rand -hex 32`. The same value is Showdesk's `POSTAL_DOMAINS_API_TOKEN`. |
 | `POSTAL_DOMAINS_ORGANIZATION` | (required) | The permalink of the Postal organization. |
 | `POSTAL_DOMAINS_SERVER` | (required) | The permalink of the server (in that organization) whose domains Showdesk manages. |
+| `POSTAL_DOMAINS_STATE_FILE` | `/var/lib/postal-domains/created.json` | The uuids of the domains it created (JSON, mode 600, replaced atomically). Its directory must exist and be writable by the service. |
+| `POSTAL_DOMAINS_PROTECTED` | empty | Domains never created, shown, checked nor deleted, nor their subdomains (comma-separated, any case). List the domain of Showdesk's `DEFAULT_FROM_EMAIL` and its `INBOUND_EMAIL_DOMAIN`, and any other domain of yours on this Postal. |
 | `POSTAL_DOMAINS_CONTAINER` | `postal-web-1` | Postal's web container. |
 | `POSTAL_DOMAINS_DOCKER` | `docker` | The Docker CLI. |
-| `POSTAL_DOMAINS_TIMEOUT` | `45` | Seconds a call may take; Showdesk waits 60. |
+| `POSTAL_DOMAINS_TIMEOUT` | `30` | Seconds Postal's command may run before it is killed, 30 at most. |
 | `POSTAL_DOMAINS_LISTEN_HOST`, `POSTAL_DOMAINS_LISTEN_PORT` | `127.0.0.1`, `8089` | Where it listens. |
 | `POSTAL_DOMAINS_CONCURRENCY` | `2` | Calls run at once (each boots Rails). |
 
@@ -87,11 +107,15 @@ services:
     env_file: /opt/postal-domains/env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/postal-domains:/var/lib/postal-domains
     restart: unless-stopped
 ```
 
+(`mkdir -m 700 /var/lib/postal-domains` first.)
+
 **Or as a systemd unit** (Python 3.11+ on the host, a user in the `docker`
-group), `/etc/systemd/system/postal-domains.service`:
+group: that is root-equivalent too, as anyone in it can start a privileged
+container), `/etc/systemd/system/postal-domains.service`:
 
 ```ini
 [Unit]
@@ -101,6 +125,8 @@ Requires=docker.service
 
 [Service]
 User=postal-domains
+StateDirectory=postal-domains
+StateDirectoryMode=0700
 EnvironmentFile=/opt/postal-domains/env
 ExecStart=/usr/bin/python3 -u /opt/postal-domains/postal_domains.py
 Restart=on-failure
@@ -134,9 +160,11 @@ curl -s -H "Authorization: Bearer $TOKEN" https://postal.example.com/showdesk-do
 
 ## On the Postal side
 
-- One server for Showdesk, in `Live` mode, used for nothing else: every domain
-  in it named like a customer domain is taken as Showdesk's (a `POST` of a name
-  the server has returns that domain, and its removal deletes it).
+- One server for Showdesk, in `Live` mode. The service only manages the
+  domains it created there: a domain already on the server (or its
+  organization) is refused (409), and so is enabling sending from it in
+  Showdesk ("already registered with the sending service"), until you remove
+  it from Postal.
 - `dns.spf_include`, `dns.return_path_domain`, `dns.custom_return_path_prefix`
   and `dns.dkim_identifier` in `postal.yml` are what customers are asked to
   publish: set them before customers do. A DKIM key regenerated in Postal's UI
@@ -145,7 +173,8 @@ curl -s -H "Authorization: Bearer $TOKEN" https://postal.example.com/showdesk-do
   `ANYMAIL_POSTAL_API_URL`, `ANYMAIL_POSTAL_API_KEY`: an API credential of
   **this** server) from `DEFAULT_FROM_EMAIL` and from `INBOUND_EMAIL_DOMAIN`:
   add both domains to the server (or its organization) yourself, verified, with
-  their SPF, DKIM and return path published. Showdesk never manages them.
+  their SPF, DKIM and return path published, and list them in
+  `POSTAL_DOMAINS_PROTECTED`. Showdesk never manages them.
 - The host itself: a PTR record matching Postal's `smtp_hostname`, the SPF
   record of `dns.spf_include` listing the host's addresses, Postal's own DKIM
   key published (`postal default-dkim-record`) and the return path domain set
