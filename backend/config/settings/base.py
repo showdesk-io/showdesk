@@ -386,7 +386,8 @@ del email_backend, email_options
 
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@showdesk.io")
 
-# Anymail settings: the Mailjet sending backend, and inbound mail webhooks.
+# Anymail settings: the Mailjet and Postal sending backends, and inbound mail
+# webhooks.
 ANYMAIL = {
     "MAILJET_API_KEY": config("MAILJET_API_KEY", default=""),
     "MAILJET_SECRET_KEY": config("MAILJET_SECRET_KEY", default=""),
@@ -400,6 +401,13 @@ ANYMAIL = {
         if entry.partition(":")[0] and entry.partition(":")[2]
     ],
 }
+# Postal's sending API (anymail.backends.postal.EmailBackend): its URL and an
+# API credential of the Postal server. Only set when given, so that Anymail
+# says which one is missing.
+for anymail_name in ("POSTAL_API_URL", "POSTAL_API_KEY"):
+    if anymail_value := config(f"ANYMAIL_{anymail_name}", default="").strip():
+        ANYMAIL[anymail_name] = anymail_value
+del anymail_name, anymail_value
 
 # =============================================================================
 # Email channel (inbound mail), off while INBOUND_EMAIL_DOMAIN is empty
@@ -447,7 +455,7 @@ CONVERSATION_LINK_MAX_AGE_DAYS = config(
 # Sending domains: mail from an organization's own verified domain
 # =============================================================================
 # Who sets up a customer domain for sending: none (feature off), manual,
-# scaleway_tem or mailjet. See apps.email_channel.sending.
+# scaleway_tem, mailjet or postal. See apps.email_channel.sending.
 SENDING_DOMAIN_PROVIDER = (
     config("SENDING_DOMAIN_PROVIDER", default="none").strip().lower()
 )
@@ -464,6 +472,10 @@ SCW_TEM_REGION = config("SCW_TEM_REGION", default="fr-par")
 # mailjet: the API host of the Mailjet account whose keys are MAILJET_API_KEY
 # and MAILJET_SECRET_KEY above (https://api.us.mailjet.com for US accounts).
 MAILJET_API_URL = config("MAILJET_API_URL", default="https://api.mailjet.com")
+# postal: the Postal domains service on the Postal host (deploy/postal-domains/),
+# e.g. https://postal.example.com/showdesk-domains, and its bearer token.
+POSTAL_DOMAINS_API_URL = config("POSTAL_DOMAINS_API_URL", default="")
+POSTAL_DOMAINS_API_TOKEN = config("POSTAL_DOMAINS_API_TOKEN", default="")
 
 # Frontend URL for links in emails
 SITE_URL = config("SITE_URL", default="http://localhost")

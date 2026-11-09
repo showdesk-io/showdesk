@@ -51,7 +51,8 @@ from .providers import (
 logger = logging.getLogger(__name__)
 
 # Longer than a registration and its first check could take (a few provider
-# calls with a 10 s timeout each), and released as soon as they are done.
+# calls: 10 s timeouts for TEM and Mailjet, 60 s for Postal's service, which
+# answers within 40 s), and released as soon as they are done.
 ENABLE_LOCK_SECONDS = 300
 # "Check now" at most this often per domain: each one hits DNS or the provider.
 CHECK_NOW_SECONDS = 30

@@ -29,10 +29,10 @@ jobs:
           pip install "ruff>=0.17,<0.18"
 
       - name: Run ruff check
-        run: ruff check backend/
+        run: ruff check backend/ deploy/postal-domains/
 
       - name: Run ruff format check
-        run: ruff format --check backend/
+        run: ruff format --check backend/ deploy/postal-domains/
 
   backend-test:
     name: Backend Tests
@@ -96,6 +96,11 @@ jobs:
         run: |
           cd backend
           python -m pytest -v --tb=short
+
+      - name: Run Postal domains service tests
+        run: |
+          cd deploy/postal-domains
+          python -m pytest -v --tb=short -p no:django
 
   # ---------------------------------------------------------------------------
   # Frontend: lint + type check + test + build
